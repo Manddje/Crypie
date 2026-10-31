@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -14,17 +15,19 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import settings_store as cfg
 from app.ai.budget import BudgetExceeded, BudgetGuard
 from app.ai.decision_maker import DecisionMaker
 from app.ai.evaluator import Evaluator
 from app.ai.news_analyst import NewsAnalyst
 from app.ai.strategy_assistant import StrategyAssistant
-from app.bitvavo.broker import Broker, LiveBroker, PaperBroker, recent_orders
+from app.bitvavo.broker import PAPER_WALLET_KEY, Broker, LiveBroker, PaperBroker, recent_orders
 from app.bitvavo.client import BitvavoClient, BitvavoError
 from app.config import Settings, get_settings
-from app.db import Evaluation, SessionLocal, get_session, init_db
+from app.db import Evaluation, SessionLocal, Setting, get_session, init_db
 from app.news.service import NewsService, market_sentiment, recent_items
 from app.news.sources import NewsFetcher
+from app.settings_store import SettingsError
 from app.strategy.engine import backtest, latest_snapshot
 from app.strategy.model import Strategy
 from app.strategy.store import load_strategy, save_strategy
@@ -42,26 +45,95 @@ from app.web import STATIC_DIR, templates
 log = logging.getLogger("crypie")
 
 
+def live_blocker(settings: Settings, client: BitvavoClient) -> str | None:
+    """Why live trading is not allowed right now, or None when it is.
+
+    Both conditions live in the environment on purpose: switching to live in the portal is
+    never enough on its own.
+    """
+    if not client.authenticated:
+        return "er is geen Bitvavo-sleutel (BITVAVO_API_KEY en BITVAVO_API_SECRET) ingesteld"
+    if not settings.live_trading_ack:
+        return "LIVE_TRADING_ACK staat niet op true in de serveromgeving"
+    return None
+
+
 def build_broker(settings: Settings, client: BitvavoClient) -> Broker:
     if settings.trading_mode == "live":
-        if not client.authenticated:
-            raise RuntimeError("TRADING_MODE=live requires BITVAVO_API_KEY and BITVAVO_API_SECRET")
-        if not settings.live_trading_ack:
-            raise RuntimeError("TRADING_MODE=live requires LIVE_TRADING_ACK=true")
+        blocker = live_blocker(settings, client)
+        if blocker:
+            raise RuntimeError(f"live handelen is niet toegestaan: {blocker}")
         return LiveBroker(client)
     return PaperBroker(client, settings.paper_start_eur)
 
 
+def apply_settings(app: FastAPI, new: Settings) -> None:
+    """Push new settings into the running components, so a change works without a restart.
+
+    The caller has validated ``new`` (including the live-trading safeguard).
+    """
+    state = app.state
+    old: Settings = state.settings
+    if new.trading_mode != state.broker.mode or (
+        new.trading_mode == "paper" and new.paper_start_eur != old.paper_start_eur
+    ):
+        state.broker = build_broker(new, state.client)
+        state.engine.broker = state.broker
+    state.settings = new
+    state.budget.limit = new.claude_monthly_budget_usd
+    state.assistant.model = new.claude_model_strategy
+    engine: TradingEngine = state.engine
+    engine.markets = list(new.markets)
+    engine.limits = RiskLimits(
+        new.max_trade_eur,
+        new.max_exposure_pct,
+        new.daily_loss_limit_pct,
+        new.max_trades_per_day,
+        new.cooldown_min_after_stop,
+        new.min_trade_eur,
+    )
+    engine.claude_unavailable_mode = new.claude_unavailable_mode
+    engine.backtest_fee_pct = new.backtest_fee_pct
+    engine.decision_maker.model = new.claude_model_decision
+    engine.evaluator.model = new.claude_model_evaluation
+    news: NewsService = state.news
+    news.analyst.model = new.claude_model_news
+    news.coins = new.coins
+    news.max_age_hours = new.news_max_age_hours
+    news.batch_size = new.news_batch_size
+    fetcher: NewsFetcher = news.fetcher
+    fetcher.rss_feeds = list(new.news_rss_feeds)
+    fetcher.gdelt_query = new.gdelt_query if new.gdelt_enabled else None
+    fetcher.cryptopanic_plan = new.cryptopanic_plan
+    fetcher.coins = new.coins
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = get_settings()
+    env = get_settings()
     init_db()
-    client = BitvavoClient(
-        settings.bitvavo_api_key, settings.bitvavo_api_secret, settings.bitvavo_rest_url
-    )
-    app.state.settings = settings
+    app.state.env = env
+    app.state.config_warning = None
+    with SessionLocal() as session:
+        settings = cfg.effective_settings(session, env)
+    client = BitvavoClient(env.bitvavo_api_key, env.bitvavo_api_secret, env.bitvavo_rest_url)
     app.state.client = client
-    app.state.broker = build_broker(settings, client)
+    try:
+        broker = build_broker(settings, client)
+    except RuntimeError as exc:
+        # Never refuse to start: run in paper mode and say why, loudly, in the portal.
+        log.warning("%s; starting in paper mode instead", exc)
+        app.state.config_warning = (
+            f"Live-modus is niet gestart omdat {exc.args[0].split(': ', 1)[-1]}. "
+            "De app draait in oefenmodus."
+        )
+        if env.trading_mode != "live":
+            with SessionLocal() as session:
+                cfg.reset_overrides(session, ["trading_mode"])
+        settings = settings.model_copy(update={"trading_mode": "paper"})
+        broker = PaperBroker(client, settings.paper_start_eur)
+    app.state.settings = settings
+    app.state.broker = broker
     app.state.budget = BudgetGuard(settings.claude_monthly_budget_usd)
     app.state.assistant = StrategyAssistant(
         settings.anthropic_api_key, settings.claude_model_strategy, app.state.budget
@@ -97,21 +169,13 @@ async def lifespan(app: FastAPI):
         settings.claude_unavailable_mode,
         settings.backtest_fee_pct,
     )
-    tasks: list[asyncio.Task] = []
-    if settings.news_enabled and settings.news_fetch_interval_min > 0:
-        tasks.append(
-            asyncio.create_task(news_scheduler(app.state.news, settings.news_fetch_interval_min))
-        )
-    if settings.trading_enabled and settings.trade_interval_min > 0:
-        tasks.append(
-            asyncio.create_task(trading_scheduler(app.state.engine, settings.trade_interval_min))
-        )
-        if settings.evaluation_interval_hours > 0:
-            tasks.append(
-                asyncio.create_task(
-                    evaluation_scheduler(app.state.engine, settings.evaluation_interval_hours)
-                )
-            )
+    # The schedulers read the interval and on/off switch from app.state.settings on every
+    # tick, so a change in the portal takes effect within a tick, without a restart.
+    tasks = [
+        asyncio.create_task(news_scheduler(app)),
+        asyncio.create_task(trading_scheduler(app)),
+        asyncio.create_task(evaluation_scheduler(app)),
+    ]
     try:
         yield
     finally:
@@ -121,52 +185,91 @@ async def lifespan(app: FastAPI):
         await client.aclose()
 
 
-async def news_scheduler(service: NewsService, interval_min: int) -> None:
-    """Fetch and assess news every ``interval_min`` minutes for as long as the app runs."""
-    await asyncio.sleep(5)  # let the server come up first
+SCHEDULER_TICK_S = 30
+
+
+async def _run_periodically(
+    app: FastAPI,
+    name: str,
+    job,
+    seconds_between,
+    initial_delay: float,
+    run_at_start: bool = True,
+) -> None:
+    """Run ``job(session)`` whenever ``seconds_between(settings)`` has passed since the last run.
+
+    ``seconds_between`` returns 0 or less to switch the job off; it is re-read every tick.
+    With ``run_at_start`` False the first run waits one full interval.
+    """
+    await asyncio.sleep(initial_delay)
+    loop = asyncio.get_running_loop()
+    last: float | None = None if run_at_start else loop.time()
     while True:
-        try:
-            with SessionLocal() as session:
-                result = await service.refresh(session)
-            log.info("news refresh: %s", result)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("news refresh failed")
-        await asyncio.sleep(interval_min * 60)
+        interval = seconds_between(app.state.settings)
+        now = loop.time()
+        if interval > 0 and (last is None or now - last >= interval):
+            last = now
+            try:
+                with SessionLocal() as session:
+                    await job(session)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("%s failed", name)
+        await asyncio.sleep(SCHEDULER_TICK_S)
+
+
+async def news_scheduler(app: FastAPI) -> None:
+    """Fetch and assess news every NEWS_FETCH_INTERVAL_MIN minutes for as long as the app runs."""
+
+    async def job(session: Session) -> None:
+        log.info("news refresh: %s", await app.state.news.refresh(session))
+
+    await _run_periodically(
+        app,
+        "news refresh",
+        job,
+        lambda s: s.news_fetch_interval_min * 60 if s.news_enabled else 0,
+        initial_delay=5,  # let the server come up first
+    )
+
+
+async def trading_scheduler(app: FastAPI) -> None:
+    """Run one trading cycle per TRADE_INTERVAL_MIN."""
+
+    async def job(session: Session) -> None:
+        results = await app.state.engine.run_cycle(session)
+        log.info("trading cycle: %s", [r.as_dict() for r in results])
+
+    await _run_periodically(
+        app,
+        "trading cycle",
+        job,
+        lambda s: s.trade_interval_min * 60 if s.trading_enabled else 0,
+        initial_delay=20,  # let news land first
+    )
+
+
+async def evaluation_scheduler(app: FastAPI) -> None:
+    """Let Claude evaluate the results every EVALUATION_INTERVAL_HOURS, the first time after
+    one full interval."""
+
+    async def job(session: Session) -> None:
+        ev = await app.state.engine.run_evaluation(session)
+        log.info("evaluation %s stored", ev.id)
+
+    await _run_periodically(
+        app,
+        "evaluation",
+        job,
+        lambda s: s.evaluation_interval_hours * 3600 if s.trading_enabled else 0,
+        initial_delay=30,
+        run_at_start=False,
+    )
 
 
 app = FastAPI(title="Crypie", version="0.1.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-
-async def trading_scheduler(engine: TradingEngine, interval_min: int) -> None:
-    """Run one trading cycle per interval, aligned to the start of the interval."""
-    await asyncio.sleep(20)  # let news land first
-    while True:
-        try:
-            with SessionLocal() as session:
-                results = await engine.run_cycle(session)
-            log.info("trading cycle: %s", [r.as_dict() for r in results])
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("trading cycle failed")
-        await asyncio.sleep(interval_min * 60)
-
-
-async def evaluation_scheduler(engine: TradingEngine, interval_hours: int) -> None:
-    await asyncio.sleep(interval_hours * 3600)
-    while True:
-        try:
-            with SessionLocal() as session:
-                engine_eval = await engine.run_evaluation(session)
-            log.info("evaluation %s stored", engine_eval.id)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("evaluation failed")
-        await asyncio.sleep(interval_hours * 3600)
 
 
 def get_client(request: Request) -> BitvavoClient:
@@ -736,6 +839,183 @@ async def trading_action(
     return RedirectResponse("/trading", status_code=303)
 
 
+# -- Settings -------------------------------------------------------------------------
+
+
+def _editable_values(settings: Settings) -> dict:
+    return {key: getattr(settings, key) for key in cfg.EDITABLE_KEYS}
+
+
+def _settings_payload(request: Request, session: Session) -> dict:
+    settings: Settings = request.app.state.settings
+    return {
+        "mode": settings.trading_mode,
+        "live_blocker": live_blocker(request.app.state.env, request.app.state.client),
+        "warning": request.app.state.config_warning,
+        "values": _editable_values(settings),
+        "groups": cfg.describe(session, settings, request.app.state.env),
+    }
+
+
+def _save_settings(request: Request, session: Session, raw: dict) -> Settings:
+    """Parse, validate, store and apply; raises SettingsError with per-field messages."""
+    app_ = request.app
+    values = cfg.parse_values(raw)
+    candidate = cfg.preview(session, values, app_.state.env)
+    if candidate.trading_mode == "live" and app_.state.broker.mode != "live":
+        blocker = live_blocker(app_.state.env, app_.state.client)
+        if blocker:
+            raise SettingsError({"trading_mode": f"live handelen kan nog niet: {blocker}"})
+    cfg.save_overrides(session, values, app_.state.env)
+    apply_settings(app_, candidate)
+    app_.state.config_warning = None
+    return candidate
+
+
+def _reset_settings(request: Request, session: Session, keys: list[str] | None) -> int:
+    removed = cfg.reset_overrides(session, keys)
+    new = cfg.effective_settings(session, request.app.state.env)
+    if new.trading_mode == "live" and live_blocker(request.app.state.env, request.app.state.client):
+        # The environment itself says live but live is not possible: stay in paper mode.
+        new = new.model_copy(update={"trading_mode": "paper"})
+    apply_settings(request.app, new)
+    return removed
+
+
+@app.get("/api/settings")
+async def api_settings(request: Request, session: Session = Depends(get_session)):
+    return _settings_payload(request, session)
+
+
+@app.put("/api/settings")
+async def api_update_settings(
+    body: dict, request: Request, session: Session = Depends(get_session)
+):
+    try:
+        _save_settings(request, session, body)
+    except SettingsError as exc:
+        raise HTTPException(422, exc.errors) from exc
+    return _settings_payload(request, session)
+
+
+@app.delete("/api/settings")
+async def api_reset_settings(request: Request, session: Session = Depends(get_session)):
+    """Forget every value saved in the portal; the environment applies again."""
+    _reset_settings(request, session, None)
+    return _settings_payload(request, session)
+
+
+@app.delete("/api/settings/{key}")
+async def api_reset_setting(key: str, request: Request, session: Session = Depends(get_session)):
+    if key not in cfg.SPEC_BY_KEY:
+        raise HTTPException(404, f"{key} is geen aanpasbare instelling")
+    _reset_settings(request, session, [key])
+    return _settings_payload(request, session)
+
+
+def _reset_paper_portfolio(session: Session) -> int:
+    """Forget the paper wallet and close open paper positions without result."""
+    row = session.get(Setting, PAPER_WALLET_KEY)
+    if row is not None:
+        session.delete(row)
+    closed = 0
+    for p in open_positions(session, "paper"):
+        p.status = "closed"
+        p.exit_price = p.entry_price
+        p.exit_quote = p.entry_quote
+        p.closed_at = datetime.now(UTC)
+        p.pnl_eur = 0.0
+        p.pnl_pct = 0.0
+        p.close_reason = "reset"
+        closed += 1
+    session.commit()
+    return closed
+
+
+def _settings_context(
+    request: Request,
+    session: Session,
+    errors: dict[str, str] | None = None,
+    submitted: dict | None = None,
+    message: str | None = None,
+) -> dict:
+    payload = _settings_payload(request, session)
+    if submitted:
+        for group in payload["groups"]:
+            for f in group["fields"]:
+                if f["key"] in submitted:
+                    f["text"] = submitted[f["key"]]
+                    if f["kind"] == "bool":
+                        f["value"] = str(submitted[f["key"]]).lower() in ("true", "1", "on")
+                    elif f["kind"] in ("choice", "model"):
+                        f["value"] = submitted[f["key"]]
+    env: Settings = request.app.state.env
+    return {
+        "settings": request.app.state.settings,
+        "groups": payload["groups"],
+        "live_blocker": payload["live_blocker"],
+        "config_warning": payload["warning"],
+        "errors": errors or {},
+        "message": message,
+        "model_choices": [m for m, _ in cfg.MODEL_CHOICES],
+        "environment": {
+            "bitvavo_key": env.has_bitvavo_credentials,
+            "anthropic_key": bool(env.anthropic_api_key),
+            "cryptopanic_token": bool(env.cryptopanic_token),
+            "live_ack": env.live_trading_ack,
+            "database": env.database_url.split(":", 1)[0],
+        },
+    }
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(
+    request: Request, saved: str | None = None, session: Session = Depends(get_session)
+):
+    message = None
+    if saved in cfg.GROUPS:
+        message = f"Instellingen voor '{cfg.GROUPS[saved][0]}' opgeslagen. Ze gelden direct."
+    elif saved == "reset":
+        message = "Standaardwaarden hersteld; de waarden uit de serveromgeving gelden weer."
+    elif saved == "paper":
+        message = (
+            "Oefenportefeuille gereset. Het saldo staat weer op het startbedrag en open "
+            "oefenposities zijn gesloten."
+        )
+    ctx = _settings_context(request, session, message=message)
+    return templates.TemplateResponse(request, "settings.html", ctx)
+
+
+@app.post("/settings", response_class=HTMLResponse)
+async def settings_save(request: Request, session: Session = Depends(get_session)):
+    form = await request.form()
+    group = str(form.get("group") or "")
+    action = str(form.get("action") or "save")
+    if action == "reset_paper":
+        if request.app.state.broker.mode != "paper":
+            raise HTTPException(400, "alleen mogelijk in oefenmodus")
+        _reset_paper_portfolio(session)
+        return RedirectResponse("/settings?saved=paper", status_code=303)
+    if group not in cfg.GROUPS:
+        raise HTTPException(400, "onbekende groep")
+    if action == "reset":
+        _reset_settings(request, session, cfg.keys_in_group(group))
+        return RedirectResponse(f"/settings?saved=reset#{group}", status_code=303)
+    raw: dict[str, str] = {}
+    for key in cfg.keys_in_group(group):
+        sent = form.getlist(key)
+        if sent:
+            raw[key] = str(sent[-1])  # a checkbox posts after its hidden "false" twin
+        elif cfg.SPEC_BY_KEY[key].kind == "bool":
+            raw[key] = "false"
+    try:
+        _save_settings(request, session, raw)
+    except SettingsError as exc:
+        ctx = _settings_context(request, session, errors=exc.errors, submitted=raw)
+        return templates.TemplateResponse(request, "settings.html", ctx, status_code=400)
+    return RedirectResponse(f"/settings?saved={group}#{group}", status_code=303)
+
+
 # -- Dashboard -------------------------------------------------------------------------
 
 
@@ -788,6 +1068,7 @@ async def _dashboard_context(
         "performance": performance_summary(session, mode),
         "paused": risk.is_paused(session),
         "last_run": request.app.state.engine.last_run,
+        "config_warning": request.app.state.config_warning,
     }
 
 

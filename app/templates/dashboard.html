@@ -16,6 +16,7 @@
     <form class="inline" method="post" action="/trading/action"><button class="btn btn-sm btn-primary" name="action" value="resume">Handelen hervatten</button></form>
   {% endcall %}
   {% endif %}
+  {% if config_warning %}{{ ui.notice("warn", config_warning) }}{% endif %}
   {% if error %}{{ ui.notice("error", "Bitvavo is op dit moment niet bereikbaar. Koersen en saldo kunnen verouderd of leeg zijn. (" ~ error ~ ")") }}{% endif %}
   {% if not settings.anthropic_api_key %}{{ ui.notice("info", "De Claude-sleutel (ANTHROPIC_API_KEY) is nog niet ingesteld. Nieuws wordt niet beoordeeld en beslissingen volgen alleen de regels.") }}{% endif %}
 

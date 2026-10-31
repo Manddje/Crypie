@@ -1,3 +1,5 @@
+import json
+
 import pytest
 import respx
 from httpx import ASGITransport, AsyncClient, Response
@@ -179,3 +181,89 @@ async def test_trading_endpoints(api):
 
     r = await api.get("/trading")
     assert r.status_code == 200 and "Harde limieten" in r.text
+
+
+@respx.mock
+async def test_settings_page_and_api_change_the_running_app(api):
+    r = await api.get("/settings")
+    assert r.status_code == 200 and "Instellingen" in r.text and "Harde limieten" in r.text
+
+    r = await api.get("/api/settings")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["mode"] == "paper" and body["values"]["max_trade_eur"] == 100.0
+    assert "ANTHROPIC_API_KEY" not in json.dumps(body)  # secrets are never part of it
+    assert body["live_blocker"]  # no Bitvavo key and no ack in tests
+
+    # Save via the form: limits are applied to the engine at once, without a restart.
+    form = {
+        "group": "limits",
+        "max_trade_eur": "40",
+        "min_trade_eur": "10",
+        "max_exposure_pct": "30",
+        "daily_loss_limit_pct": "3",
+        "max_trades_per_day": "2",
+        "cooldown_min_after_stop": "60",
+    }
+    r = await api.post("/settings", data=form, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("/settings?saved=limits")
+    status = (await api.get("/api/trading/status")).json()
+    assert status["limits"]["max_trade_eur"] == 40.0 and status["limits"]["max_trades_per_day"] == 2
+    r = await api.get("/settings")
+    assert "5 aangepast" in r.text  # min_trade_eur equals the environment, so it is not stored
+
+    # Invalid input re-renders the form with the error and changes nothing.
+    r = await api.post("/settings", data=form | {"max_trade_eur": "abc"})
+    assert r.status_code == 400 and "geen geldig getal" in r.text
+    assert (await api.get("/api/trading/status")).json()["limits"]["max_trade_eur"] == 40.0
+
+    # JSON API: markets and interval, including the checkbox-style booleans.
+    r = await api.put(
+        "/api/settings",
+        json={"markets": "sol-eur", "trade_interval_min": 5, "trading_enabled": False},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["values"]["markets"] == ["SOL-EUR"]
+    assert app.state.settings.markets == ["SOL-EUR"] and app.state.engine.markets == ["SOL-EUR"]
+    assert app.state.news.coins == ["SOL"] and app.state.settings.trading_enabled is False
+    r = await api.post("/api/orders", json={"market": "BTC-EUR", "side": "buy", "amount_quote": 10})
+    assert r.status_code == 400  # BTC-EUR is no longer a configured market
+
+    r = await api.put("/api/settings", json={"max_exposure_pct": 500})
+    assert r.status_code == 422 and "max_exposure_pct" in r.json()["detail"]
+
+    # Live mode needs the environment safeguards; the portal alone cannot switch it on.
+    r = await api.put("/api/settings", json={"trading_mode": "live"})
+    assert r.status_code == 422 and "kan nog niet" in r.json()["detail"]["trading_mode"]
+    assert (await api.get("/health")).json()["mode"] == "paper"
+
+    # Reset one key, then everything.
+    r = await api.delete("/api/settings/markets")
+    assert r.json()["values"]["markets"] == ["BTC-EUR", "ETH-EUR"]
+    assert (await api.delete("/api/settings/nope")).status_code == 404
+    r = await api.delete("/api/settings")
+    assert r.json()["values"]["max_trade_eur"] == 100.0 and r.json()["values"]["trading_enabled"]
+    assert app.state.engine.limits.max_trade_eur == 100.0
+
+    # Settings survive a restart: they live in the database, not in the process.
+    await api.put("/api/settings", json={"max_trades_per_day": 1})
+    async with app.router.lifespan_context(app):
+        assert app.state.settings.max_trades_per_day == 1
+        assert app.state.engine.limits.max_trades_per_day == 1
+
+
+@respx.mock
+async def test_reset_paper_portfolio(api):
+    respx.get(f"{BASE}/ticker/price", params={"market": "BTC-EUR"}).mock(
+        return_value=Response(200, json={"market": "BTC-EUR", "price": "100"})
+    )
+    before = (await api.get("/api/balance")).json()["balances"]["EUR"]
+    r = await api.post("/api/orders", json={"market": "BTC-EUR", "side": "buy", "amount_quote": 50})
+    assert r.status_code == 201
+    assert (await api.get("/api/balance")).json()["balances"]["EUR"] == before - 50
+
+    r = await api.post("/settings", data={"action": "reset_paper"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert (await api.get("/api/balance")).json()["balances"] == {"EUR": 1000.0}
+    r = await api.get("/settings?saved=paper")
+    assert "Oefenportefeuille gereset" in r.text
