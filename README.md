@@ -32,16 +32,22 @@ pytest
 
 ## Deployen op Coolify
 
-1. Nieuwe resource: **Docker Compose** vanuit deze Git-repository (branch `main`), bestand
-   `docker-compose.yaml`. Alle instellingen uit `.env.example` worden via `${VAR:-default}` aan de
-   `app`-service doorgegeven, dus elke variabele die je in Coolify zet komt in de container terecht.
-2. Zet in de Coolify-omgeving minimaal `POSTGRES_PASSWORD` (sterk wachtwoord) en `TRADING_MODE=paper`.
-3. Voeg `BITVAVO_API_KEY`, `BITVAVO_API_SECRET` en `ANTHROPIC_API_KEY` toe. Begin met een
-   Bitvavo-key met alleen **view**-rechten; **trade**-rechten pas bij live gaan. Zet in Bitvavo een
-   IP-whitelist op het Coolify-serveradres.
-4. Koppel een domein aan de `app`-service op poort 8000 (de poort wordt niet op de host gepubliceerd;
-   alleen Coolify's proxy komt erbij). Zet het dashboard achter Coolify's basic-auth of een eigen
-   login voordat je naar live gaat.
+De app draait als eigen Coolify-project met twee resources: een **PostgreSQL**-database en de
+app als **Docker Compose**-resource vanuit deze repository.
+
+1. Maak een PostgreSQL-resource aan (gebruiker en database `crypie`). Noteer de interne URL.
+2. Nieuwe resource: **Docker Compose** vanuit deze Git-repository (branch `main`), bestand
+   `docker-compose.yaml`. Dit bestand bevat alleen de app; Postgres zit in
+   `docker-compose.override.yaml` en wordt alleen lokaal gebruikt.
+3. Zet in de app-omgeving `DATABASE_URL` op de interne URL van de database, met het schema
+   `postgresql+psycopg://` in plaats van `postgres://`. Alle andere instellingen uit
+   `.env.example` worden via `${VAR:-default}` doorgegeven; een lege waarde betekent "default".
+4. Voeg `BITVAVO_API_KEY`, `BITVAVO_API_SECRET` en `ANTHROPIC_API_KEY` toe en zet
+   `TRADING_MODE=paper`. Begin met een Bitvavo-key met alleen **view**-rechten; **trade**-rechten
+   pas bij live gaan. Zet in Bitvavo een IP-whitelist op het Coolify-serveradres.
+5. Koppel een domein aan de `app`-service op poort 8000 (de poort wordt niet op de host
+   gepubliceerd; alleen Coolify's proxy komt erbij). Zet het dashboard achter Coolify's
+   basic-auth of een eigen login voordat je naar live gaat.
 
 ## Strategie en indicatoren
 

@@ -1,7 +1,11 @@
-# Works locally with `docker compose up` and as a Docker Compose resource in Coolify.
+# Used by Coolify (Docker Compose resource) and by `docker compose up` locally.
 # Coolify writes the variables from its UI to a .env that is used for the ${VAR:-default}
 # substitutions below; locally they come from .env. Every setting the app reads is listed
 # here so a value set in Coolify always reaches the container.
+#
+# Postgres is NOT part of this file: on Coolify the app talks to a separate managed Postgres
+# resource via DATABASE_URL. For local development docker-compose.override.yaml (picked up
+# automatically by `docker compose up`) adds a Postgres container and publishes port 8000.
 services:
   app:
     build: .
@@ -12,7 +16,8 @@ services:
       BITVAVO_API_SECRET: ${BITVAVO_API_SECRET:-}
       MARKETS: ${MARKETS:-BTC-EUR,ETH-EUR}
       PAPER_START_EUR: ${PAPER_START_EUR:-1000}
-      DATABASE_URL: postgresql+psycopg://crypie:${POSTGRES_PASSWORD:-crypie}@db:5432/crypie
+      # On Coolify: the internal URL of the Postgres resource, with the postgresql+psycopg scheme.
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://crypie:${POSTGRES_PASSWORD:-crypie}@db:5432/crypie}
       # Claude
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_MONTHLY_BUDGET_USD: ${CLAUDE_MONTHLY_BUDGET_USD:-100}
@@ -40,27 +45,5 @@ services:
       EVALUATION_INTERVAL_HOURS: ${EVALUATION_INTERVAL_HOURS:-168}
       LIVE_TRADING_ACK: ${LIVE_TRADING_ACK:-false}
     # Only exposed inside the Docker network; Coolify's proxy routes the domain to this port.
-    # Locally docker-compose.override.yaml publishes it on localhost:8000.
     expose:
       - "8000"
-    depends_on:
-      db:
-        condition: service_healthy
-
-  db:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: crypie
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crypie}
-      POSTGRES_DB: crypie
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U crypie -d crypie"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-volumes:
-  pgdata:
