@@ -1,0 +1,8 @@
+{"count": 1, "results": [
+  {"id": 1, "slug": "x", "title": "ETF inflows hit record", "description": "Spot BTC ETFs saw $1B",
+   "published_at": "2026-10-31T08:00:00Z", "kind": "news",
+   "source": {"title": "CoinDesk", "domain": "coindesk.com"},
+   "original_url": "https://coindesk.com/etf", "url": "https://cryptopanic.com/news/1",
+   "instruments": [{"code": "BTC", "title": "Bitcoin"}],
+   "votes": {"positive": 10, "negative": 1, "important": 3}}
+]}

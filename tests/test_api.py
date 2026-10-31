@@ -105,3 +105,34 @@ async def test_strategy_roundtrip_and_backtest(api):
 
     r = await api.get("/api/claude/usage")
     assert r.json()["limit_usd"] == 100.0 and r.json()["spent_usd"] == 0
+
+
+@respx.mock
+async def test_news_endpoints(api):
+    from pathlib import Path
+
+    from app.news.sources import NewsFetcher
+
+    fixture = Path(__file__).parent / "fixtures" / "feed.xml"
+    # Test settings use the default feeds; stub them all with one fixture.
+    for url in app.state.settings.news_rss_feeds:
+        respx.get(url).mock(return_value=Response(200, content=fixture.read_bytes()))
+    respx.get(NewsFetcher.GDELT_URL).mock(return_value=Response(429))
+
+    r = await api.post("/api/news/refresh")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["inserted"] >= 1 and body["assessed"] == 0  # no API key in tests
+    assert "ANTHROPIC_API_KEY" in body["error"]
+
+    r = await api.get("/api/news?hours=24")
+    titles = [i["title"] for i in r.json()]
+    assert "Binance & $6.3B hack sparks debate" in titles
+    assert "Old item" not in titles
+
+    r = await api.get("/api/news/sentiment")
+    assert set(r.json()) == {"BTC", "ETH"}
+    assert r.json()["BTC"]["label"] == "geen nieuws"
+
+    r = await api.get("/news")
+    assert r.status_code == 200 and "hack sparks debate" in r.text
