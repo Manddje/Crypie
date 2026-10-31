@@ -67,8 +67,8 @@
               </select>
             {% elif f.kind == "model" %}
               <input type="text" id="{{ fid }}" name="{{ f.key }}" value="{{ f.text }}" list="claude-models" spellcheck="false" autocomplete="off">
-            {% elif f.kind == "lines" %}
-              <textarea id="{{ fid }}" name="{{ f.key }}" rows="4" spellcheck="false">{{ f.text }}</textarea>
+            {% elif f.kind in ("lines", "events") %}
+              <textarea id="{{ fid }}" name="{{ f.key }}" rows="{{ 8 if f.kind == 'events' else 4 }}" spellcheck="false">{{ f.text }}</textarea>
             {% elif f.kind in ("int", "float") %}
               <div class="unit-input">
                 {% if f.unit in ("€", "$") %}<span class="unit">{{ f.unit }}</span>{% endif %}

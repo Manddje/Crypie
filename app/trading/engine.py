@@ -23,6 +23,7 @@ from app.strategy.engine import backtest, compute_series, signal_at
 from app.strategy.model import LOOKBACK_OPS, Strategy
 from app.strategy.store import load_strategy
 from app.trading import risk
+from app.trading.events import MarketEvent, active_event, recent_shock, upcoming_events
 from app.trading.journal import JournalFilter, journal_entries, notes_for_claude
 from app.trading.plan import load_plan
 from app.trading.risk import RiskLimits
@@ -205,6 +206,12 @@ class TradingEngine:
         self.backtest_fee_pct = backtest_fee_pct
         self.fee_pct = fee_pct  # per side; what a round trip must beat to break even is 2x
         self.trend_context = True  # pass the long-term trend (PlanB-style) to Claude
+        # Risk-off: no new buys around calendar events and after a news shock.
+        self.calendar: list[MarketEvent] = []
+        self.risk_off_enabled = True
+        self.risk_off_before_min = 60
+        self.risk_off_after_min = 120
+        self.shock_pause_hours = 6
         self.last_run: datetime | None = None
         self.last_results: list[dict[str, Any]] = []
         self.last_error: str | None = None
@@ -323,6 +330,80 @@ class TradingEngine:
         dip = [chk for cond, chk in pairs if cond.op not in LOOKBACK_OPS and cond in hard]
         return bool(turn) and bool(dip) and all(c.ok for c in dip), dip, turn
 
+    def risk_off(self, session: Session, market: str, now: datetime) -> dict[str, Any] | None:
+        """Why no new position may be opened right now, or None: a calendar window or a shock."""
+        if not self.risk_off_enabled:
+            return None
+        event = active_event(self.calendar, now, self.risk_off_before_min, self.risk_off_after_min)
+        if event is not None:
+            start, end = event.window(self.risk_off_before_min, self.risk_off_after_min)
+            return {
+                "kind": "event",
+                "label": event.label,
+                "at": event.at.isoformat(),
+                "until": end.isoformat(),
+                "reason_nl": (
+                    f"{event.label} om {event.at:%H:%M} UTC; geen nieuwe aankopen van "
+                    f"{start:%H:%M} tot {end:%H:%M} UTC"
+                ),
+            }
+        shock = recent_shock(session, market.split("-")[0], self.shock_pause_hours, now)
+        if shock is not None:
+            published = shock.published_at
+            if published.tzinfo is None:
+                published = published.replace(tzinfo=UTC)
+            until = published + timedelta(hours=self.shock_pause_hours)
+            return {
+                "kind": "shock",
+                "label": shock.summary_nl or shock.title,
+                "at": published.isoformat(),
+                "until": until.isoformat(),
+                "reason_nl": (
+                    f"nieuwsschok ({shock.summary_nl or shock.title}); geen nieuwe aankopen tot "
+                    f"{until:%H:%M} UTC"
+                ),
+            }
+        return None
+
+    def events_context(self, session: Session, market: str, now: datetime) -> dict[str, Any]:
+        """What Claude and the UI see: the active risk-off (if any) and the next events."""
+        return {
+            "enabled": self.risk_off_enabled,
+            "risk_off": self.risk_off(session, market, now),
+            "upcoming": [
+                e.as_dict() for e in upcoming_events(self.calendar, now, 3, horizon_hours=72)
+            ],
+            "window_min": {"before": self.risk_off_before_min, "after": self.risk_off_after_min},
+            "shock_pause_hours": self.shock_pause_hours,
+        }
+
+    def events_status(self, session: Session) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        shocks = {}
+        for market in self.markets:
+            ro = self.risk_off(session, market, now)
+            if ro and ro["kind"] == "shock":
+                shocks[market] = ro
+        event = (
+            active_event(self.calendar, now, self.risk_off_before_min, self.risk_off_after_min)
+            if self.risk_off_enabled
+            else None
+        )
+        return {
+            "enabled": self.risk_off_enabled,
+            "active_event": None
+            if event is None
+            else {
+                **event.as_dict(),
+                "until": event.window(0, self.risk_off_after_min)[1].isoformat(),
+            },
+            "shocks": shocks,
+            "upcoming": [e.as_dict() for e in upcoming_events(self.calendar, now, 4)],
+            "before_min": self.risk_off_before_min,
+            "after_min": self.risk_off_after_min,
+            "shock_pause_hours": self.shock_pause_hours,
+        }
+
     async def run_market(
         self,
         session: Session,
@@ -340,13 +421,14 @@ class TradingEngine:
         price = prices.get(market) or candles[-1][4]
         now = datetime.now(UTC)
         position = open_position(session, self.mode, market)
+        risk_off = self.risk_off(session, market, now) if position is None else None
 
         # Dip watch: arm on the dip, fire on the turn, give up after watch_max_min.
         dip_holds, dip_checks, turn_checks = self._arm_state(strategy, checks)
         armed = self.watch.get(market)
         watch_triggered = False
-        if position is not None:
-            self.watch.pop(market, None)
+        if position is not None or risk_off is not None:
+            self.watch.pop(market, None)  # nothing to buy (yet): no dip to watch either
         elif armed is not None:
             if signal == "buy" or all(c.ok for c in turn_checks):
                 # The turn came (the full signal, or the turn condition alone on the dip we
@@ -446,6 +528,17 @@ class TradingEngine:
             and sentiment.score <= NEWS_EXIT_MAX_SCORE
             or news_entry
         )
+        if risk_off is not None and position is None and (needs_claude or signal == "buy"):
+            # 2b. Risk-off: a calendar window or a news shock. No new position, whatever the
+            # signal or the news says; Claude is not asked.
+            decision.reasoning = (
+                f"{signal_reason} Risk-off: {risk_off['reason_nl']}. "
+                "Geen nieuwe positie; verkopen en stop-loss blijven mogelijk."
+            )
+            decision.blocked_by = "risk-off"
+            session.add(decision)
+            session.commit()
+            return CycleResult(market, price, signal, "hold", "rules", False, decision.reasoning)
         if not needs_claude:
             news = (
                 "geen beoordeeld nieuws"
@@ -504,6 +597,8 @@ class TradingEngine:
                 blocked = "kopen met een open positie is niet toegestaan"
             elif signal != "buy" and not news_entry:
                 blocked = "kopen zonder buy-signaal of sterk positief nieuws is niet toegestaan"
+            elif (ro := self.risk_off(session, market, datetime.now(UTC))) is not None:
+                blocked = f"risk-off: {ro['reason_nl']}"
             else:
                 total, exposure = await self.portfolio(session, prices)
                 allowed, blocked = risk.check_buy(
@@ -582,6 +677,7 @@ class TradingEngine:
             "news": sentiment.as_dict(),
             "market_mood": load_market_mood(session),  # Fear & Greed index, market-wide
             "long_term_trend": load_trend(session, market) if self.trend_context else None,
+            "market_events": self.events_context(session, market, datetime.now(UTC)),
             "position": None
             if position is None
             else {

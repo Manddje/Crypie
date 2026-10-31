@@ -80,6 +80,8 @@
       <p class="small">{% if settings.watch_interval_min > 0 %}Gelden de dip-voorwaarden maar de draai nog niet, dan kijkt de bot elke {{ settings.watch_interval_min }} minuten opnieuw, maximaal {{ settings.watch_max_min }} minuten. Zodra de draai er is gaat de situatie naar Claude.{% else %}Uit: de bot kijkt alleen in de gewone cyclus.{% endif %}</p>
       <h4 class="plan-h">Instappen op nieuws</h4>
       <p class="small">Zonder koopsignaal mag Claude alleen kopen als het nieuws voor de coin sterk positief is (score ≥ {{ news_entry_min_score|num(1) }}) met minstens één bericht van hoge impact, en dan hoogstens {{ half_order_pct }}% van het maximum. Slecht nieuws is nooit een reden om de dip te kopen.</p>
+      <h4 class="plan-h">Risk-off</h4>
+      <p class="small">{% if settings.risk_off_enabled %}Rond agendamomenten (FOMC, CPI en wat jij in de <a href="/settings#trading">agenda</a> zet) koopt de bot niet van {{ settings.risk_off_before_min }} minuten ervoor tot {{ settings.risk_off_after_min }} minuten erna.{% if settings.shock_pause_hours %} Na een nieuwsschok (grote impact, sterk negatief) koopt hij {{ settings.shock_pause_hours }} uur niet in de geraakte coins.{% endif %} Verkopen en de stop-loss blijven werken.{% else %}Uit: de bot koopt ook rond agendamomenten en na nieuwsschokken.{% endif %}</p>
       <h4 class="plan-h">Grootte van een order</h4>
       <p class="small">Claude kiest het bedrag tot {{ limits.max_trade_eur|eur(0) }}; de code kapt af op de limieten. Bij een niet-gehaald zacht filter of een nieuwsaankoop: de helft.</p>
     </section>

@@ -53,6 +53,7 @@ from app.trading.engine import (
     performance_summary,
     recent_decisions,
 )
+from app.trading.events import parse_calendar
 from app.trading.journal import (
     EXIT_NL,
     JournalFilter,
@@ -138,6 +139,7 @@ def apply_settings(app: FastAPI, new: Settings) -> None:
     engine.fee_pct = new.trading_fee_pct
     engine.watch_max_min = new.watch_max_min
     engine.trend_context = new.trend_context_enabled
+    _apply_risk_off(engine, new)
     if new.watch_interval_min <= 0:
         engine.watch.clear()
     if isinstance(state.broker, PaperBroker):
@@ -157,6 +159,14 @@ def apply_settings(app: FastAPI, new: Settings) -> None:
     fetcher.cryptocv_enabled = new.cryptocv_enabled
     fetcher.google_news_enabled = new.google_news_enabled
     fetcher.fear_greed_enabled = new.fear_greed_enabled
+
+
+def _apply_risk_off(engine: TradingEngine, settings: Settings) -> None:
+    engine.calendar = parse_calendar(settings.event_calendar)
+    engine.risk_off_enabled = settings.risk_off_enabled
+    engine.risk_off_before_min = settings.risk_off_before_min
+    engine.risk_off_after_min = settings.risk_off_after_min
+    engine.shock_pause_hours = settings.shock_pause_hours
 
 
 @asynccontextmanager
@@ -236,6 +246,8 @@ async def lifespan(app: FastAPI):
         settings.trading_fee_pct,
         settings.watch_max_min,
     )
+    app.state.engine.trend_context = settings.trend_context_enabled
+    _apply_risk_off(app.state.engine, settings)
     # The schedulers read the interval and on/off switch from app.state.settings on every
     # tick, so a change in the portal takes effect within a tick, without a restart.
     tasks = [
@@ -808,6 +820,7 @@ def _trading_status(engine: TradingEngine, session: Session, settings: Settings)
         "watch_max_min": settings.watch_max_min,
         "last_watch_run": engine.last_watch_run,
         "trends": load_trends(session, list(engine.markets)) if engine.trend_context else [],
+        "events": engine.events_status(session),
         "claude_available": engine.decision_maker.available,
         "last_run": engine.last_run,
         "last_results": engine.last_results,
