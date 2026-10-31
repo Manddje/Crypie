@@ -30,6 +30,8 @@ from app.config import Settings, get_settings
 from app.db import Evaluation, SessionLocal, Setting, get_session, init_db
 from app.news.service import (
     NewsService,
+    annotate_groups,
+    count_status,
     group_items,
     load_market_mood,
     market_sentiment,
@@ -691,7 +693,8 @@ async def strategy_action(
 # -- News -----------------------------------------------------------------------------
 
 
-def _news_dict(it) -> dict:
+def _news_dict(it, tracked: list[str]) -> dict:
+    status = count_status(it, tracked)
     return {
         "id": it.id,
         "source": it.source,
@@ -706,12 +709,25 @@ def _news_dict(it) -> dict:
         "horizon": it.horizon,
         "coins": it.coin_list(),
         "summary_nl": it.summary_nl,
+        "event_key": it.event_key,
+        "counts": status.counts,  # weighs in the market sentiment right now
+        "counts_reason": status.reason_nl,
     }
 
 
 @app.get("/api/news")
-async def list_news(hours: int = 24, limit: int = 100, session: Session = Depends(get_session)):
-    return [_news_dict(it) for it in recent_items(session, hours, min(limit, 500))]
+async def list_news(
+    request: Request,
+    hours: int = 24,
+    limit: int = 100,
+    counts: bool | None = None,
+    session: Session = Depends(get_session),
+):
+    tracked = request.app.state.settings.coins
+    rows = [_news_dict(it, tracked) for it in recent_items(session, hours, min(limit, 500))]
+    if counts is not None:
+        rows = [r for r in rows if r["counts"] == counts]
+    return rows
 
 
 @app.post("/api/news/refresh")
@@ -735,17 +751,23 @@ async def news_sentiment(
 async def news_page(
     request: Request,
     hours: int = 24,
+    telt: str = "",  # "ja" = only facts that weigh in the sentiment, "nee" = only the rest
     news: NewsService = Depends(get_news),
     session: Session = Depends(get_session),
 ):
     settings: Settings = request.app.state.settings
+    counted = {"ja": True, "nee": False}.get(telt)
+    groups = annotate_groups(group_items(recent_items(session, hours, 150)), settings.coins)
     return templates.TemplateResponse(
         request,
         "news.html",
         {
             "settings": settings,
             "hours": hours,
-            "groups": group_items(recent_items(session, hours, 150)),
+            "telt": telt if counted is not None else "",
+            "groups": [g for g in groups if counted is None or g.status.counts == counted],
+            "n_counted": sum(1 for g in groups if g.status.counts),
+            "n_total": len(groups),
             "sentiments": [market_sentiment(session, c, 48) for c in settings.coins],
             "market_mood": load_market_mood(session),
             "last_run": news.last_run,

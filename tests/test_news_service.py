@@ -288,3 +288,63 @@ def test_group_items_folds_articles_per_news_fact(session):
     assert hack.coin_list() == ["BTC", "ALL"] and hack.relevant and hack.assessed
     assert not groups[0].assessed and groups[0].sentiment is None and groups[0].impact is None
     assert groups[2].sources == 1 and groups[2].others == []
+
+
+def test_count_status_explains_why_an_article_does_or_does_not_count(session):
+    from app.news.service import count_status
+
+    tracked = ["BTC", "SOL"]
+    ok = _item(session, "etf-inflow", 0.6, 2, "BTC", hours_ago=2)
+    st = count_status(ok, tracked, now=NOW)
+    assert st.counts and st.code == "counted" and st.coins == ("BTC",)
+    assert st.reason_nl == "telt mee voor BTC"
+
+    everything = _item(session, "macro", -0.2, 1, "ALL", hours_ago=1)
+    assert count_status(everything, tracked, now=NOW).coins == ("BTC", "SOL")
+
+    pending = _item(session, "fresh", None, None, None, hours_ago=0, relevant=None)
+    pending.assessed = False
+    assert count_status(pending, tracked, now=NOW).code == "pending"
+
+    noise = _item(session, "celebrity", 0.0, 0, None, hours_ago=1, relevant=False)
+    assert count_status(noise, tracked, now=NOW).code == "irrelevant"
+
+    old = _item(session, "old-hack", -0.9, 3, "BTC", hours_ago=49)
+    st = count_status(old, tracked, now=NOW)
+    assert st.code == "too_old" and "48 uur" in st.reason_nl
+
+    eth = _item(session, "eth-upgrade", 0.8, 3, "ETH,DOGE", hours_ago=1)
+    st = count_status(eth, tracked, now=NOW)
+    assert st.code == "other_coins" and "ETH, DOGE" in st.reason_nl
+
+    zero = _item(session, "minor", 0.3, 0, "BTC", hours_ago=1)
+    assert count_status(zero, tracked, now=NOW).code == "no_impact"
+
+
+def test_annotate_groups_rolls_status_up_per_news_fact_and_filters(session):
+    from app.news.service import annotate_groups
+
+    tracked = ["BTC"]
+    a = _item(session, "hack-a", -0.9, 3, "BTC", hours_ago=2)
+    b = _item(session, "hack-b", None, None, None, hours_ago=1, relevant=None)
+    b.assessed = False
+    a.event_key = b.event_key = "binance-hack"
+    eth = _item(session, "eth-upgrade", 0.8, 3, "ETH", hours_ago=1)
+    session.commit()
+
+    groups = annotate_groups(group_items([b, a, eth]), tracked, now=NOW)
+    hack, upgrade = groups
+    assert hack.status.counts and hack.status.reason_nl == "telt mee voor BTC"
+    assert b.counting.code == "pending" and a.counting.counts
+    assert not upgrade.status.counts and upgrade.status.code == "other_coins"
+
+    only_counting = annotate_groups(group_items([b, a, eth]), tracked, counted=True, now=NOW)
+    assert [g.key for g in only_counting] == ["binance-hack"]
+    rest = annotate_groups(group_items([b, a, eth]), tracked, counted=False, now=NOW)
+    assert [g.key for g in rest] == ["title:eth-upgrade"]
+
+    # Two counting sources: the reason says the sentiment is an average of them.
+    b.assessed, b.relevant, b.sentiment, b.impact, b.coins = True, True, -0.5, 2, "BTC"
+    session.commit()
+    (hack,) = annotate_groups(group_items([b, a]), tracked, now=NOW)
+    assert "gemiddeld over 2 bronnen" in hack.status.reason_nl
