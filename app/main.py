@@ -44,6 +44,7 @@ from app.trading.engine import (
     recent_decisions,
 )
 from app.trading.risk import RiskLimits
+from app.trading.trend import load_trends, refresh_trends
 from app.web import STATIC_DIR, templates
 
 log = logging.getLogger("crypie")
@@ -115,6 +116,7 @@ def apply_settings(app: FastAPI, new: Settings) -> None:
     engine.backtest_fee_pct = new.backtest_fee_pct
     engine.fee_pct = new.trading_fee_pct
     engine.watch_max_min = new.watch_max_min
+    engine.trend_context = new.trend_context_enabled
     if new.watch_interval_min <= 0:
         engine.watch.clear()
     if isinstance(state.broker, PaperBroker):
@@ -216,6 +218,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(news_scheduler(app)),
         asyncio.create_task(trading_scheduler(app)),
         asyncio.create_task(watch_scheduler(app)),
+        asyncio.create_task(trend_scheduler(app)),
         asyncio.create_task(evaluation_scheduler(app)),
     ]
     try:
@@ -310,6 +313,23 @@ async def watch_scheduler(app: FastAPI) -> None:
         ),
         initial_delay=60,
         run_at_start=False,
+    )
+
+
+async def trend_scheduler(app: FastAPI) -> None:
+    """Refresh the long-term trend (200-week MA, monthly RSI) per market once a day."""
+
+    async def job(session: Session) -> None:
+        engine: TradingEngine = app.state.engine
+        trends = await refresh_trends(engine.client, session, list(engine.markets))
+        log.info("trend refresh: %s", [t["summary_nl"] for t in trends])
+
+    await _run_periodically(
+        app,
+        "trend refresh",
+        job,
+        lambda s: 24 * 3600 if s.trading_enabled and s.trend_context_enabled else 0,
+        initial_delay=10,  # before the first trading cycle (at 20 s)
     )
 
 
@@ -763,6 +783,7 @@ def _trading_status(engine: TradingEngine, session: Session, settings: Settings)
         "watch_interval_min": settings.watch_interval_min,
         "watch_max_min": settings.watch_max_min,
         "last_watch_run": engine.last_watch_run,
+        "trends": load_trends(session, list(engine.markets)) if engine.trend_context else [],
         "claude_available": engine.decision_maker.available,
         "last_run": engine.last_run,
         "last_results": engine.last_results,

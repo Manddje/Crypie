@@ -195,6 +195,29 @@ async def test_trading_endpoints(api):
 
     r = await api.get("/trading")
     assert r.status_code == 200 and "Harde limieten" in r.text
+    assert "Lange-termijntrend" not in r.text  # nothing computed yet
+
+    from app.db import SessionLocal
+    from app.trading.trend import save_trend
+
+    with SessionLocal() as s:
+        save_trend(
+            s,
+            {
+                "market": "BTC-EUR",
+                "wma200": 30000.0,
+                "weeks": 210,
+                "above_wma200": True,
+                "vs_wma200_pct": 33.3,
+                "monthly_rsi": 56.0,
+                "months": 40,
+                "monthly_rsi_above_50": True,
+                "regime": "up",
+                "regime_nl": "opwaarts",
+            },
+        )
+    r = await api.get("/trading")
+    assert "Lange-termijntrend" in r.text and "opwaarts" in r.text and "+33,3%" in r.text
     assert "Laatste cyclus per markt" in r.text and "Alle cyclussen" in r.text
     # Flat candles push RSI to 100: a sell signal without a position, explained per condition.
     assert "Verkoopsignaal: rsi14 hoger dan 70 ✓" in r.text and "niets te verkopen" in r.text

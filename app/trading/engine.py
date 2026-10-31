@@ -24,6 +24,7 @@ from app.strategy.model import LOOKBACK_OPS, Strategy
 from app.strategy.store import load_strategy
 from app.trading import risk
 from app.trading.risk import RiskLimits
+from app.trading.trend import load_trend
 
 log = logging.getLogger(__name__)
 
@@ -201,6 +202,7 @@ class TradingEngine:
         self.claude_unavailable_mode = claude_unavailable_mode
         self.backtest_fee_pct = backtest_fee_pct
         self.fee_pct = fee_pct  # per side; what a round trip must beat to break even is 2x
+        self.trend_context = True  # pass the long-term trend (PlanB-style) to Claude
         self.last_run: datetime | None = None
         self.last_results: list[dict[str, Any]] = []
         self.last_error: str | None = None
@@ -576,6 +578,7 @@ class TradingEngine:
             "recent_candles": trajectory or {},
             "news": sentiment.as_dict(),
             "market_mood": load_market_mood(session),  # Fear & Greed index, market-wide
+            "long_term_trend": load_trend(session, market) if self.trend_context else None,
             "position": None
             if position is None
             else {
