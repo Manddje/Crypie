@@ -117,6 +117,7 @@ class Position(Base):
     entry_quote: Mapped[float] = mapped_column(Float)  # EUR spent incl. fee
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     stop_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    high_price: Mapped[float | None] = mapped_column(Float, nullable=True)  # peak since entry
     take_profit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     exit_quote: Mapped[float | None] = mapped_column(Float, nullable=True)

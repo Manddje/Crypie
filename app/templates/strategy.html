@@ -26,6 +26,7 @@
         <ul class="list small">
           {% for c in s.sell %}<li>{{ c|condition_nl }}{% if not loop.last %} <span class="muted">én</span>{% endif %}</li>{% endfor %}
           {% if s.stop_loss_pct %}<li>het verlies groter wordt dan {{ s.stop_loss_pct|num(1) }}% <span class="muted">(stop-loss)</span></li>{% endif %}
+          {% if s.trailing_stop_pct %}<li>de koers {{ s.trailing_stop_pct|num(1) }}% onder het hoogste punt sinds instap zakt{% if s.trailing_start_pct %}, zodra de winst eerst {{ s.trailing_start_pct|num(1) }}% was{% endif %} <span class="muted">(trailing stop)</span></li>{% endif %}
           {% if s.take_profit_pct %}<li>de winst {{ s.take_profit_pct|num(1) }}% bereikt <span class="muted">(take-profit)</span></li>{% endif %}
         </ul>
       </div>
@@ -124,6 +125,11 @@
     <details class="advanced" {% if proposal or error %}open{% endif %}>
       <summary>Geavanceerd: strategie als JSON bewerken</summary>
       <p class="card-desc">Voor wie precies wil instellen wat de bot doet. Testen kan altijd; opslaan maakt de strategie meteen actief.</p>
+      <form method="post" action="/strategy" class="inline" style="margin-bottom: 12px" onsubmit="return confirm('De actieve strategie wordt vervangen door de standaardstrategie van Crypie. Doorgaan?')">
+        <input type="hidden" name="strategy_json" value="">
+        <button class="btn btn-tint" type="submit" name="action" value="reset">Standaardstrategie herstellen</button>
+        <span class="small muted">Zet de meegeleverde strategie terug, inclusief nieuwe standaardregels na een update.</span>
+      </form>
       <form method="post" action="/strategy" id="json-form">
         <textarea class="code" name="strategy_json" spellcheck="false">{{ strategy_json }}</textarea>
         <div class="actions" style="margin-top: 12px">
@@ -136,7 +142,7 @@
         <dt>Indicatoren</dt><dd><code>sma</code>, <code>ema</code>, <code>rsi</code>, <code>macd</code> (series <code>id</code>, <code>id_signal</code>, <code>id_hist</code>), <code>bollinger</code> (<code>id_upper</code>, <code>id_middle</code>, <code>id_lower</code>), <code>drawdown</code> (% onder de hoogste koers van <code>period</code> candles; 168 = 7 dagen op uurkaarsen)</dd>
         <dt>Vergelijkingen</dt><dd><code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> <code>crosses_above</code> <code>crosses_below</code> <code>rising</code> <code>falling</code> <span class="muted">(bij rising/falling is <code>right</code> het aantal candles terug)</span>; <code>"soft": true</code> maakt een voorwaarde een zacht filter</dd>
         <dt>Koersreeksen</dt><dd><code>open</code>, <code>high</code>, <code>low</code>, <code>close</code>, <code>volume</code></dd>
-        <dt>Regels</dt><dd>Alle koopcondities moeten tegelijk waar zijn; hetzelfde geldt voor de verkoopcondities. Stop-loss en take-profit zijn percentages en optioneel.</dd>
+        <dt>Regels</dt><dd>Alle koopcondities moeten tegelijk waar zijn; hetzelfde geldt voor de verkoopcondities. <code>stop_loss_pct</code>, <code>take_profit_pct</code> en <code>trailing_stop_pct</code> zijn percentages en optioneel; <code>trailing_start_pct</code> laat de trailing stop pas meelopen zodra de winst zo groot is geweest.</dd>
       </dl>
     </details>
   </section>

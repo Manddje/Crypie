@@ -41,7 +41,7 @@ from app.news.service import (
 from app.news.sources import NewsFetcher
 from app.settings_store import SettingsError
 from app.strategy.engine import backtest, latest_snapshot
-from app.strategy.model import Strategy
+from app.strategy.model import DEFAULT_STRATEGY, Strategy
 from app.strategy.store import load_strategy, save_strategy
 from app.trading import risk
 from app.trading.engine import (
@@ -666,6 +666,11 @@ async def strategy_action(
                 "Claude heeft een voorstel gemaakt. "
                 "Bekijk het hieronder en sla het op als je het goed vindt."
             )
+        elif action == "reset":
+            save_strategy(session, DEFAULT_STRATEGY)
+            ctx["strategy"] = DEFAULT_STRATEGY
+            ctx["strategy_json"] = DEFAULT_STRATEGY.model_dump_json(indent=2)
+            ctx["message"] = f"Standaardstrategie '{DEFAULT_STRATEGY.name}' hersteld en actief."
         else:
             candidate = Strategy.model_validate_json(strategy_json)
             if candidate.market not in settings.markets:

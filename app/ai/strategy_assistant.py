@@ -33,6 +33,11 @@ Regels:
 - Verwijs in condities alleen naar series die je ook definieert.
 - Houd de markt op een van de toegestane markten; interval standaard "1h" tenzij gevraagd.
 - Wees conservatief: voeg een stop_loss_pct toe als de gebruiker er niets over zegt.
+- trailing_stop_pct laat de stop meelopen onder het hoogste punt sinds instap (hij gaat nooit
+  omlaag); trailing_start_pct laat dat pas beginnen zodra de winst zo groot is geweest. Gebruik
+  dit als de gebruiker winst wil laten doorlopen in plaats van een vaste take-profit, en kies
+  voor een verkoopsignaal op RSI liever "RSI boven 70 én falling" dan alleen "RSI boven 70":
+  een hoge RSI betekent een sterke stijging, pas de draai omlaag is het signaal.
 - Schrijf de toelichting in het Nederlands, kort en concreet: wat doet de strategie,
   waarom deze instellingen, en welke risico's of aannames er zijn.
 """

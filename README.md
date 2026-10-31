@@ -72,14 +72,22 @@ de app de wijziging en blijft hij in oefenmodus. Dezelfde instellingen zijn er a
 ## Strategie en indicatoren
 
 Een strategie is JSON (zie `app/strategy/model.py` voor het schema) met indicatoren (`sma`, `ema`,
-`rsi`, `macd`, `bollinger`, `drawdown` = % onder de hoogste koers van N candles), koopcondities, verkoopcondities en optioneel stop-loss en take-profit.
+`rsi`, `macd`, `bollinger`, `drawdown` = % onder de hoogste koers van N candles), koopcondities, verkoopcondities en optioneel stop-loss, trailing stop en take-profit.
+
+De standaardstrategie koopt een RSI-dip die weer draait (zie `DEFAULT_STRATEGY`) en stapt uit op een
+**trailing stop**: zodra de winst 2% is geweest schuift de stop mee tot 3% onder het hoogste punt sinds
+instap en gaat nooit meer omlaag, zodat een stijging wordt uitgereden tot de koers echt terugvalt. Het
+verkoopsignaal is pas "RSI boven 70 én dalend", niet zodra RSI 70 aantikt. Een backtest over twaalf
+maanden (nov 2025 t/m okt 2026, een dalende markt) liet zien dat de trailing stop verliezen en drawdown
+flink beperkt; de RSI-draai was in die periode ongeveer neutraal. "Standaardstrategie herstellen" op
+/strategy zet deze regels terug als je eerder een eigen strategie opsloeg.
 Op de pagina **/strategy** kun je:
 
 - in gewone taal beschrijven wat je wilt; Claude vertaalt het naar een geldige strategie met toelichting
   en draait direct een backtest;
 - de JSON zelf bewerken, backtesten op echte Bitvavo-candles en opslaan als actieve strategie.
 
-De backtest is long-only, rekent Bitvavo-fees mee (`BACKTEST_FEE_PCT`), vult stop-loss en
+De backtest is long-only, rekent Bitvavo-fees mee (`BACKTEST_FEE_PCT`), vult stop-loss, trailing stop en
 take-profit op de drempelprijs en vergelijkt met kopen-en-houden.
 
 ## Nieuws
@@ -113,8 +121,9 @@ impact 0); de knoppen *Telt mee* / *Telt niet mee* filteren daarop (`?telt=ja|ne
 
 Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`app/trading/engine.py`):
 
-1. **Mechanisch**: een open positie wordt gesloten als de koers de stop-loss of take-profit van de
-   strategie raakt. Daar komt Claude niet aan.
+1. **Mechanisch**: een open positie wordt gesloten als de koers de stop-loss, trailing stop of take-profit
+   van de strategie raakt. De trailing stop wordt elke cyclus opgetrokken met het hoogste punt sinds instap
+   (`Position.high_price`). Daar komt Claude niet aan.
 2. **Niets te beslissen?** Geen buy-signaal zonder positie, geen sell-signaal met positie en geen
    zwaar positief of negatief nieuws (impact-gewogen score ≥ 0,4 of ≤ -0,3 met minstens één bericht van
    hoge impact): dan wordt alleen een `hold` gelogd en wordt Claude niet aangeroepen (bespaart kosten).
@@ -168,7 +177,7 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    (Fable 5.1) een rapport over de resultaten en doet eventueel een strategievoorstel, inclusief backtest.
    Een voorstel wordt pas actief als jij het op `/trading` toepast.
 
-De actieve strategie bepaalt de regels (indicatoren, condities, stop-loss, take-profit) en wordt op elke
+De actieve strategie bepaalt de regels (indicatoren, condities, stop-loss, trailing stop, take-profit) en wordt op elke
 markt uit `MARKETS` toegepast; het `market`-veld van de strategie is alleen de standaard voor backtests.
 
 ### Tradingplan en trade-journaal

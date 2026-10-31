@@ -495,11 +495,12 @@ class TradingEngine:
             action="hold",
         )
 
-        # 1. Mechanical exits first: stop-loss / take-profit on the live price.
+        # 1. Mechanical exits first: stop-loss / trailing stop / take-profit on the live price.
         if position is not None:
             reason = None
+            trailed = self._trail_stop(session, position, strategy, price)
             if position.stop_price and price <= position.stop_price:
-                reason = "stop_loss"
+                reason = "trailing_stop" if trailed else "stop_loss"
             elif position.take_profit_price and price >= position.take_profit_price:
                 reason = "take_profit"
             if reason:
@@ -622,9 +623,8 @@ class TradingEngine:
                                 entry_price=fill,
                                 entry_quote=spent,
                                 fees_eur=order.fee_quote or 0.0,
-                                stop_price=fill * (1 - strategy.stop_loss_pct / 100)
-                                if strategy.stop_loss_pct
-                                else None,
+                                stop_price=strategy.initial_stop(fill),
+                                high_price=fill,
                                 take_profit_price=fill * (1 + strategy.take_profit_pct / 100)
                                 if strategy.take_profit_pct
                                 else None,
@@ -741,6 +741,27 @@ class TradingEngine:
             "rules",
             None,
         )
+
+    @staticmethod
+    def _trail_stop(session: Session, position: Position, strategy, price: float) -> bool:
+        """Raise the stop with the highest price since entry. True when the stop was trailed up.
+
+        The stop only moves up, never down, and never below the stop-loss set at entry. A
+        strategy without trailing_stop_pct leaves the stop where it is.
+        """
+        if not strategy.trailing_stop_pct:
+            return False
+        high = max(position.high_price or position.entry_price, price)
+        trail = strategy.trailing_stop(high, position.entry_price)
+        changed = False
+        if high != position.high_price:
+            position.high_price, changed = high, True
+        if trail is not None and trail > (position.stop_price or 0):
+            position.stop_price, changed = trail, True
+        if changed:
+            session.commit()
+        floor = strategy.initial_stop(position.entry_price) or 0
+        return bool(position.stop_price and position.stop_price > floor + 1e-12)
 
     async def _close(self, session: Session, position: Position, price: float, reason: str):
         amount_quote = position.amount * price

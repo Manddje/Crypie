@@ -732,3 +732,78 @@ async def test_news_shock_pauses_buying_but_not_selling(session):
     assert result.action == "sell" and result.executed
     # Claude saw the shock in its context while deciding about the open position.
     assert decider.contexts[-1]["market_events"]["risk_off"]["kind"] == "shock"
+
+
+async def test_trailing_stop_moves_up_with_the_price_and_closes_with_its_own_reason(session):
+    decider = FakeDecider(
+        TradeDecision(action="hold", confidence=1, amount_quote=0, reasoning_nl="x")
+    )
+    strategy = cross_strategy(stop_loss_pct=10, trailing_stop_pct=5, trailing_start_pct=2)
+    prices = {"BTC-EUR": 12.0}
+    engine = make_engine_(session, {"BTC-EUR": candles(FLAT_SERIES)}, prices, decider, strategy)
+    await engine.broker.market_order(session, "BTC-EUR", "buy", 60, reason="setup")  # 5 BTC
+    session.add(
+        Position(
+            mode="paper",
+            market="BTC-EUR",
+            amount=5,
+            entry_price=10,
+            entry_quote=50,
+            stop_price=9.0,
+            high_price=10,
+        )
+    )
+    session.commit()
+
+    # +20%: trailing is armed; the stop follows 5% under the new high and the position stays.
+    (result,) = await engine.run_cycle(session)
+    pos = session.query(Position).one()
+    assert result.action == "hold" and pos.status == "open"
+    assert pos.high_price == 12.0 and pos.stop_price == pytest.approx(11.4)
+
+    # A dip that stays above the trailed stop: the stop never moves down.
+    prices["BTC-EUR"] = 11.5
+    await engine.run_cycle(session)
+    pos = session.query(Position).one()
+    assert pos.high_price == 12.0 and pos.stop_price == pytest.approx(11.4) and pos.status == "open"
+
+    # Through the trailed stop: mechanical exit, at a profit, labelled trailing_stop.
+    prices["BTC-EUR"] = 11.3
+    (result,) = await engine.run_cycle(session)
+    pos = session.query(Position).one()
+    assert result.source == "mechanical" and result.reason == "trailing_stop"
+    assert pos.status == "closed" and pos.close_reason == "trailing_stop" and pos.pnl_eur > 0
+    assert decider.contexts == []
+
+
+async def test_trailing_stop_not_armed_below_start_threshold(session):
+    decider = FakeDecider(
+        TradeDecision(action="hold", confidence=1, amount_quote=0, reasoning_nl="x")
+    )
+    strategy = cross_strategy(stop_loss_pct=10, trailing_stop_pct=3, trailing_start_pct=5)
+    engine = make_engine_(
+        session, {"BTC-EUR": candles(FLAT_SERIES)}, {"BTC-EUR": 10.3}, decider, strategy
+    )
+    await engine.broker.market_order(session, "BTC-EUR", "buy", 50, reason="setup")
+    session.add(
+        Position(
+            mode="paper", market="BTC-EUR", amount=5, entry_price=10, entry_quote=50, stop_price=9
+        )
+    )
+    session.commit()
+    await engine.run_cycle(session)
+    pos = session.query(Position).one()
+    assert pos.high_price == 10.3 and pos.stop_price == 9  # +3% is under the +5% start
+
+
+async def test_new_position_records_its_high_and_initial_stop(session):
+    decider = FakeDecider(
+        TradeDecision(action="buy", confidence=0.8, amount_quote=100, reasoning_nl="x")
+    )
+    strategy = cross_strategy(stop_loss_pct=10, trailing_stop_pct=4, take_profit_pct=None)
+    engine = make_engine_(
+        session, {"BTC-EUR": candles(BUY_SERIES)}, {"BTC-EUR": 12.0}, decider, strategy
+    )
+    await engine.run_cycle(session)
+    pos = open_position(session, "paper", "BTC-EUR")
+    assert pos.high_price == 12.0 and pos.stop_price == pytest.approx(12.0 * 0.96)
