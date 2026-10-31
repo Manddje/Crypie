@@ -7,13 +7,19 @@ from pathlib import Path
 
 from fastapi.templating import Jinja2Templates
 
-from app.strategy.model import Condition, IndicatorSpec
+from app.strategy.describe import (  # noqa: F401
+    OPERATORS_NL,
+    SERIES_NL,
+    condition_nl,
+    format_value,
+)
+from app.strategy.model import IndicatorSpec
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 # Bumped whenever app.css changes so browsers pick up the new file.
-ASSET_VERSION = "6"
+ASSET_VERSION = "7"
 
 # Internal identifiers -> what the user sees.
 LABELS_NL: dict[str, str] = {
@@ -58,23 +64,6 @@ LABELS_NL: dict[str, str] = {
 }
 
 MONTHS_NL = ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec"]
-
-OPERATORS_NL = {
-    "<": "lager dan",
-    "<=": "hoogstens",
-    ">": "hoger dan",
-    ">=": "minstens",
-    "crosses_above": "kruist omhoog door",
-    "crosses_below": "kruist omlaag door",
-}
-
-SERIES_NL = {
-    "open": "openingskoers",
-    "high": "hoogste koers",
-    "low": "laagste koers",
-    "close": "koers",
-    "volume": "volume",
-}
 
 
 def nl(value: object) -> str:
@@ -174,17 +163,6 @@ def indicator_nl(ind: IndicatorSpec) -> str:
     return f"{ind.type.upper()} {ind.period}"
 
 
-def _series_nl(name: object) -> str:
-    if isinstance(name, int | float):
-        return _dutch_number(float(name), 2 if float(name) % 1 else 0)
-    return SERIES_NL.get(str(name), str(name))
-
-
-def condition_nl(cond: Condition) -> str:
-    """'rsi14 lager dan 30', 'koers kruist omhoog door ema50'."""
-    return f"{_series_nl(cond.left)} {OPERATORS_NL.get(cond.op, cond.op)} {_series_nl(cond.right)}"
-
-
 def sentiment_class(score: float | None, threshold: float = 0.1) -> str:
     if score is None:
         return ""
@@ -220,6 +198,7 @@ templates.env.filters.update(
         "ago": ago,
         "indicator_nl": indicator_nl,
         "condition_nl": condition_nl,
+        "compact": format_value,
         "sentiment_class": sentiment_class,
         "sentiment_pill": sentiment_pill,
         "action_pill": action_pill,

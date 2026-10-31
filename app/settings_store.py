@@ -108,6 +108,17 @@ SPECS: tuple[Spec, ...] = (
         unit="minuten",
     ),
     Spec(
+        "decision_history_days",
+        "trading",
+        "Beslissingen tonen van de laatste",
+        "Zo veel dagen aan cycli staan op de pagina Handelen, per markt met signaal, "
+        "indicatorwaarden, nieuws en toelichting.",
+        kind="int",
+        min=1,
+        max=365,
+        unit="dagen",
+    ),
+    Spec(
         "paper_start_eur",
         "trading",
         "Startbedrag oefenmodus",

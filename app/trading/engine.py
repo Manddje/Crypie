@@ -18,6 +18,7 @@ from app.bitvavo.broker import Broker
 from app.bitvavo.client import BitvavoClient
 from app.db import Decision, Evaluation, Position
 from app.news.service import market_sentiment
+from app.strategy.describe import explain_signal, signal_reason_nl
 from app.strategy.engine import backtest, compute_series, signal_at
 from app.strategy.model import Strategy
 from app.strategy.store import load_strategy
@@ -64,12 +65,28 @@ def closed_positions(
     )
 
 
-def recent_decisions(session: Session, mode: str, limit: int = 50) -> list[Decision]:
-    return list(
-        session.scalars(
-            select(Decision).where(Decision.mode == mode).order_by(Decision.id.desc()).limit(limit)
-        )
-    )
+def recent_decisions(
+    session: Session, mode: str, limit: int = 50, days: int | None = None
+) -> list[Decision]:
+    stmt = select(Decision).where(Decision.mode == mode)
+    if days is not None:
+        stmt = stmt.where(Decision.created_at >= datetime.now(UTC) - timedelta(days=days))
+    return list(session.scalars(stmt.order_by(Decision.id.desc()).limit(limit)))
+
+
+def latest_decisions(session: Session, mode: str, markets: list[str]) -> list[Decision]:
+    """The most recent journal entry per market, in the order of ``markets``."""
+    out = []
+    for market in markets:
+        row = session.scalars(
+            select(Decision)
+            .where(Decision.mode == mode, Decision.market == market)
+            .order_by(Decision.id.desc())
+            .limit(1)
+        ).first()
+        if row is not None:
+            out.append(row)
+    return out
 
 
 def performance_summary(session: Session, mode: str, days: int = 30) -> dict[str, Any]:
@@ -202,6 +219,8 @@ class TradingEngine:
         series = compute_series(strategy, candles)
         i = len(candles) - 1
         signal = signal_at(strategy, series, i)
+        checks = explain_signal(strategy, series, i)
+        signal_reason = signal_reason_nl(signal, checks)
         price = prices.get(market) or candles[-1][4]
         indicators = {
             k: round(v[i], 6)
@@ -218,6 +237,9 @@ class TradingEngine:
             price=price,
             signal=signal,
             indicators=json.dumps(indicators),
+            checks=json.dumps(
+                {k: [c.as_dict() for c in v] for k, v in checks.items()}, ensure_ascii=False
+            ),
             news_score=sentiment.score,
             news_label=sentiment.label(),
             has_position=position is not None,
@@ -259,14 +281,37 @@ class TradingEngine:
             or news_entry
         )
         if not needs_claude:
-            decision.reasoning = "geen signaal en geen reden om in te grijpen"
+            news = (
+                "geen beoordeeld nieuws"
+                if sentiment.items == 0
+                else f"nieuws {sentiment.label()} ({sentiment.score:+.2f}, "
+                f"{sentiment.items} berichten, {sentiment.high_impact} van hoge impact)"
+            )
+            if position is not None:
+                why = "positie blijft open: geen verkoopsignaal en geen zwaar negatief nieuws"
+            elif signal == "sell":
+                why = "verkoopsignaal zonder open positie, niets te verkopen"
+            else:
+                why = "geen reden om Claude te raadplegen"
+            decision.reasoning = (
+                f"{signal_reason} {news[0].upper() + news[1:]}. {why.capitalize()}."
+            )
             session.add(decision)
             session.commit()
-            return CycleResult(market, price, signal, "hold", "rules", False)
+            return CycleResult(market, price, signal, "hold", "rules", False, decision.reasoning)
 
         # 3. Ask Claude, or fall back.
         action, confidence, amount_quote, reasoning, source, model = await self._decide(
-            session, strategy, market, price, signal, indicators, sentiment, position, news_entry
+            session,
+            strategy,
+            market,
+            price,
+            signal,
+            indicators,
+            sentiment,
+            position,
+            news_entry,
+            checks,
         )
         decision.source, decision.model = source, model
         decision.action, decision.confidence, decision.reasoning = action, confidence, reasoning
@@ -344,6 +389,7 @@ class TradingEngine:
         sentiment,
         position,
         news_entry: bool = False,
+        checks: dict | None = None,
     ) -> tuple[str, float | None, float, str, str, str | None]:
         context = {
             "market": market,
@@ -351,6 +397,7 @@ class TradingEngine:
             "strategy": strategy.model_dump(),
             "signal": signal,
             "news_entry_allowed": news_entry,
+            "signal_checks": {k: [c.as_dict() for c in v] for k, v in (checks or {}).items()},
             "indicators": indicators,
             "news": sentiment.as_dict(),
             "position": None

@@ -11,7 +11,13 @@ from app.db import Base, Decision, NewsItem, Position, make_engine
 from app.strategy.model import Strategy
 from app.strategy.store import save_strategy
 from app.trading import risk
-from app.trading.engine import TradingEngine, open_position, performance_summary
+from app.trading.engine import (
+    TradingEngine,
+    latest_decisions,
+    open_position,
+    performance_summary,
+    recent_decisions,
+)
 from app.trading.risk import RiskLimits
 
 LIMITS = RiskLimits(
@@ -406,6 +412,23 @@ async def test_claude_buy_without_signal_or_news_is_blocked(session):
     (result,) = await engine.run_cycle(session)
     assert result.action == "buy" and not result.executed
     assert "open positie" in result.reason
+
+
+async def test_rules_hold_explains_every_buy_condition(session):
+    decider = FakeDecider()
+    engine = make_engine_(session, {"BTC-EUR": candles(FLAT_SERIES)}, {"BTC-EUR": 10.0}, decider)
+    (result,) = await engine.run_cycle(session)
+    assert result.action == "hold" and decider.contexts == []
+    d = session.query(Decision).one()
+    assert d.reasoning.startswith("Geen koopsignaal, 1 van 1 koopvoorwaarden niet gehaald")
+    assert "✗" in d.reasoning and "geen beoordeeld nieuws" in d.reasoning.lower()
+    checks = d.check_list()
+    assert [c["ok"] for c in checks["buy"]] == [False]
+    assert checks["buy"][0]["text"] == "fast kruist omhoog door slow"
+    assert checks["buy"][0]["left"] == 10.0 and checks["buy"][0]["right"] == 10.0
+    assert latest_decisions(session, "paper", ["ETH-EUR", "BTC-EUR"]) == [d]
+    assert recent_decisions(session, "paper", days=1) == [d]
+    assert recent_decisions(session, "paper", days=0) == []
 
 
 async def test_fallback_hold_when_claude_unavailable(session):
