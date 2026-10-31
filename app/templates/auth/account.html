@@ -20,7 +20,7 @@
       {% if codes_left <= 2 %}<p class="form-help">Je hebt nog maar {{ codes_left }} herstelcode{{ "" if codes_left == 1 else "s" }}. Maak hieronder nieuwe aan.</p>{% endif %}
     </section>
     <section class="card">
-      <div class="card-header"><h2>Wijzigen</h2></div>
+      <div class="card-header"><h2>Authenticator en herstelcodes</h2></div>
       <p class="card-desc">Vul ter bevestiging je wachtwoord in.</p>
       <form method="post" action="/account" class="auth-form">
         <label>Wachtwoord
@@ -31,7 +31,23 @@
           <button class="btn btn-danger" name="action" value="reenrol" type="submit">Authenticator opnieuw instellen</button>
         </div>
       </form>
-      <p class="form-help">Wachtwoord of gebruikersnaam veranderen? Pas <span class="mono">AUTH_PASSWORD</span> (of <span class="mono">AUTH_PASSWORD_HASH</span>) en <span class="mono">AUTH_USERNAME</span> aan in Coolify en start de app opnieuw.</p>
+    </section>
+    <section class="card">
+      <div class="card-header"><h2>Wachtwoord wijzigen</h2></div>
+      <form method="post" action="/account" class="auth-form">
+        <input type="hidden" name="action" value="password">
+        <label>Huidig wachtwoord
+          <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <label>Nieuw wachtwoord
+          <input type="password" name="new_password" autocomplete="new-password" minlength="10" required>
+        </label>
+        <label>Nieuw wachtwoord nog een keer
+          <input type="password" name="new_password_repeat" autocomplete="new-password" minlength="10" required>
+        </label>
+        <div class="actions"><button class="btn btn-primary" type="submit">Wachtwoord wijzigen</button></div>
+      </form>
+      <p class="form-help">Wachtwoord kwijt? Draai op de server <span class="mono">python -m app.auth reset-password</span>.</p>
     </section>
   </div>
 </div>

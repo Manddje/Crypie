@@ -60,12 +60,9 @@ class Settings(BaseSettings):
     evaluation_interval_hours: int = 168
     backtest_fee_pct: float = 0.25
 
-    # Login (dashboard). Password from the environment, second factor enrolled in the app.
+    # Login (dashboard). The account is created in the browser at /setup and lives in the DB.
     auth_enabled: bool = True
-    auth_username: str = "admin"
-    auth_password: str = ""  # plain text; or AUTH_PASSWORD_HASH (python -m app.auth hash-password)
-    auth_password_hash: str = ""
-    session_secret: str = ""  # random string; empty = new secret per start (everyone logged out)
+    session_secret: str = ""  # optional; empty = generated once and kept in the database
     auth_session_hours: int = 24
 
     @field_validator("markets", mode="before")
@@ -89,10 +86,6 @@ class Settings(BaseSettings):
     def coins(self) -> list[str]:
         """Base currencies of the configured markets, e.g. ['BTC', 'ETH']."""
         return [m.split("-")[0] for m in self.markets]
-
-    @property
-    def auth_configured(self) -> bool:
-        return bool(self.auth_username and (self.auth_password or self.auth_password_hash))
 
     @property
     def has_bitvavo_credentials(self) -> bool:

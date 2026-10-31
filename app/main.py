@@ -19,9 +19,9 @@ from app.ai.decision_maker import DecisionMaker
 from app.ai.evaluator import Evaluator
 from app.ai.news_analyst import NewsAnalyst
 from app.ai.strategy_assistant import StrategyAssistant
-from app.auth.routes import new_session_secret, require_login
+from app.auth.routes import require_login
 from app.auth.routes import router as auth_router
-from app.auth.service import AuthService
+from app.auth.service import AuthService, load_or_create_session_secret
 from app.bitvavo.broker import Broker, LiveBroker, PaperBroker, recent_orders
 from app.bitvavo.client import BitvavoClient, BitvavoError
 from app.config import Settings, get_settings
@@ -56,16 +56,14 @@ def build_broker(settings: Settings, client: BitvavoClient) -> Broker:
 
 
 def build_auth(settings: Settings) -> AuthService | None:
-    """Login is on unless AUTH_ENABLED=false. Without SESSION_SECRET, restarts log everyone out."""
+    """Login is on unless AUTH_ENABLED=false; the account itself is created at /setup."""
     if not settings.auth_enabled:
         log.warning("AUTH_ENABLED=false: the dashboard is reachable without logging in")
         return None
     secret = settings.session_secret
     if not secret:
-        log.warning("SESSION_SECRET is not set; sessions will not survive a restart")
-        secret = new_session_secret()
-    if not settings.auth_configured:
-        log.warning("AUTH_PASSWORD is not set; every page shows how to configure the login")
+        with SessionLocal() as session:
+            secret = load_or_create_session_secret(session)
     return AuthService(settings, secret)
 
 

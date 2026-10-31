@@ -48,9 +48,8 @@ app als **Docker Compose**-resource vanuit deze repository.
    pas bij live gaan. Zet in Bitvavo een IP-whitelist op het Coolify-serveradres.
 5. Koppel een domein aan de `app`-service op poort 8000 (de poort wordt niet op de host
    gepubliceerd; alleen Coolify's proxy komt erbij).
-6. Zet `AUTH_USERNAME`, `AUTH_PASSWORD` (of `AUTH_PASSWORD_HASH`) en `SESSION_SECRET`; zie
-   [Inloggen](#inloggen). Zonder wachtwoord blijft het dashboard gesloten en toont het alleen
-   welke variabelen ontbreken.
+6. Open het domein: de eerste bezoeker komt op `/setup` en maakt daar het account aan. Doe dat
+   dus meteen na de eerste deploy; zie [Inloggen](#inloggen).
 
 ## Strategie en indicatoren
 
@@ -119,27 +118,31 @@ markt uit `MARKETS` toegepast; het `market`-veld van de strategie is alleen de s
 
 Elke pagina en elk API-pad (behalve `/health` en `/static`) vraagt om een login in twee stappen:
 gebruikersnaam en wachtwoord, daarna een 6-cijferige code uit een authenticator-app
-(Google/Microsoft Authenticator, 1Password, Apple Wachtwoorden). Instellen:
+(Google/Microsoft Authenticator, 1Password, Apple Wachtwoorden).
 
-| Variabele | Betekenis |
-|-----------|-----------|
-| `AUTH_USERNAME` | gebruikersnaam (standaard `admin`) |
-| `AUTH_PASSWORD` | wachtwoord in platte tekst, óf |
-| `AUTH_PASSWORD_HASH` | PBKDF2-hash uit `python -m app.auth hash-password` (heeft voorrang) |
-| `SESSION_SECRET` | willekeurige tekst (`python -m app.auth secret`); zonder deze ben je na elke herstart uitgelogd |
-| `AUTH_SESSION_HOURS` | hoe lang een login geldig blijft (standaard 24) |
-| `AUTH_ENABLED` | `false` schakelt de login uit (alleen voor lokaal testen) |
+Zolang er geen account is, stuurt de app elke bezoeker naar **`/setup`**: daar kies je een
+gebruikersnaam en wachtwoord (minstens 10 tekens), scan je een QR-code met je authenticator-app
+en bevestig je met een code. Je krijgt dan acht herstelcodes te zien die elk één keer werken als
+je telefoon kwijt is. Doe de setup dus direct na de eerste deploy, voordat iemand anders dat doet.
 
-Bij de eerste login koppel je de authenticator door een QR-code te scannen en een code te
-bevestigen. Je krijgt dan acht herstelcodes te zien die elk één keer werken als je telefoon
-kwijt is. Op de pagina **Account** maak je nieuwe herstelcodes of koppel je een nieuwe
-authenticator (met wachtwoord ter bevestiging). Kwijt én geen herstelcodes meer? Draai in de
-container `python -m app.auth reset-mfa`; bij de volgende login koppel je opnieuw.
+Op de pagina **Account** wijzig je je wachtwoord, maak je nieuwe herstelcodes of koppel je een
+nieuwe authenticator (steeds met je huidige wachtwoord ter bevestiging). Buitengesloten? Draai in
+de container (Coolify: Terminal bij de app):
 
-Technisch: het TOTP-geheim en de gehashte herstelcodes staan in de tabel `auth_users`; de sessie is
-een HMAC-gesigneerde cookie (`HttpOnly`, `SameSite=Lax`, `Secure` achter https). Na vijf
-mislukte pogingen per IP-adres volgt een oplopende wachttijd. Codes kunnen niet opnieuw gebruikt
-worden binnen hun tijdvenster.
+```bash
+python -m app.auth reset-password   # nieuw wachtwoord
+python -m app.auth reset-mfa        # authenticator en herstelcodes wissen; opnieuw koppelen bij login
+python -m app.auth delete-account   # alles wissen; /setup is dan weer beschikbaar
+```
+
+Omgevingsvariabelen zijn optioneel: `AUTH_SESSION_HOURS` (standaard 24), `SESSION_SECRET` (leeg =
+eenmalig gegenereerd en in de database bewaard) en `AUTH_ENABLED=false` om de login lokaal uit te
+zetten.
+
+Technisch: wachtwoord (PBKDF2), TOTP-geheim en gehashte herstelcodes staan in de tabel
+`auth_users`; de sessie is een HMAC-gesigneerde cookie (`HttpOnly`, `SameSite=Lax`, `Secure`
+achter https). Na vijf mislukte pogingen per IP-adres volgt een oplopende wachttijd. Codes kunnen
+niet opnieuw gebruikt worden binnen hun tijdvenster.
 
 ## Claude-kosten
 
@@ -165,7 +168,7 @@ app/
   main.py                   FastAPI: JSON-API (/api/...), dashboard (/) en strategiepagina (/strategy)
   config.py                 instellingen uit omgevingsvariabelen
   db.py                     SQLAlchemy-modellen: orders, settings, claude_usage, news_items, positions, decisions, evaluations, auth_users
-  auth/                     login: wachtwoord (passwords.py), TOTP (totp.py), cookie (session.py), routes + middleware (routes.py), CLI (__main__.py)
+  auth/                     login: wachtwoord (passwords.py), TOTP (totp.py), cookie (session.py), account (service.py), routes + middleware (routes.py), CLI (__main__.py)
   bitvavo/client.py         Bitvavo REST-client (publiek + gesigneerd)
   bitvavo/broker.py         PaperBroker / LiveBroker
   indicators/core.py        SMA, EMA, RSI, MACD, Bollinger (pure Python)

@@ -1,4 +1,4 @@
-"""Everything the login routes need: credentials, second factor, recovery codes, throttling."""
+"""Everything the login routes need: account, second factor, recovery codes, throttling."""
 
 from __future__ import annotations
 
@@ -8,17 +8,20 @@ import time
 from dataclasses import dataclass, field
 from hashlib import sha256
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import totp
-from app.auth.passwords import verify_password
+from app.auth.passwords import hash_password, verify_password
 from app.auth.session import SessionSigner
 from app.config import Settings
-from app.db import AuthUser, utcnow
+from app.db import AuthUser, Setting, utcnow
 
 RECOVERY_CODE_COUNT = 8
 RECOVERY_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"  # no 0/o, 1/l/i to avoid misreading
 STAGE_ONE_SECONDS = 10 * 60  # time allowed between password and second factor
+MIN_PASSWORD_LENGTH = 10
+SESSION_SECRET_KEY = "auth:session_secret"
 
 
 def _hash_code(code: str) -> str:
@@ -35,6 +38,25 @@ def generate_recovery_codes() -> list[str]:
         raw = "".join(secrets.choice(RECOVERY_ALPHABET) for _ in range(10))
         codes.append(f"{raw[:5]}-{raw[5:]}")
     return codes
+
+
+def load_or_create_session_secret(session: Session) -> str:
+    """The cookie-signing secret, generated once and kept in the settings table."""
+    row = session.get(Setting, SESSION_SECRET_KEY)
+    if row is None:
+        row = Setting(key=SESSION_SECRET_KEY, value=secrets.token_urlsafe(48))
+        session.add(row)
+        session.commit()
+    return row.value
+
+
+def validate_new_password(password: str, repeat: str) -> str | None:
+    """Return a Dutch error message, or None when the password is acceptable."""
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return f"Kies een wachtwoord van minstens {MIN_PASSWORD_LENGTH} tekens."
+    if password != repeat:
+        return "De twee wachtwoorden zijn niet gelijk."
+    return None
 
 
 @dataclass
@@ -71,36 +93,52 @@ class LoginThrottle:
 
 
 class AuthService:
+    """One account, stored in ``auth_users``; created at /setup, never from the environment."""
+
     def __init__(self, settings: Settings, secret: str):
-        self.username = settings.auth_username
-        self._password = settings.auth_password_hash or settings.auth_password
         self.signer = SessionSigner(secret)
         self.session_seconds = settings.auth_session_hours * 3600
         self.throttle = LoginThrottle()
 
-    @property
-    def configured(self) -> bool:
-        """False until a password is set; the dashboard then explains what to configure."""
-        return bool(self.username and self._password)
+    # -- account ----------------------------------------------------------------------------
 
-    # -- password -------------------------------------------------------------------------
+    def account(self, session: Session) -> AuthUser | None:
+        return session.scalars(select(AuthUser).limit(1)).first()
 
-    def check_password(self, username: str, password: str) -> bool:
-        if not self.configured:
-            return False
-        user_ok = secrets.compare_digest(username.strip().encode(), self.username.encode())
-        password_ok = verify_password(password, self._password)
-        return user_ok and password_ok
+    def has_account(self, session: Session) -> bool:
+        return self.account(session) is not None
 
-    # -- second factor ----------------------------------------------------------------------
+    def create_account(self, session: Session, username: str, password: str) -> AuthUser:
+        if self.has_account(session):
+            raise ValueError("Er is al een account.")
+        user = AuthUser(username=username.strip(), password_hash=hash_password(password))
+        session.add(user)
+        session.commit()
+        return user
+
+    def check_password(self, session: Session, username: str, password: str) -> AuthUser | None:
+        """The account when username and password match, else None (constant-time compare)."""
+        user = self.account(session)
+        if user is None:
+            return None
+        user_ok = secrets.compare_digest(username.strip().encode(), user.username.encode())
+        password_ok = verify_password(password, user.password_hash)
+        return user if user_ok and password_ok else None
+
+    def change_password(self, session: Session, password: str) -> None:
+        user = self.account(session)
+        if user is None:
+            raise ValueError("Er is nog geen account.")
+        user.password_hash = hash_password(password)
+        session.commit()
 
     def user(self, session: Session) -> AuthUser:
-        row = session.get(AuthUser, self.username)
-        if row is None:
-            row = AuthUser(username=self.username)
-            session.add(row)
-            session.commit()
-        return row
+        user = self.account(session)
+        if user is None:
+            raise ValueError("Er is nog geen account.")
+        return user
+
+    # -- second factor ----------------------------------------------------------------------
 
     def check_totp(self, session: Session, code: str) -> bool:
         user = self.user(session)
@@ -163,8 +201,8 @@ class AuthService:
 
     # -- cookies ---------------------------------------------------------------------------
 
-    def stage_one_token(self) -> str:
-        return self.signer.encode(self.username, mfa=False, max_age=STAGE_ONE_SECONDS)
+    def stage_one_token(self, username: str) -> str:
+        return self.signer.encode(username, mfa=False, max_age=STAGE_ONE_SECONDS)
 
-    def full_token(self) -> str:
-        return self.signer.encode(self.username, mfa=True, max_age=self.session_seconds)
+    def full_token(self, username: str) -> str:
+        return self.signer.encode(username, mfa=True, max_age=self.session_seconds)

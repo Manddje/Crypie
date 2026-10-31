@@ -1,56 +1,52 @@
-"""Command line helpers: ``python -m app.auth hash-password | secret | reset-mfa``."""
+"""Command line helpers for a locked-out user: ``python -m app.auth reset-password | reset-mfa``."""
 
 from __future__ import annotations
 
 import argparse
 import getpass
-import secrets
 import sys
 
-from app.auth.passwords import hash_password
+from app.auth.service import validate_new_password
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.auth", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    p_hash = sub.add_parser("hash-password", help="print an AUTH_PASSWORD_HASH for a password")
-    p_hash.add_argument("password", nargs="?", help="omit to be prompted without echo")
-    sub.add_parser("secret", help="print a random SESSION_SECRET")
-    p_reset = sub.add_parser(
+    p_pw = sub.add_parser("reset-password", help="set a new password for the account")
+    p_pw.add_argument("password", nargs="?", help="omit to be prompted without echo")
+    sub.add_parser(
         "reset-mfa", help="forget the authenticator and recovery codes; re-enrol at next login"
     )
-    p_reset.add_argument("--username", default=None, help="defaults to AUTH_USERNAME")
+    sub.add_parser("delete-account", help="remove the account so /setup can be used again")
     args = parser.parse_args(argv)
 
-    if args.command == "hash-password":
-        password = args.password or getpass.getpass("Wachtwoord: ")
-        if not password:
-            print("leeg wachtwoord", file=sys.stderr)
-            return 2
-        if not args.password and password != getpass.getpass("Nog een keer: "):
-            print("de wachtwoorden verschillen", file=sys.stderr)
-            return 2
-        print(hash_password(password))
-        return 0
-    if args.command == "secret":
-        print(secrets.token_urlsafe(32))
-        return 0
-    if args.command == "reset-mfa":
-        from app.config import get_settings
-        from app.db import AuthUser, SessionLocal, init_db
+    from app.auth.service import AuthService
+    from app.config import get_settings
+    from app.db import SessionLocal, init_db
 
-        init_db()
-        username = args.username or get_settings().auth_username
-        with SessionLocal() as session:
-            row = session.get(AuthUser, username)
-            if row is None:
-                print(f"geen authenticator bekend voor {username!r}; niets te doen")
-                return 0
-            session.delete(row)
+    init_db()
+    auth = AuthService(get_settings(), "cli")
+    with SessionLocal() as session:
+        user = auth.account(session)
+        if user is None:
+            print("er is nog geen account; maak het aan op /setup", file=sys.stderr)
+            return 1
+        if args.command == "reset-password":
+            password = args.password or getpass.getpass("Nieuw wachtwoord: ")
+            repeat = password if args.password else getpass.getpass("Nog een keer: ")
+            if error := validate_new_password(password, repeat):
+                print(error, file=sys.stderr)
+                return 2
+            auth.change_password(session, password)
+            print(f"wachtwoord van {user.username!r} gewijzigd")
+        elif args.command == "reset-mfa":
+            auth.reset_totp(session)
+            print(f"authenticator en herstelcodes van {user.username!r} gewist; koppel opnieuw")
+        elif args.command == "delete-account":
+            session.delete(user)
             session.commit()
-        print(f"authenticator en herstelcodes van {username!r} gewist; koppel opnieuw bij de login")
-        return 0
-    return 1
+            print(f"account {user.username!r} verwijderd; ga naar /setup voor een nieuw account")
+    return 0
 
 
 if __name__ == "__main__":
