@@ -8,15 +8,29 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
+from app.ai.budget import BudgetExceeded, BudgetGuard
+from app.ai.strategy_assistant import StrategyAssistant
 from app.bitvavo.broker import Broker, LiveBroker, PaperBroker, recent_orders
 from app.bitvavo.client import BitvavoClient, BitvavoError
 from app.config import Settings, get_settings
 from app.db import get_session, init_db
+from app.strategy.engine import backtest, latest_snapshot
+from app.strategy.model import Strategy
+from app.strategy.store import load_strategy, save_strategy
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+
+def _datetimeformat(ts: int) -> str:
+    from datetime import UTC, datetime
+
+    return datetime.fromtimestamp(ts, UTC).strftime("%d-%m %H:%M")
+
+
+templates.env.filters["datetimeformat"] = _datetimeformat
 
 
 def build_broker(settings: Settings, client: BitvavoClient) -> Broker:
@@ -37,6 +51,10 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.client = client
     app.state.broker = build_broker(settings, client)
+    app.state.budget = BudgetGuard(settings.claude_monthly_budget_usd)
+    app.state.assistant = StrategyAssistant(
+        settings.anthropic_api_key, settings.claude_model_strategy, app.state.budget
+    )
     try:
         yield
     finally:
@@ -52,6 +70,14 @@ def get_client(request: Request) -> BitvavoClient:
 
 def get_broker(request: Request) -> Broker:
     return request.app.state.broker
+
+
+def get_assistant(request: Request) -> StrategyAssistant:
+    return request.app.state.assistant
+
+
+def get_budget(request: Request) -> BudgetGuard:
+    return request.app.state.budget
 
 
 # -- API -------------------------------------------------------------------------------
@@ -133,6 +159,183 @@ async def create_order(
     return {"id": o.id, "status": o.status, "price": o.price, "amount": o.amount, "mode": o.mode}
 
 
+# -- Strategy ------------------------------------------------------------------------
+
+
+class ProposalIn(BaseModel):
+    description: str = Field(min_length=5, max_length=4000)
+
+
+class BacktestIn(BaseModel):
+    strategy: Strategy | None = None
+    limit: int = Field(default=500, ge=50, le=1440)
+    start_eur: float = Field(default=1000, gt=0)
+
+
+async def _run_backtest(
+    request: Request, client: BitvavoClient, strategy: Strategy, limit: int, start_eur: float
+) -> dict:
+    candles = await client.candles(strategy.market, strategy.interval, limit)
+    result = backtest(strategy, candles, start_eur, request.app.state.settings.backtest_fee_pct)
+    return {
+        **result.summary(),
+        "market": strategy.market,
+        "interval": strategy.interval,
+        "latest": latest_snapshot(strategy, candles),
+        "trade_log": [
+            {
+                "entry_time": t.entry_time,
+                "entry_price": t.entry_price,
+                "exit_time": t.exit_time,
+                "exit_price": t.exit_price,
+                "pnl_pct": round(t.pnl_pct, 2) if t.pnl_pct is not None else None,
+                "reason": t.reason,
+            }
+            for t in result.trades[-20:]
+        ],
+    }
+
+
+@app.get("/api/strategy")
+async def get_strategy(session: Session = Depends(get_session)):
+    return load_strategy(session).model_dump()
+
+
+@app.put("/api/strategy")
+async def put_strategy(
+    strategy: Strategy, request: Request, session: Session = Depends(get_session)
+):
+    if strategy.market not in request.app.state.settings.markets:
+        raise HTTPException(400, f"{strategy.market} is not in MARKETS")
+    save_strategy(session, strategy)
+    return strategy.model_dump()
+
+
+@app.post("/api/strategy/propose")
+async def propose_strategy(
+    body: ProposalIn,
+    request: Request,
+    assistant: StrategyAssistant = Depends(get_assistant),
+    session: Session = Depends(get_session),
+):
+    if not assistant.available:
+        raise HTTPException(503, "ANTHROPIC_API_KEY is not configured")
+    try:
+        proposal = await assistant.propose(
+            session, body.description, load_strategy(session), request.app.state.settings.markets
+        )
+    except BudgetExceeded as exc:
+        raise HTTPException(429, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return {"strategy": proposal.strategy.model_dump(), "explanation": proposal.explanation}
+
+
+@app.get("/api/claude/usage")
+async def claude_usage(
+    budget: BudgetGuard = Depends(get_budget), session: Session = Depends(get_session)
+):
+    return budget.status(session)
+
+
+@app.post("/api/backtest")
+async def run_backtest(
+    body: BacktestIn,
+    request: Request,
+    client: BitvavoClient = Depends(get_client),
+    session: Session = Depends(get_session),
+):
+    strategy = body.strategy or load_strategy(session)
+    try:
+        return await _run_backtest(request, client, strategy, body.limit, body.start_eur)
+    except BitvavoError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.get("/strategy", response_class=HTMLResponse)
+async def strategy_page(
+    request: Request,
+    assistant: StrategyAssistant = Depends(get_assistant),
+    session: Session = Depends(get_session),
+):
+    strategy = load_strategy(session)
+    return templates.TemplateResponse(
+        request,
+        "strategy.html",
+        {
+            "settings": request.app.state.settings,
+            "strategy_json": strategy.model_dump_json(indent=2),
+            "strategy": strategy,
+            "assistant_available": assistant.available,
+            "proposal": None,
+            "explanation": None,
+            "backtest": None,
+            "error": None,
+            "message": None,
+        },
+    )
+
+
+@app.post("/strategy", response_class=HTMLResponse)
+async def strategy_action(
+    request: Request,
+    action: str = Form(...),
+    strategy_json: str = Form(""),
+    description: str = Form(""),
+    limit: int = Form(500),
+    client: BitvavoClient = Depends(get_client),
+    assistant: StrategyAssistant = Depends(get_assistant),
+    session: Session = Depends(get_session),
+):
+    settings: Settings = request.app.state.settings
+    ctx: dict = {
+        "settings": settings,
+        "strategy_json": strategy_json,
+        "strategy": load_strategy(session),
+        "assistant_available": assistant.available,
+        "proposal": None,
+        "explanation": None,
+        "backtest": None,
+        "error": None,
+        "message": None,
+    }
+    status = 200
+    try:
+        if action == "propose":
+            if not assistant.available:
+                raise RuntimeError("ANTHROPIC_API_KEY is niet ingesteld")
+            proposal = await assistant.propose(
+                session, description, ctx["strategy"], settings.markets
+            )
+            ctx["strategy_json"] = proposal.strategy.model_dump_json(indent=2)
+            ctx["explanation"] = proposal.explanation
+            ctx["backtest"] = await _run_backtest(request, client, proposal.strategy, limit, 1000)
+            ctx["message"] = "Voorstel van Claude staat hieronder. Controleer het en sla op."
+        else:
+            candidate = Strategy.model_validate_json(strategy_json)
+            if candidate.market not in settings.markets:
+                raise ValueError(f"{candidate.market} staat niet in MARKETS")
+            if action == "backtest":
+                ctx["backtest"] = await _run_backtest(request, client, candidate, limit, 1000)
+            elif action == "save":
+                save_strategy(session, candidate)
+                ctx["strategy"] = candidate
+                ctx["message"] = f"Strategie '{candidate.name}' opgeslagen en actief."
+            else:
+                raise ValueError(f"Onbekende actie {action!r}")
+    except ValidationError as exc:
+        ctx["error"] = "Ongeldige strategie: " + "; ".join(
+            f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()
+        )
+        status = 400
+    except (ValueError, RuntimeError, BitvavoError) as exc:
+        ctx["error"] = str(exc)
+        status = 400
+    return templates.TemplateResponse(request, "strategy.html", ctx, status_code=status)
+
+
 # -- Dashboard -------------------------------------------------------------------------
 
 
@@ -141,6 +344,7 @@ async def dashboard(
     request: Request,
     client: BitvavoClient = Depends(get_client),
     broker: Broker = Depends(get_broker),
+    budget: BudgetGuard = Depends(get_budget),
     session: Session = Depends(get_session),
 ):
     settings: Settings = request.app.state.settings
@@ -162,6 +366,8 @@ async def dashboard(
             "orders": recent_orders(session, 20),
             "error": error,
             "rate_limit": client.rate_limit_remaining,
+            "budget": budget.status(session),
+            "strategy": load_strategy(session),
         },
     )
 
@@ -188,6 +394,8 @@ async def dashboard_order(
                 "orders": recent_orders(session, 20),
                 "error": str(exc),
                 "rate_limit": None,
+                "budget": None,
+                "strategy": load_strategy(session),
             },
             status_code=400,
         )

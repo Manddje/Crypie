@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./data/crypie.sqlite3"
     paper_start_eur: float = 1000.0
     anthropic_api_key: str = ""
+    # Model per task: rare interactive work gets Opus, high-volume work gets cheaper models.
+    claude_model_strategy: str = "claude-opus-5-5"
+    claude_model_decision: str = "claude-sonnet-5-5"
+    claude_model_news: str = "claude-haiku-5-5"
+    claude_model_evaluation: str = "claude-fable-5-1"
+    claude_monthly_budget_usd: float = 100.0
+    backtest_fee_pct: float = 0.25
 
     @field_validator("markets", mode="before")
     @classmethod
