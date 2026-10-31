@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 import respx
@@ -267,3 +268,30 @@ async def test_reset_paper_portfolio(api):
     assert (await api.get("/api/balance")).json()["balances"] == {"EUR": 1000.0}
     r = await api.get("/settings?saved=paper")
     assert "Oefenportefeuille gereset" in r.text
+
+
+async def test_number_fields_accept_any_decimal(api):
+    # A step attribute would make the browser reject e.g. 10 on a field with min 0.1 and step
+    # 0.5 ("Voer een geldige waarde in"); only integers get a step, the rest accepts any value.
+    r = await api.get("/settings")
+    inputs = re.findall(r'<input type="number"[^>]*>', r.text)
+    assert len(inputs) > 10
+    for tag in inputs:
+        step = re.search(r'step="([^"]+)"', tag).group(1)
+        assert step in ("1", "any"), tag
+    r = await api.post(
+        "/settings",
+        data={
+            "group": "limits",
+            "max_trade_eur": "42",
+            "min_trade_eur": "10",
+            "max_exposure_pct": "15",
+            "daily_loss_limit_pct": "10",
+            "max_trades_per_day": "6",
+            "cooldown_min_after_stop": "240",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert (await api.get("/api/settings")).json()["values"]["daily_loss_limit_pct"] == 10.0
+    await api.delete("/api/settings")
