@@ -16,6 +16,19 @@
   {% if not analyst_available %}{{ ui.notice("info", "De Claude-sleutel (ANTHROPIC_API_KEY) ontbreekt. Nieuws wordt wel opgehaald, maar niet beoordeeld op sentiment en impact.") }}{% endif %}
 
   <div class="grid">
+    {% if market_mood %}
+    <section class="card">
+      <div class="card-header">
+        <h3>Hele markt</h3>
+        <span class="pill {{ 'pill-red' if market_mood.value < 40 else ('pill-green' if market_mood.value > 60 else '') }}">{{ market_mood.label }}</span>
+      </div>
+      <div class="score-bar" aria-hidden="true">
+        {% if market_mood.value > 50 %}<div class="fill pos" style="width: {{ ((market_mood.value - 50)|abs)|round(1) }}%"></div>
+        {% elif market_mood.value < 50 %}<div class="fill neg" style="width: {{ ((50 - market_mood.value)|abs)|round(1) }}%"></div>{% endif %}
+      </div>
+      <p class="small muted">Fear &amp; Greed-index {{ market_mood.value }} op een schaal van 0 (extreme angst) tot 100 (extreme hebzucht) · bron alternative.me · Claude krijgt dit als context bij elke beslissing.</p>
+    </section>
+    {% endif %}
     {% for s in sentiments %}
     <section class="card">
       <div class="card-header">

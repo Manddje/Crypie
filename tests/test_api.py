@@ -130,6 +130,13 @@ async def test_news_endpoints(api):
     for url in app.state.settings.news_rss_feeds:
         respx.get(url).mock(return_value=Response(200, content=fixture.read_bytes()))
     respx.get(NewsFetcher.GDELT_URL).mock(return_value=Response(429))
+    respx.get(url__startswith="https://cryptocurrency.cv/").mock(return_value=Response(503))
+    respx.get(url__startswith="https://news.google.com/").mock(
+        return_value=Response(200, content=fixture.read_bytes())
+    )
+    respx.get(NewsFetcher.FEAR_GREED_URL).mock(
+        return_value=Response(200, json={"data": [{"value": "30", "value_classification": "Fear"}]})
+    )
 
     r = await api.post("/api/news/refresh")
     assert r.status_code == 200, r.text
@@ -148,6 +155,7 @@ async def test_news_endpoints(api):
 
     r = await api.get("/news")
     assert r.status_code == 200 and "hack sparks debate" in r.text
+    assert "Fear" in r.text and "30" in r.text  # Fear & Greed index shown
 
 
 @respx.mock

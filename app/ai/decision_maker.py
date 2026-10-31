@@ -44,6 +44,9 @@ Spelregels:
   hoe hij t.o.v. het 30-daags gemiddelde ligt. Een lagere koers dan vorige week is op zich geen
   koopreden (de markt kan verder dalen); het telt pas mee als er ook een draai zichtbaar is of
   het nieuws positief is. Dan mag een flinke korting je wél iets meer vertrouwen geven.
+- market_mood is de Fear & Greed-index (0 = extreme angst, 100 = extreme hebzucht) voor de
+  hele markt. Angst maakt een dip aannemelijker als koopkans, maar alleen samen met een draai
+  of positief coin-nieuws; het is geen reden op zich.
 - Koop niet in een vallend mes. recent_candles toont de laatste candles (oudste eerst):
   dalen koers en oscillatoren (zoals RSI) nog steeds en staat de koers vlak bij het 24-uurs
   dieptepunt, dan is "hold" de keuze en wacht je een cyclus op een draai. Alleen sterk positief

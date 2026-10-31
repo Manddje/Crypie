@@ -9,7 +9,7 @@ combineert tot handelsbeslissingen. Draait in Docker en is bedoeld voor deployme
 |------|--------|--------|
 | 1 | Docker-fundament, Bitvavo-koppeling, database, dashboard | klaar |
 | 2 | Configureerbare indicatoren, samen met Claude in te stellen, met backtests en budgetbewaking | klaar |
-| 3 | Nieuws inlezen (RSS, GDELT, CryptoPanic) en door Claude laten beoordelen | klaar |
+| 3 | Nieuws inlezen (RSS, GDELT, cryptocurrency.cv, Google News) en door Claude laten beoordelen | klaar |
 | 4 | Handelsmotor: paper trading met logboek, harde limieten en evaluatielus; live na expliciete bevestiging | klaar |
 | 5 | Inloggen met wachtwoord en authenticator-app (MFA), herstelcodes, sessiecookie | in deze PR |
 
@@ -88,7 +88,10 @@ Een achtergrondtaak haalt elke `NEWS_FETCH_INTERVAL_MIN` minuten nieuws op en la
 
 | Bron | Kosten | Instelling |
 |------|--------|------------|
-| RSS (CoinDesk, Cointelegraph, The Block, Decrypt) | gratis | `NEWS_RSS_FEEDS` (komma-gescheiden) |
+| RSS (CoinDesk, Cointelegraph, The Block, Decrypt, CryptoSlate, NewsBTC, BeInCrypto, DL News) | gratis | `NEWS_RSS_FEEDS` (komma-gescheiden) |
+| cryptocurrency.cv (300+ bronnen, archief per coin, berichten komen met coin-tag) | gratis, geen sleutel; hobbyproject zonder garanties | `CRYPTOCV_ENABLED` |
+| Google News zoekfeed per coin (laatste 24 uur) | gratis | `GOOGLE_NEWS_ENABLED` |
+| Fear & Greed-index (alternative.me), marktbreed, als context voor Claude | gratis | `FEAR_GREED_ENABLED` |
 | GDELT DOC API (wereldnieuws, elke 15 min bijgewerkt) | gratis, max. 1 verzoek per 5 s per IP | `GDELT_ENABLED`, `GDELT_QUERY` |
 | CryptoPanic v2 | betaald (Growth-plan); zonder token overgeslagen | `CRYPTOPANIC_TOKEN`, `CRYPTOPANIC_PLAN` |
 
@@ -227,7 +230,7 @@ app/
   ai/budget.py              kosten per aanroep, maandbudget
   trading/engine.py         handelscyclus, posities, logboek, uitkomsten, evaluatie
   trading/risk.py           harde limieten en kill switch
-  news/sources.py           RSS-, GDELT- en CryptoPanic-fetchers en parsers
+  news/sources.py           RSS-, GDELT-, cryptocurrency.cv-, Google News- en CryptoPanic-fetchers
   news/service.py           opslaan, ontdubbelen, beoordelen, marktsentiment per coin
 tests/                      pytest (respx mockt Bitvavo, Claude wordt gemockt)
 ```

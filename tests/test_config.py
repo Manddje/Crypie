@@ -16,5 +16,5 @@ def test_empty_env_values_fall_back_to_defaults(monkeypatch):
     monkeypatch.setenv("NEWS_RSS_FEEDS", " ")
     s = Settings(_env_file=None)
     assert s.markets == ["BTC-EUR", "ETH-EUR"]
-    assert len(s.news_rss_feeds) == 4
+    assert len(s.news_rss_feeds) == 8
     assert all(f.startswith("https://") for f in s.news_rss_feeds)
