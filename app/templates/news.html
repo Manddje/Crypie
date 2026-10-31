@@ -25,7 +25,7 @@
 </head>
 <body>
   <h1>Nieuws <span class="badge {{ settings.trading_mode }}">{{ settings.trading_mode }}</span></h1>
-  <nav><a href="/">Dashboard</a> · <a href="/strategy">Strategie</a> · <a href="/news">Nieuws</a> · <a href="/docs">API</a></nav>
+  <nav><a href="/">Dashboard</a> · <a href="/trading">Handelen</a> · <a href="/strategy">Strategie</a> · <a href="/news">Nieuws</a> · <a href="/docs">API</a></nav>
 
   {% if last_error %}<p class="error">{{ last_error }}</p>{% endif %}
   {% if not analyst_available %}<p class="error">ANTHROPIC_API_KEY ontbreekt: nieuws wordt wel opgehaald maar niet beoordeeld.</p>{% endif %}

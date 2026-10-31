@@ -99,6 +99,78 @@ class NewsItem(Base):
         return [c for c in (self.coins or "").split(",") if c]
 
 
+class Position(Base):
+    """An open or closed long position in one market (paper or live)."""
+
+    __tablename__ = "positions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    mode: Mapped[str] = mapped_column(String(8))
+    market: Mapped[str] = mapped_column(String(16), index=True)
+    status: Mapped[str] = mapped_column(String(8), default="open", index=True)  # open|closed
+    amount: Mapped[float] = mapped_column(Float)  # base currency held
+    entry_price: Mapped[float] = mapped_column(Float)
+    entry_quote: Mapped[float] = mapped_column(Float)  # EUR spent incl. fee
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    stop_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    take_profit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exit_quote: Mapped[float | None] = mapped_column(Float, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    pnl_eur: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pnl_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    close_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    open_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    close_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class Decision(Base):
+    """Journal: every trading-cycle decision with its inputs, reasoning and later outcome."""
+
+    __tablename__ = "decisions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    mode: Mapped[str] = mapped_column(String(8))
+    market: Mapped[str] = mapped_column(String(16), index=True)
+    price: Mapped[float] = mapped_column(Float)
+    signal: Mapped[str] = mapped_column(String(8))  # strategy signal
+    indicators: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
+    news_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    news_label: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    has_position: Mapped[bool] = mapped_column(Boolean, default=False)
+    source: Mapped[str] = mapped_column(String(16))  # claude | rules | risk | mechanical
+    model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    action: Mapped[str] = mapped_column(String(8))  # buy | sell | hold
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    amount_quote: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
+    executed: Mapped[bool] = mapped_column(Boolean, default=False)
+    blocked_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Outcome: price change after the decision, filled in later
+    price_1h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_24h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_72h: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class Evaluation(Base):
+    """Periodic self-review by Claude of the recent decisions and trades."""
+
+    __tablename__ = "evaluations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    model: Mapped[str] = mapped_column(String(64))
+    period_days: Mapped[int] = mapped_column(Integer)
+    report_nl: Mapped[str] = mapped_column(Text)
+    proposed_strategy: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
+    proposal_backtest: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
+    applied: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 def make_engine(url: str | None = None):
     url = url or get_settings().database_url
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}

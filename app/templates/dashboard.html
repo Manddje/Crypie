@@ -26,7 +26,8 @@
 </head>
 <body>
   <h1>Crypie <span class="badge {{ settings.trading_mode }}">{{ settings.trading_mode }}</span></h1>
-  <nav><a href="/">Dashboard</a> · <a href="/strategy">Strategie</a> · <a href="/news">Nieuws</a> · <a href="/docs">API</a></nav>
+  <nav><a href="/">Dashboard</a> · <a href="/trading">Handelen</a> · <a href="/strategy">Strategie</a> · <a href="/news">Nieuws</a> · <a href="/docs">API</a></nav>
+  {% if paused %}<p class="error">Handelen is gepauzeerd (kill switch). <a href="/trading">Hervatten</a></p>{% endif %}
 
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
@@ -55,6 +56,27 @@
       </table>
     </section>
   </div>
+
+  <section>
+    <h2>Open posities ({{ settings.trading_mode }})</h2>
+    <table>
+      <tr><th>Markt</th><th class="num">Hoeveelheid</th><th class="num">Instap</th><th class="num">Huidig</th><th class="num">Resultaat</th><th class="num">Stop</th><th class="num">Take-profit</th></tr>
+      {% for p in open_positions %}
+      {% set cur = prices.get(p.market) %}
+      <tr>
+        <td>{{ p.market }}</td>
+        <td class="num">{{ "%.6f"|format(p.amount) }}</td>
+        <td class="num">{{ "%.2f"|format(p.entry_price) }}</td>
+        <td class="num">{{ "%.2f"|format(cur) if cur else "-" }}</td>
+        <td class="num {{ 'buy' if cur and cur >= p.entry_price else 'sell' }}">{{ "%.2f"|format((cur / p.entry_price - 1) * 100) if cur else "-" }}%</td>
+        <td class="num">{{ "%.2f"|format(p.stop_price) if p.stop_price else "-" }}</td>
+        <td class="num">{{ "%.2f"|format(p.take_profit_price) if p.take_profit_price else "-" }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7">Geen open posities. Laatste handelscyclus: {{ last_run.strftime("%d-%m %H:%M UTC") if last_run else "nog niet gedraaid" }}. <a href="/trading">Details</a></td></tr>
+      {% endfor %}
+    </table>
+  </section>
 
   <div class="grid">
     <section>

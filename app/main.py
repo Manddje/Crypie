@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,20 +12,32 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.budget import BudgetExceeded, BudgetGuard
+from app.ai.decision_maker import DecisionMaker
+from app.ai.evaluator import Evaluator
 from app.ai.news_analyst import NewsAnalyst
 from app.ai.strategy_assistant import StrategyAssistant
 from app.bitvavo.broker import Broker, LiveBroker, PaperBroker, recent_orders
 from app.bitvavo.client import BitvavoClient, BitvavoError
 from app.config import Settings, get_settings
-from app.db import SessionLocal, get_session, init_db
+from app.db import Evaluation, SessionLocal, get_session, init_db
 from app.news.service import NewsService, market_sentiment, recent_items
 from app.news.sources import NewsFetcher
 from app.strategy.engine import backtest, latest_snapshot
 from app.strategy.model import Strategy
 from app.strategy.store import load_strategy, save_strategy
+from app.trading import risk
+from app.trading.engine import (
+    TradingEngine,
+    closed_positions,
+    open_positions,
+    performance_summary,
+    recent_decisions,
+)
+from app.trading.risk import RiskLimits
 
 log = logging.getLogger("crypie")
 
@@ -44,6 +57,8 @@ def build_broker(settings: Settings, client: BitvavoClient) -> Broker:
     if settings.trading_mode == "live":
         if not client.authenticated:
             raise RuntimeError("TRADING_MODE=live requires BITVAVO_API_KEY and BITVAVO_API_SECRET")
+        if not settings.live_trading_ack:
+            raise RuntimeError("TRADING_MODE=live requires LIVE_TRADING_ACK=true")
         return LiveBroker(client)
     return PaperBroker(client, settings.paper_start_eur)
 
@@ -76,16 +91,43 @@ async def lifespan(app: FastAPI):
         settings.news_max_age_hours,
         settings.news_batch_size,
     )
-    scheduler = (
-        asyncio.create_task(news_scheduler(app.state.news, settings.news_fetch_interval_min))
-        if settings.news_enabled and settings.news_fetch_interval_min > 0
-        else None
+    app.state.engine = TradingEngine(
+        client,
+        app.state.broker,
+        DecisionMaker(settings.anthropic_api_key, settings.claude_model_decision, app.state.budget),
+        Evaluator(settings.anthropic_api_key, settings.claude_model_evaluation, app.state.budget),
+        settings.markets,
+        RiskLimits(
+            settings.max_trade_eur,
+            settings.max_exposure_pct,
+            settings.daily_loss_limit_pct,
+            settings.max_trades_per_day,
+            settings.cooldown_min_after_stop,
+            settings.min_trade_eur,
+        ),
+        settings.claude_unavailable_mode,
+        settings.backtest_fee_pct,
     )
+    tasks: list[asyncio.Task] = []
+    if settings.news_enabled and settings.news_fetch_interval_min > 0:
+        tasks.append(
+            asyncio.create_task(news_scheduler(app.state.news, settings.news_fetch_interval_min))
+        )
+    if settings.trading_enabled and settings.trade_interval_min > 0:
+        tasks.append(
+            asyncio.create_task(trading_scheduler(app.state.engine, settings.trade_interval_min))
+        )
+        if settings.evaluation_interval_hours > 0:
+            tasks.append(
+                asyncio.create_task(
+                    evaluation_scheduler(app.state.engine, settings.evaluation_interval_hours)
+                )
+            )
     try:
         yield
     finally:
-        if scheduler is not None:
-            scheduler.cancel()
+        for t in tasks:
+            t.cancel()
         await fetcher.aclose()
         await client.aclose()
 
@@ -108,6 +150,35 @@ async def news_scheduler(service: NewsService, interval_min: int) -> None:
 app = FastAPI(title="Crypie", version="0.1.0", lifespan=lifespan)
 
 
+async def trading_scheduler(engine: TradingEngine, interval_min: int) -> None:
+    """Run one trading cycle per interval, aligned to the start of the interval."""
+    await asyncio.sleep(20)  # let news land first
+    while True:
+        try:
+            with SessionLocal() as session:
+                results = await engine.run_cycle(session)
+            log.info("trading cycle: %s", [r.as_dict() for r in results])
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("trading cycle failed")
+        await asyncio.sleep(interval_min * 60)
+
+
+async def evaluation_scheduler(engine: TradingEngine, interval_hours: int) -> None:
+    await asyncio.sleep(interval_hours * 3600)
+    while True:
+        try:
+            with SessionLocal() as session:
+                engine_eval = await engine.run_evaluation(session)
+            log.info("evaluation %s stored", engine_eval.id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("evaluation failed")
+        await asyncio.sleep(interval_hours * 3600)
+
+
 def get_client(request: Request) -> BitvavoClient:
     return request.app.state.client
 
@@ -126,6 +197,10 @@ def get_budget(request: Request) -> BudgetGuard:
 
 def get_news(request: Request) -> NewsService:
     return request.app.state.news
+
+
+def get_engine(request: Request) -> TradingEngine:
+    return request.app.state.engine
 
 
 # -- API -------------------------------------------------------------------------------
@@ -458,6 +533,213 @@ async def news_refresh_form(
     return RedirectResponse("/news", status_code=303)
 
 
+# -- Trading --------------------------------------------------------------------------
+
+
+def _position_dict(p) -> dict:
+    return {
+        "id": p.id,
+        "market": p.market,
+        "status": p.status,
+        "amount": p.amount,
+        "entry_price": p.entry_price,
+        "entry_quote": p.entry_quote,
+        "opened_at": p.opened_at,
+        "stop_price": p.stop_price,
+        "take_profit_price": p.take_profit_price,
+        "exit_price": p.exit_price,
+        "closed_at": p.closed_at,
+        "pnl_eur": p.pnl_eur,
+        "pnl_pct": p.pnl_pct,
+        "close_reason": p.close_reason,
+    }
+
+
+def _decision_dict(d) -> dict:
+    return {
+        "id": d.id,
+        "created_at": d.created_at,
+        "market": d.market,
+        "price": d.price,
+        "signal": d.signal,
+        "news_label": d.news_label,
+        "news_score": d.news_score,
+        "source": d.source,
+        "action": d.action,
+        "confidence": d.confidence,
+        "amount_quote": d.amount_quote,
+        "executed": d.executed,
+        "blocked_by": d.blocked_by,
+        "reasoning": d.reasoning,
+        "price_1h": d.price_1h,
+        "price_24h": d.price_24h,
+        "price_72h": d.price_72h,
+    }
+
+
+def _trading_status(engine: TradingEngine, session: Session, settings: Settings) -> dict:
+    return {
+        "mode": engine.mode,
+        "paused": risk.is_paused(session),
+        "enabled": settings.trading_enabled,
+        "interval_min": settings.trade_interval_min,
+        "limits": engine.limits.__dict__,
+        "claude_available": engine.decision_maker.available,
+        "last_run": engine.last_run,
+        "last_results": engine.last_results,
+        "last_error": engine.last_error,
+        "trades_today": risk.trades_today(session, engine.mode),
+        "realized_pnl_today": round(risk.realized_pnl_today(session, engine.mode), 2),
+        "performance_30d": performance_summary(session, engine.mode),
+    }
+
+
+@app.get("/api/trading/status")
+async def trading_status(
+    request: Request,
+    engine: TradingEngine = Depends(get_engine),
+    session: Session = Depends(get_session),
+):
+    return _trading_status(engine, session, request.app.state.settings)
+
+
+@app.post("/api/trading/cycle")
+async def trading_cycle(
+    engine: TradingEngine = Depends(get_engine), session: Session = Depends(get_session)
+):
+    try:
+        return [r.as_dict() for r in await engine.run_cycle(session)]
+    except BitvavoError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+class PauseIn(BaseModel):
+    paused: bool
+
+
+@app.post("/api/trading/pause")
+async def trading_pause(body: PauseIn, session: Session = Depends(get_session)):
+    risk.set_paused(session, body.paused)
+    return {"paused": body.paused}
+
+
+@app.get("/api/positions")
+async def positions(
+    engine: TradingEngine = Depends(get_engine), session: Session = Depends(get_session)
+):
+    return {
+        "open": [_position_dict(p) for p in open_positions(session, engine.mode)],
+        "closed": [_position_dict(p) for p in closed_positions(session, engine.mode)],
+    }
+
+
+@app.get("/api/decisions")
+async def decisions(
+    limit: int = 50,
+    engine: TradingEngine = Depends(get_engine),
+    session: Session = Depends(get_session),
+):
+    return [_decision_dict(d) for d in recent_decisions(session, engine.mode, min(limit, 500))]
+
+
+@app.post("/api/evaluations", status_code=201)
+async def run_evaluation(
+    days: int = 7,
+    engine: TradingEngine = Depends(get_engine),
+    session: Session = Depends(get_session),
+):
+    if not engine.evaluator.available:
+        raise HTTPException(503, "ANTHROPIC_API_KEY is not configured")
+    try:
+        ev = await engine.run_evaluation(session, days)
+    except BudgetExceeded as exc:
+        raise HTTPException(429, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return _evaluation_dict(ev)
+
+
+def _evaluation_dict(ev: Evaluation) -> dict:
+    return {
+        "id": ev.id,
+        "created_at": ev.created_at,
+        "model": ev.model,
+        "period_days": ev.period_days,
+        "report_nl": ev.report_nl,
+        "proposed_strategy": json.loads(ev.proposed_strategy) if ev.proposed_strategy else None,
+        "proposal_backtest": json.loads(ev.proposal_backtest) if ev.proposal_backtest else None,
+        "applied": ev.applied,
+    }
+
+
+@app.get("/api/evaluations")
+async def list_evaluations(session: Session = Depends(get_session)):
+    rows = session.scalars(select(Evaluation).order_by(Evaluation.id.desc()).limit(20)).all()
+    return [_evaluation_dict(e) for e in rows]
+
+
+@app.post("/api/evaluations/{evaluation_id}/apply")
+async def apply_evaluation(
+    evaluation_id: int, request: Request, session: Session = Depends(get_session)
+):
+    ev = session.get(Evaluation, evaluation_id)
+    if ev is None or not ev.proposed_strategy:
+        raise HTTPException(404, "evaluation or proposal not found")
+    strategy = Strategy.model_validate_json(ev.proposed_strategy)
+    if strategy.market not in request.app.state.settings.markets:
+        raise HTTPException(400, f"{strategy.market} is not in MARKETS")
+    save_strategy(session, strategy)
+    ev.applied = True
+    session.commit()
+    return {"applied": True, "strategy": strategy.model_dump()}
+
+
+@app.get("/trading", response_class=HTMLResponse)
+async def trading_page(
+    request: Request,
+    engine: TradingEngine = Depends(get_engine),
+    session: Session = Depends(get_session),
+):
+    settings: Settings = request.app.state.settings
+    evaluations = session.scalars(select(Evaluation).order_by(Evaluation.id.desc()).limit(5)).all()
+    return templates.TemplateResponse(
+        request,
+        "trading.html",
+        {
+            "settings": settings,
+            "status": _trading_status(engine, session, settings),
+            "open_positions": open_positions(session, engine.mode),
+            "closed_positions": closed_positions(session, engine.mode)[:20],
+            "decisions": recent_decisions(session, engine.mode, 30),
+            "evaluations": [_evaluation_dict(e) for e in evaluations],
+            "error": None,
+        },
+    )
+
+
+@app.post("/trading/action")
+async def trading_action(
+    action: str = Form(...),
+    engine: TradingEngine = Depends(get_engine),
+    session: Session = Depends(get_session),
+):
+    if action == "pause":
+        risk.set_paused(session, True)
+    elif action == "resume":
+        risk.set_paused(session, False)
+    elif action == "cycle":
+        await engine.run_cycle(session)
+    elif action == "evaluate" and engine.evaluator.available:
+        await engine.run_evaluation(session)
+    elif action.startswith("apply:"):
+        ev = session.get(Evaluation, int(action.split(":", 1)[1]))
+        if ev is not None and ev.proposed_strategy:
+            save_strategy(session, Strategy.model_validate_json(ev.proposed_strategy))
+            ev.applied = True
+            session.commit()
+    return RedirectResponse("/trading", status_code=303)
+
+
 # -- Dashboard -------------------------------------------------------------------------
 
 
@@ -491,6 +773,9 @@ async def dashboard(
             "budget": budget.status(session),
             "strategy": load_strategy(session),
             "sentiments": [market_sentiment(session, c, 48) for c in settings.coins],
+            "open_positions": open_positions(session, request.app.state.engine.mode),
+            "paused": risk.is_paused(session),
+            "last_run": request.app.state.engine.last_run,
         },
     )
 
@@ -520,6 +805,9 @@ async def dashboard_order(
                 "budget": None,
                 "strategy": load_strategy(session),
                 "sentiments": [],
+                "open_positions": [],
+                "paused": risk.is_paused(session),
+                "last_run": None,
             },
             status_code=400,
         )

@@ -9,8 +9,8 @@ combineert tot handelsbeslissingen. Draait in Docker en is bedoeld voor deployme
 |------|--------|--------|
 | 1 | Docker-fundament, Bitvavo-koppeling, database, dashboard | klaar |
 | 2 | Configureerbare indicatoren, samen met Claude in te stellen, met backtests en budgetbewaking | klaar |
-| 3 | Nieuws inlezen (RSS, GDELT, CryptoPanic) en door Claude laten beoordelen | in deze PR |
-| 4 | Paper trading met logboek en evaluatielus, daarna live met harde limieten | gepland |
+| 3 | Nieuws inlezen (RSS, GDELT, CryptoPanic) en door Claude laten beoordelen | klaar |
+| 4 | Handelsmotor: paper trading met logboek, harde limieten en evaluatielus; live na expliciete bevestiging | in deze PR |
 
 ## Lokaal draaien
 
@@ -70,6 +70,38 @@ met vervaltijd per horizon (6 uur, 36 uur, 1 week halfwaardetijd). Dit sentiment
 handelsbeslissing in stap 4. Pagina **/news** toont alles; API: `GET /api/news`, `GET /api/news/sentiment`,
 `POST /api/news/refresh`.
 
+## Handelen
+
+Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`app/trading/engine.py`):
+
+1. **Mechanisch**: een open positie wordt gesloten als de koers de stop-loss of take-profit van de
+   strategie raakt. Daar komt Claude niet aan.
+2. **Niets te beslissen?** Geen buy-signaal zonder positie, geen sell-signaal met positie en geen
+   zwaar negatief nieuws: dan wordt alleen een `hold` gelogd en wordt Claude niet aangeroepen (bespaart kosten).
+3. **Claude beslist** (`CLAUDE_MODEL_DECISION`, Sonnet 5.5): krijgt strategie, indicatorwaarden, signaal,
+   nieuwssentiment met topberichten, open positie, limieten en een samenvatting van zijn eigen recente
+   beslissingen met uitkomst. Antwoord: buy/sell/hold, zekerheid, bedrag, toelichting. Kopen mag alleen bij
+   een buy-signaal; verkopen bij een sell-signaal of als news exit.
+4. **Harde limieten** (`app/trading/risk.py`), in code afgedwongen: `MAX_TRADE_EUR`, `MAX_EXPOSURE_PCT`,
+   `DAILY_LOSS_LIMIT_PCT`, `MAX_TRADES_PER_DAY`, `COOLDOWN_MIN_AFTER_STOP`, plus een kill switch
+   (pauzeren op `/trading`). Zonder Claude (budget op, geen key): `CLAUDE_UNAVAILABLE_MODE` = `hold` of `indicators`.
+5. **Logboek**: elke beslissing komt in `decisions` met alle input en later de koers 1, 24 en 72 uur erna.
+   Posities staan in `positions`. Deze uitkomsten gaan terug naar Claude bij de volgende beslissing: zo
+   "leert" de bot zonder dat het model verandert.
+6. **Evaluatie**: elke `EVALUATION_INTERVAL_HOURS` (standaard wekelijks) schrijft `CLAUDE_MODEL_EVALUATION`
+   (Fable 5.1) een rapport over de resultaten en doet eventueel een strategievoorstel, inclusief backtest.
+   Een voorstel wordt pas actief als jij het op `/trading` toepast.
+
+De actieve strategie bepaalt de regels (indicatoren, condities, stop-loss, take-profit) en wordt op elke
+markt uit `MARKETS` toegepast; het `market`-veld van de strategie is alleen de standaard voor backtests.
+
+### Live gaan
+
+1. Draai minimaal enkele weken in `TRADING_MODE=paper` en bekijk de evaluaties.
+2. Maak in Bitvavo een API-key met **trade**-rechten (geen opname) en een IP-whitelist.
+3. Zet `TRADING_MODE=live`, de keys en `LIVE_TRADING_ACK=true`. Zonder die bevestiging start de app niet
+   in live-modus. Begin met een lage `MAX_TRADE_EUR`.
+
 ## Claude-kosten
 
 Elke Claude-aanroep wordt met tokens en geschatte kosten opgeslagen in de tabel `claude_usage`.
@@ -91,7 +123,7 @@ Zet daarnaast in de Anthropic Console een uitgavenlimiet op de API-key als tweed
 app/
   main.py                   FastAPI: JSON-API (/api/...), dashboard (/) en strategiepagina (/strategy)
   config.py                 instellingen uit omgevingsvariabelen
-  db.py                     SQLAlchemy-modellen: orders, settings, claude_usage, news_items
+  db.py                     SQLAlchemy-modellen: orders, settings, claude_usage, news_items, positions, decisions, evaluations
   bitvavo/client.py         Bitvavo REST-client (publiek + gesigneerd)
   bitvavo/broker.py         PaperBroker / LiveBroker
   indicators/core.py        SMA, EMA, RSI, MACD, Bollinger (pure Python)
@@ -100,7 +132,11 @@ app/
   strategy/store.py         actieve strategie in de settings-tabel
   ai/strategy_assistant.py  Claude vertaalt een beschrijving naar een strategie (structured output)
   ai/news_analyst.py        Claude beoordeelt nieuwsberichten in batches (structured output)
+  ai/decision_maker.py      Claude weegt signaal, nieuws en eigen resultaten tot een beslissing
+  ai/evaluator.py           periodieke zelfevaluatie met strategievoorstel
   ai/budget.py              kosten per aanroep, maandbudget
+  trading/engine.py         handelscyclus, posities, logboek, uitkomsten, evaluatie
+  trading/risk.py           harde limieten en kill switch
   news/sources.py           RSS-, GDELT- en CryptoPanic-fetchers en parsers
   news/service.py           opslaan, ontdubbelen, beoordelen, marktsentiment per coin
 tests/                      pytest (respx mockt Bitvavo, Claude wordt gemockt)

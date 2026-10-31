@@ -136,3 +136,41 @@ async def test_news_endpoints(api):
 
     r = await api.get("/news")
     assert r.status_code == 200 and "hack sparks debate" in r.text
+
+
+@respx.mock
+async def test_trading_endpoints(api):
+    r = await api.get("/api/trading/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["mode"] == "paper" and body["paused"] is False
+    assert body["limits"]["max_trade_eur"] == 100.0 and body["claude_available"] is False
+
+    r = await api.post("/api/trading/pause", json={"paused": True})
+    assert r.json() == {"paused": True}
+    assert (await api.get("/api/trading/status")).json()["paused"] is True
+    await api.post("/api/trading/pause", json={"paused": False})
+
+    # A full cycle against mocked Bitvavo: flat candles -> hold, nothing executed.
+    respx.get(f"{BASE}/ticker/price").mock(
+        return_value=Response(
+            200, json=[{"market": "BTC-EUR", "price": "100"}, {"market": "ETH-EUR", "price": "10"}]
+        )
+    )
+    flat = [[1_700_000_000_000 + i * 3_600_000, "100", "101", "99", "100", "1"] for i in range(60)]
+    respx.get(f"{BASE}/BTC-EUR/candles").mock(return_value=Response(200, json=flat))
+    respx.get(f"{BASE}/ETH-EUR/candles").mock(return_value=Response(200, json=flat))
+    r = await api.post("/api/trading/cycle")
+    assert r.status_code == 200, r.text
+    assert [c["action"] for c in r.json()] == ["hold", "hold"]
+
+    r = await api.get("/api/decisions")
+    assert len(r.json()) == 2 and r.json()[0]["source"] == "rules"
+    r = await api.get("/api/positions")
+    assert r.json() == {"open": [], "closed": []}
+    assert (await api.get("/api/evaluations")).json() == []
+    assert (await api.post("/api/evaluations")).status_code == 503  # no key
+    assert (await api.post("/api/evaluations/999/apply")).status_code == 404
+
+    r = await api.get("/trading")
+    assert r.status_code == 200 and "Harde limieten" in r.text
