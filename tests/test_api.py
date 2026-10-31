@@ -54,6 +54,11 @@ async def test_paper_order_flow(api):
 
     r = await api.get("/")
     assert r.status_code == 200 and "ETH-EUR" in r.text
+    # Portfolio value = cash + coins at the current price, shown in Dutch notation.
+    assert "€ 1.000,00" in r.text and "Oefenmodus" in r.text
+
+    r = await api.get("/static/app.css")
+    assert r.status_code == 200 and "text/css" in r.headers["content-type"]
 
 
 def _candles(n=120, start=30000.0):

@@ -6,11 +6,10 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -38,19 +37,9 @@ from app.trading.engine import (
     recent_decisions,
 )
 from app.trading.risk import RiskLimits
+from app.web import STATIC_DIR, templates
 
 log = logging.getLogger("crypie")
-
-templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
-
-
-def _datetimeformat(ts: int) -> str:
-    from datetime import UTC, datetime
-
-    return datetime.fromtimestamp(ts, UTC).strftime("%d-%m %H:%M")
-
-
-templates.env.filters["datetimeformat"] = _datetimeformat
 
 
 def build_broker(settings: Settings, client: BitvavoClient) -> Broker:
@@ -148,6 +137,7 @@ async def news_scheduler(service: NewsService, interval_min: int) -> None:
 
 
 app = FastAPI(title="Crypie", version="0.1.0", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 async def trading_scheduler(engine: TradingEngine, interval_min: int) -> None:
@@ -433,14 +423,20 @@ async def strategy_action(
                 session, description, ctx["strategy"], settings.markets
             )
             ctx["strategy_json"] = proposal.strategy.model_dump_json(indent=2)
+            ctx["proposal"] = proposal.strategy
             ctx["explanation"] = proposal.explanation
+            ctx["description"] = description
             ctx["backtest"] = await _run_backtest(request, client, proposal.strategy, limit, 1000)
-            ctx["message"] = "Voorstel van Claude staat hieronder. Controleer het en sla op."
+            ctx["message"] = (
+                "Claude heeft een voorstel gemaakt. "
+                "Bekijk het hieronder en sla het op als je het goed vindt."
+            )
         else:
             candidate = Strategy.model_validate_json(strategy_json)
             if candidate.market not in settings.markets:
                 raise ValueError(f"{candidate.market} staat niet in MARKETS")
             if action == "backtest":
+                ctx["proposal"] = candidate
                 ctx["backtest"] = await _run_backtest(request, client, candidate, limit, 1000)
             elif action == "save":
                 save_strategy(session, candidate)
@@ -743,6 +739,58 @@ async def trading_action(
 # -- Dashboard -------------------------------------------------------------------------
 
 
+def _portfolio(balances: dict[str, float], prices_: dict[str, float]) -> dict | None:
+    """Total value in EUR of cash plus coins at current prices, or None without data."""
+    if not balances:
+        return None
+    cash = balances.get("EUR", 0.0)
+    coins = sum(
+        amount * prices_[f"{symbol}-EUR"]
+        for symbol, amount in balances.items()
+        if symbol != "EUR" and f"{symbol}-EUR" in prices_
+    )
+    return {
+        "cash_eur": round(cash, 2),
+        "coins_eur": round(coins, 2),
+        "total_eur": round(cash + coins, 2),
+    }
+
+
+async def _dashboard_context(
+    request: Request,
+    client: BitvavoClient,
+    broker: Broker,
+    budget: BudgetGuard,
+    session: Session,
+    error: str | None = None,
+) -> dict:
+    settings: Settings = request.app.state.settings
+    prices_: dict[str, float] = {}
+    balances: dict[str, float] = {}
+    try:
+        prices_ = await client.ticker_prices(settings.markets)
+        balances = await broker.balances(session)
+    except Exception as exc:
+        error = error or str(exc)
+    mode = request.app.state.engine.mode
+    return {
+        "settings": settings,
+        "prices": prices_,
+        "balances": balances,
+        "portfolio": _portfolio(balances, prices_),
+        "orders": recent_orders(session, 20),
+        "error": error,
+        "rate_limit": client.rate_limit_remaining,
+        "budget": budget.status(session),
+        "strategy": load_strategy(session),
+        "sentiments": [market_sentiment(session, c, 48) for c in settings.coins],
+        "open_positions": open_positions(session, mode),
+        "performance": performance_summary(session, mode),
+        "paused": risk.is_paused(session),
+        "last_run": request.app.state.engine.last_run,
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(
     request: Request,
@@ -751,33 +799,8 @@ async def dashboard(
     budget: BudgetGuard = Depends(get_budget),
     session: Session = Depends(get_session),
 ):
-    settings: Settings = request.app.state.settings
-    error = None
-    prices_: dict[str, float] = {}
-    balances: dict[str, float] = {}
-    try:
-        prices_ = await client.ticker_prices(settings.markets)
-        balances = await broker.balances(session)
-    except Exception as exc:
-        error = str(exc)
-    return templates.TemplateResponse(
-        request,
-        "dashboard.html",
-        {
-            "settings": settings,
-            "prices": prices_,
-            "balances": balances,
-            "orders": recent_orders(session, 20),
-            "error": error,
-            "rate_limit": client.rate_limit_remaining,
-            "budget": budget.status(session),
-            "strategy": load_strategy(session),
-            "sentiments": [market_sentiment(session, c, 48) for c in settings.coins],
-            "open_positions": open_positions(session, request.app.state.engine.mode),
-            "paused": risk.is_paused(session),
-            "last_run": request.app.state.engine.last_run,
-        },
-    )
+    ctx = await _dashboard_context(request, client, broker, budget, session)
+    return templates.TemplateResponse(request, "dashboard.html", ctx)
 
 
 @app.post("/orders")
@@ -786,29 +809,16 @@ async def dashboard_order(
     market: str = Form(...),
     side: str = Form(...),
     amount_quote: float = Form(...),
+    client: BitvavoClient = Depends(get_client),
     broker: Broker = Depends(get_broker),
+    budget: BudgetGuard = Depends(get_budget),
     session: Session = Depends(get_session),
 ):
     try:
         await broker.market_order(session, market.upper(), side, amount_quote, reason="manual")
     except (ValueError, BitvavoError) as exc:
-        return templates.TemplateResponse(
-            request,
-            "dashboard.html",
-            {
-                "settings": request.app.state.settings,
-                "prices": {},
-                "balances": {},
-                "orders": recent_orders(session, 20),
-                "error": str(exc),
-                "rate_limit": None,
-                "budget": None,
-                "strategy": load_strategy(session),
-                "sentiments": [],
-                "open_positions": [],
-                "paused": risk.is_paused(session),
-                "last_run": None,
-            },
-            status_code=400,
+        ctx = await _dashboard_context(
+            request, client, broker, budget, session, error=f"Order niet geplaatst: {exc}"
         )
+        return templates.TemplateResponse(request, "dashboard.html", ctx, status_code=400)
     return RedirectResponse("/", status_code=303)

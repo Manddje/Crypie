@@ -1,71 +1,77 @@
-<!doctype html>
-<html lang="nl">
-<head>
-  <meta charset="utf-8">
-  <title>Crypie · Nieuws</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-    body { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; line-height: 1.4; }
-    .badge { font-size: .75rem; padding: .2rem .5rem; border-radius: 999px; text-transform: uppercase; }
-    .paper { background: #e0f2fe; color: #075985; } .live { background: #fee2e2; color: #991b1b; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid #8884; vertical-align: top; }
-    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-    .error { background: #fef3c7; color: #92400e; padding: .75rem; border-radius: .5rem; }
-    .muted { opacity: .7; font-size: .9rem; }
-    .pos { color: #15803d; } .neg { color: #b91c1c; }
-    .irrelevant { opacity: .45; }
-    .impact3 { font-weight: 700; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
-    .card { border: 1px solid #8884; border-radius: .5rem; padding: .75rem; }
-    .card h3 { margin: 0 0 .25rem; }
-    form.inline { display: inline; }
-  </style>
-</head>
-<body>
-  <h1>Nieuws <span class="badge {{ settings.trading_mode }}">{{ settings.trading_mode }}</span></h1>
-  <nav><a href="/">Dashboard</a> · <a href="/trading">Handelen</a> · <a href="/strategy">Strategie</a> · <a href="/news">Nieuws</a> · <a href="/docs">API</a></nav>
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Nieuws{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Nieuws</h1>
+  <p class="subtitle">Crypie leest {% if settings.news_enabled and settings.news_fetch_interval_min > 0 %}elke {{ settings.news_fetch_interval_min }} minuten{% else %}op verzoek{% endif %} de cryptomedia en het wereldnieuws. Claude beoordeelt per bericht of het de koers raakt, hoe sterk en hoe lang. De bot weegt dit mee bij elke beslissing.</p>
+  <div class="actions">
+    <form class="inline" method="post" action="/news/refresh"><button class="btn btn-tint" type="submit">Nu verversen</button></form>
+    <span class="small muted">Laatst opgehaald: {{ last_run|ago }}</span>
+  </div>
+</div>
 
-  {% if last_error %}<p class="error">{{ last_error }}</p>{% endif %}
-  {% if not analyst_available %}<p class="error">ANTHROPIC_API_KEY ontbreekt: nieuws wordt wel opgehaald maar niet beoordeeld.</p>{% endif %}
-
-  <p class="muted">
-    Bronnen: {{ settings.news_rss_feeds|length }} RSS-feeds{% if settings.gdelt_enabled %}, GDELT{% endif %}{% if settings.cryptopanic_token %}, CryptoPanic{% endif %}.
-    Elke {{ settings.news_fetch_interval_min }} minuten opgehaald; beoordeeld door {{ settings.claude_model_news }}.
-    Laatste run: {{ last_run.strftime("%d-%m %H:%M UTC") if last_run else "nog niet" }}.
-    <form class="inline" method="post" action="/news/refresh"><button type="submit">Nu verversen</button></form>
-  </p>
+<div class="stack">
+  {% if last_error %}{{ ui.notice("error", "De laatste keer ophalen ging mis: " ~ last_error) }}{% endif %}
+  {% if not analyst_available %}{{ ui.notice("info", "De Claude-sleutel (ANTHROPIC_API_KEY) ontbreekt. Nieuws wordt wel opgehaald, maar niet beoordeeld op sentiment en impact.") }}{% endif %}
 
   <div class="grid">
     {% for s in sentiments %}
-    <div class="card">
-      <h3>{{ s.coin }}: {{ s.label() }}</h3>
-      <div class="muted">score {{ "%.2f"|format(s.score) }} · {{ s.items }} relevante berichten, {{ s.high_impact }} met grote impact (48 uur, gewogen op impact en versheid)</div>
-      {% for t in s.top[:3] %}<div class="muted">· {{ t.summary_nl or t.title }}</div>{% endfor %}
-    </div>
+    <section class="card">
+      <div class="card-header">
+        <h3>{{ s.coin }}</h3>
+        <span class="pill {{ s.label()|sentiment_pill }}">{{ s.label() }}</span>
+      </div>
+      <div class="score-bar" aria-hidden="true">
+        {% if s.score > 0 %}<div class="fill pos" style="width: {{ ([s.score, 1]|min * 50)|round(1) }}%"></div>
+        {% elif s.score < 0 %}<div class="fill neg" style="width: {{ ([-s.score, 1]|min * 50)|round(1) }}%"></div>{% endif %}
+      </div>
+      <p class="small muted">Score {{ s.score|num }} op een schaal van -1 tot +1 · {{ s.items }} relevante bericht{{ "en" if s.items != 1 }}{% if s.high_impact %}, waarvan {{ s.high_impact }} met grote impact{% endif %} · laatste 48 uur</p>
+      {% if s.top %}
+      <ul class="list small" style="margin-top: 12px">
+        {% for t in s.top[:3] %}<li><a href="{{ t.url }}" target="_blank" rel="noopener" style="color: inherit">{{ t.summary_nl or t.title }}</a></li>{% endfor %}
+      </ul>
+      {% endif %}
+    </section>
     {% endfor %}
   </div>
 
-  <h2>Berichten (laatste {{ hours }} uur)</h2>
-  <p class="muted"><a href="/news?hours=6">6 uur</a> · <a href="/news?hours=24">24 uur</a> · <a href="/news?hours=72">72 uur</a></p>
-  <table>
-    <tr><th>Tijd</th><th>Bron</th><th>Bericht</th><th>Coins</th><th class="num">Sentiment</th><th class="num">Impact</th><th>Horizon</th></tr>
+  <section class="card">
+    <div class="card-header">
+      <h2>Berichten</h2>
+      <nav class="segmented" aria-label="Periode">
+        <a href="/news?hours=6" {% if hours == 6 %}class="active"{% endif %}>6 uur</a>
+        <a href="/news?hours=24" {% if hours == 24 %}class="active"{% endif %}>24 uur</a>
+        <a href="/news?hours=72" {% if hours == 72 %}class="active"{% endif %}>3 dagen</a>
+      </nav>
+    </div>
+    <p class="card-desc">Berichten die volgens Claude niets met de koers te maken hebben, staan lichter weergegeven. Bronnen: {{ settings.news_rss_feeds|length }} RSS-feeds{% if settings.gdelt_enabled %}, GDELT (wereldnieuws){% endif %}{% if settings.cryptopanic_token %}, CryptoPanic{% endif %}.</p>
     {% for it in items %}
-    <tr class="{{ 'irrelevant' if it.assessed and not it.relevant else '' }} {{ 'impact3' if it.impact == 3 else '' }}">
-      <td>{{ it.published_at.strftime("%d-%m %H:%M") }}</td>
-      <td>{{ it.source_name }}<br><span class="muted">{{ it.source }}</span></td>
-      <td><a href="{{ it.url }}" target="_blank" rel="noopener">{{ it.title }}</a>
-        {% if it.summary_nl %}<br><span class="muted">{{ it.summary_nl }}</span>{% endif %}
-        {% if not it.assessed %}<br><span class="muted">nog niet beoordeeld</span>{% endif %}</td>
-      <td>{{ it.coin_list()|join(", ") }}</td>
-      <td class="num {{ 'pos' if (it.sentiment or 0) > 0.1 else ('neg' if (it.sentiment or 0) < -0.1 else '') }}">{{ "%.2f"|format(it.sentiment) if it.sentiment is not none else "-" }}</td>
-      <td class="num">{{ it.impact if it.impact is not none else "-" }}</td>
-      <td>{{ it.horizon or "" }}</td>
-    </tr>
+    <article class="news-item {{ 'dim' if it.assessed and not it.relevant else '' }}">
+      <div>
+        <div class="meta">
+          <span>{{ it.published_at|dt }}</span>
+          <span>·</span>
+          <span>{{ it.source_name }}</span>
+          {% if not it.assessed %}<span>·</span><span>nog niet beoordeeld</span>{% endif %}
+        </div>
+        <a class="title" href="{{ it.url }}" target="_blank" rel="noopener">{{ it.title }}</a>
+        {% if it.summary_nl %}<div class="summary">{{ it.summary_nl }}</div>{% endif %}
+      </div>
+      <div class="side">
+        {% if it.coin_list() %}<span class="chips">{% for c in it.coin_list() %}<span class="chip">{{ "alle coins" if c == "ALL" else c }}</span>{% endfor %}</span>{% endif %}
+        {% if it.sentiment is not none %}
+        <span class="pill {{ 'pill-green' if it.sentiment > 0.1 else ('pill-red' if it.sentiment < -0.1 else '') }}">{{ "positief" if it.sentiment > 0.1 else ("negatief" if it.sentiment < -0.1 else "neutraal") }} {{ it.sentiment|num }}</span>
+        {% endif %}
+        {% if it.impact is not none %}
+        <span class="small muted">impact {{ "groot" if it.impact == 3 else ("middel" if it.impact == 2 else "klein") }}{% if it.horizon %} · {{ it.horizon|nl }}{% endif %}</span>
+        {% endif %}
+      </div>
+    </article>
     {% else %}
-    <tr><td colspan="7">Nog geen berichten. Klik op "Nu verversen".</td></tr>
+    {{ ui.empty("Nog geen berichten", "Klik op 'Nu verversen' om het nieuws van de afgelopen " ~ hours ~ " uur op te halen.") }}
     {% endfor %}
-  </table>
-</body>
-</html>
+  </section>
+</div>
+{% endblock %}
+{% block footer %}<span>Nieuws beoordeeld door {{ settings.claude_model_news }}</span>{% endblock %}
