@@ -318,8 +318,31 @@ SPECS: tuple[Spec, ...] = (
         "news_rss_feeds",
         "news",
         "RSS-feeds",
-        "Eén adres per regel. Standaard: CoinDesk, Cointelegraph, The Block en Decrypt.",
+        "Eén adres per regel. Standaard: CoinDesk, Cointelegraph, The Block, Decrypt, "
+        "CryptoSlate, NewsBTC, BeInCrypto en DL News.",
         kind="lines",
+    ),
+    Spec(
+        "cryptocv_enabled",
+        "news",
+        "cryptocurrency.cv",
+        "Gratis verzamelaar van 300+ bronnen zonder sleutel, met een archief per coin. "
+        "Berichten komen direct met de juiste coin-tag binnen.",
+        kind="bool",
+    ),
+    Spec(
+        "google_news_enabled",
+        "news",
+        "Google News per coin",
+        "Gratis zoekfeed per markt (bijvoorbeeld 'solana') van de laatste 24 uur.",
+        kind="bool",
+    ),
+    Spec(
+        "fear_greed_enabled",
+        "news",
+        "Fear & Greed-index",
+        "Marktbrede angst/hebzucht-score van alternative.me; Claude krijgt hem als context.",
+        kind="bool",
     ),
     Spec(
         "gdelt_enabled",

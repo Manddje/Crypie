@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.budget import BudgetExceeded
 from app.ai.news_analyst import NewsAnalyst, apply_assessments
-from app.db import NewsItem
+from app.db import NewsItem, Setting
 from app.news.sources import NewsFetcher, RawItem
 
 log = logging.getLogger(__name__)
@@ -47,6 +47,24 @@ def store_items(session: Session, raw: list[RawItem], max_age_hours: int) -> int
         inserted += 1
     session.commit()
     return inserted
+
+
+MARKET_MOOD_KEY = "market_mood"
+
+
+def save_market_mood(session: Session, mood: dict) -> None:
+    row = session.get(Setting, MARKET_MOOD_KEY)
+    payload = json.dumps(mood)
+    if row is None:
+        session.add(Setting(key=MARKET_MOOD_KEY, value=payload))
+    else:
+        row.value = payload
+    session.commit()
+
+
+def load_market_mood(session: Session) -> dict | None:
+    row = session.get(Setting, MARKET_MOOD_KEY)
+    return json.loads(row.value) if row else None
 
 
 def pending_items(session: Session, limit: int) -> list[NewsItem]:
@@ -179,6 +197,10 @@ class NewsService:
         """Fetch new items and assess pending ones. Safe to call from the scheduler or UI."""
         fetched = await self.fetcher.fetch_all()
         inserted = store_items(session, fetched, self.max_age_hours)
+        fetch_mood = getattr(self.fetcher, "fetch_fear_greed", None)
+        mood = await fetch_mood() if fetch_mood else None
+        if mood:
+            save_market_mood(session, mood)
         assessed = 0
         self.last_error = None
         if self.analyst.available:

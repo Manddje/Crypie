@@ -28,7 +28,7 @@ from app.bitvavo.broker import PAPER_WALLET_KEY, Broker, LiveBroker, PaperBroker
 from app.bitvavo.client import BitvavoClient, BitvavoError
 from app.config import Settings, get_settings
 from app.db import Evaluation, SessionLocal, Setting, get_session, init_db
-from app.news.service import NewsService, market_sentiment, recent_items
+from app.news.service import NewsService, load_market_mood, market_sentiment, recent_items
 from app.news.sources import NewsFetcher
 from app.settings_store import SettingsError
 from app.strategy.engine import backtest, latest_snapshot
@@ -131,6 +131,9 @@ def apply_settings(app: FastAPI, new: Settings) -> None:
     fetcher.gdelt_query = new.gdelt_query if new.gdelt_enabled else None
     fetcher.cryptopanic_plan = new.cryptopanic_plan
     fetcher.coins = new.coins
+    fetcher.cryptocv_enabled = new.cryptocv_enabled
+    fetcher.google_news_enabled = new.google_news_enabled
+    fetcher.fear_greed_enabled = new.fear_greed_enabled
 
 
 @asynccontextmanager
@@ -177,6 +180,9 @@ async def lifespan(app: FastAPI):
         settings.cryptopanic_token,
         settings.cryptopanic_plan,
         settings.coins,
+        cryptocv_enabled=settings.cryptocv_enabled,
+        google_news_enabled=settings.google_news_enabled,
+        fear_greed_enabled=settings.fear_greed_enabled,
     )
     app.state.news = NewsService(
         fetcher,
@@ -685,6 +691,7 @@ async def news_page(
             "hours": hours,
             "items": recent_items(session, hours, 150),
             "sentiments": [market_sentiment(session, c, 48) for c in settings.coins],
+            "market_mood": load_market_mood(session),
             "last_run": news.last_run,
             "last_error": news.last_error,
             "analyst_available": news.analyst.available,

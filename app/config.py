@@ -35,7 +35,14 @@ class Settings(BaseSettings):
         "https://cointelegraph.com/rss",
         "https://www.theblock.co/rss.xml",
         "https://decrypt.co/feed",
+        "https://cryptoslate.com/feed/",
+        "https://www.newsbtc.com/feed/",
+        "https://beincrypto.com/feed/",
+        "https://www.dlnews.com/arc/outboundfeeds/rss/",
     ]
+    cryptocv_enabled: bool = True  # free aggregator with per-coin archive, no key
+    google_news_enabled: bool = True  # one Google News search feed per coin
+    fear_greed_enabled: bool = True  # alternative.me index as market-wide context
     gdelt_enabled: bool = True
     gdelt_query: str = (
         '(bitcoin OR ethereum OR crypto OR stablecoin OR "central bank" OR "interest rate" '

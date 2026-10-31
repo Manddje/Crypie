@@ -50,6 +50,8 @@ LABELS_NL: dict[str, str] = {
     "rss": "RSS",
     "gdelt": "GDELT",
     "cryptopanic": "CryptoPanic",
+    "cryptocv": "cryptocurrency.cv",
+    "googlenews": "Google News",
     "1m": "1 minuut",
     "5m": "5 minuten",
     "15m": "15 minuten",
