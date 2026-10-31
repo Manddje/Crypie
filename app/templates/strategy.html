@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <title>Crypie · Strategie</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; line-height: 1.4; }
+    .badge { font-size: .75rem; padding: .2rem .5rem; border-radius: 999px; text-transform: uppercase; }
+    .paper { background: #e0f2fe; color: #075985; } .live { background: #fee2e2; color: #991b1b; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+    textarea { width: 100%; min-height: 26rem; font-family: ui-monospace, monospace; font-size: .85rem; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid #8884; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .error { background: #fef3c7; color: #92400e; padding: .75rem; border-radius: .5rem; }
+    .ok { background: #dcfce7; color: #166534; padding: .75rem; border-radius: .5rem; }
+    .muted { opacity: .7; font-size: .9rem; }
+    .pos { color: #15803d; } .neg { color: #b91c1c; }
+    .explanation { white-space: pre-wrap; background: #8881; padding: .75rem; border-radius: .5rem; }
+    .actions { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-top: .5rem; }
+    .signal { font-weight: 600; text-transform: uppercase; }
+  </style>
+</head>
+<body>
+  <h1>Strategie <span class="badge {{ settings.trading_mode }}">{{ settings.trading_mode }}</span></h1>
+  <nav><a href="/">Dashboard</a> · <a href="/strategy">Strategie</a> · <a href="/docs">API</a></nav>
+
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  {% if message %}<p class="ok">{{ message }}</p>{% endif %}
+
+  <p class="muted">Actieve strategie: <strong>{{ strategy.name }}</strong> op {{ strategy.market }} ({{ strategy.interval }}).
+    Een strategie bestaat uit indicatoren, koopcondities (alle moeten waar zijn), verkoopcondities en optioneel stop-loss en take-profit.</p>
+
+  <div class="grid">
+    <section>
+      <h2>Beschrijf je strategie aan Claude</h2>
+      {% if assistant_available %}
+      <form method="post" action="/strategy">
+        <textarea name="description" style="min-height: 8rem" placeholder="Bijvoorbeeld: koop ETH als de MACD boven de signaallijn kruist en de koers boven de 200 EMA zit, verkoop bij 8% winst of 4% verlies.">{{ description or "" }}</textarea>
+        <input type="hidden" name="strategy_json" value="{{ strategy_json }}">
+        <div class="actions">
+          <label>Candles voor backtest <input type="number" name="limit" value="500" min="50" max="1440" style="width: 6rem"></label>
+          <button type="submit" name="action" value="propose">Laat Claude een voorstel doen</button>
+        </div>
+      </form>
+      {% else %}
+      <p class="error">ANTHROPIC_API_KEY is niet ingesteld, dus het voorstel via Claude is uitgeschakeld. De JSON hieronder kun je wel handmatig bewerken, backtesten en opslaan.</p>
+      {% endif %}
+
+      {% if explanation %}
+      <h3>Toelichting van Claude</h3>
+      <div class="explanation">{{ explanation }}</div>
+      {% endif %}
+    </section>
+
+    <section>
+      <h2>Strategie (JSON)</h2>
+      <form method="post" action="/strategy">
+        <textarea name="strategy_json">{{ strategy_json }}</textarea>
+        <div class="actions">
+          <label>Candles <input type="number" name="limit" value="500" min="50" max="1440" style="width: 6rem"></label>
+          <button type="submit" name="action" value="backtest">Backtest</button>
+          <button type="submit" name="action" value="save">Opslaan als actieve strategie</button>
+        </div>
+        <p class="muted">Indicatoren: sma, ema, rsi, macd (series: id, id_signal, id_hist), bollinger (id_upper, id_middle, id_lower).
+          Operators: &lt; &lt;= &gt; &gt;= crosses_above crosses_below. Prijsseries: open, high, low, close, volume.</p>
+      </form>
+    </section>
+  </div>
+
+  {% if backtest %}
+  <section>
+    <h2>Backtest {{ backtest.market }} · {{ backtest.interval }} · {{ backtest.candles }} candles</h2>
+    <table>
+      <tr>
+        <th>Rendement strategie</th><th>Rendement kopen &amp; houden</th><th>Max. drawdown</th>
+        <th>Trades</th><th>Winstpercentage</th><th>Eindwaarde</th><th>Signaal nu</th>
+      </tr>
+      <tr>
+        <td class="{{ 'pos' if backtest.return_pct >= 0 else 'neg' }}">{{ backtest.return_pct }}%</td>
+        <td class="{{ 'pos' if backtest.buy_hold_return_pct >= 0 else 'neg' }}">{{ backtest.buy_hold_return_pct }}%</td>
+        <td>{{ backtest.max_drawdown_pct }}%</td>
+        <td>{{ backtest.trades }}{% if backtest.open_position %} (+1 open){% endif %}</td>
+        <td>{{ backtest.win_rate_pct if backtest.win_rate_pct is not none else "-" }}{% if backtest.win_rate_pct is not none %}%{% endif %}</td>
+        <td>€ {{ backtest.final_eur }} (start € {{ backtest.start_eur }}, fee {{ backtest.fee_pct }}%)</td>
+        <td class="signal">{{ backtest.latest.signal }}</td>
+      </tr>
+    </table>
+    <p class="muted">Indicatorwaarden laatste candle:
+      {% for k, v in backtest.latest['values'].items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
+    </p>
+    {% if backtest.trade_log %}
+    <h3>Laatste trades</h3>
+    <table>
+      <tr><th>Instap</th><th class="num">Instapprijs</th><th>Uitstap</th><th class="num">Uitstapprijs</th><th class="num">Resultaat</th><th>Reden</th></tr>
+      {% for t in backtest.trade_log %}
+      <tr>
+        <td>{{ (t.entry_time // 1000) | int | datetimeformat }}</td>
+        <td class="num">{{ "%.2f"|format(t.entry_price) }}</td>
+        <td>{{ (t.exit_time // 1000) | int | datetimeformat if t.exit_time else "open" }}</td>
+        <td class="num">{{ "%.2f"|format(t.exit_price) if t.exit_price else "-" }}</td>
+        <td class="num {{ 'pos' if (t.pnl_pct or 0) >= 0 else 'neg' }}">{{ t.pnl_pct if t.pnl_pct is not none else "-" }}{% if t.pnl_pct is not none %}%{% endif %}</td>
+        <td>{{ t.reason }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+    <p class="muted">Een backtest zegt iets over het verleden, niet over de toekomst. Fees zijn meegerekend, slippage niet.</p>
+  </section>
+  {% endif %}
+</body>
+</html>
