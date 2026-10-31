@@ -116,6 +116,61 @@ def requeue_items_without_event_key(session: Session, hours: int = 48) -> int:
     return len(rows)
 
 
+@dataclass
+class NewsGroup:
+    """Articles about one news fact, for the /news list: the lead plus the other outlets."""
+
+    key: str
+    lead: NewsItem  # highest impact, then newest
+    items: list[NewsItem]  # all articles, newest first
+
+    @property
+    def sources(self) -> int:
+        return len(self.items)
+
+    @property
+    def others(self) -> list[NewsItem]:
+        return [it for it in self.items if it is not self.lead]
+
+    @property
+    def assessed(self) -> bool:
+        return any(it.assessed for it in self.items)
+
+    @property
+    def relevant(self) -> bool:
+        return any(it.relevant for it in self.items if it.assessed)
+
+    @property
+    def sentiment(self) -> float | None:
+        scores = [it.sentiment for it in self.items if it.relevant and it.sentiment is not None]
+        return sum(scores) / len(scores) if scores else None
+
+    @property
+    def impact(self) -> int | None:
+        impacts = [it.impact for it in self.items if it.relevant and it.impact is not None]
+        return max(impacts) if impacts else None
+
+    def coin_list(self) -> list[str]:
+        coins: list[str] = []
+        for it in self.items:
+            for c in it.coin_list():
+                if c not in coins:
+                    coins.append(c)
+        return coins
+
+
+def group_items(items: list[NewsItem]) -> list[NewsGroup]:
+    """Fold a newest-first list of articles into one group per news fact, newest fact first."""
+    groups: dict[str, list[NewsItem]] = {}
+    for it in items:
+        groups.setdefault(event_key_for(it), []).append(it)
+    out = []
+    for key, members in groups.items():
+        lead = max(members, key=lambda m: (m.impact or 0, _published(m)))
+        out.append(NewsGroup(key, lead, members))
+    return out
+
+
 def recent_event_keys(
     session: Session, hours: int = 48, limit: int = 40, now: datetime | None = None
 ) -> list[str]:
