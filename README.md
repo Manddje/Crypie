@@ -49,6 +49,24 @@ app als **Docker Compose**-resource vanuit deze repository.
    gepubliceerd; alleen Coolify's proxy komt erbij). Zet het dashboard achter Coolify's
    basic-auth of een eigen login voordat je naar live gaat.
 
+## Instellingen
+
+Alles wat met handelen te maken heeft stel je in het portaal in, op de pagina **Instellingen**
+(`/settings`): modus (oefen/live), markten, interval, startbedrag, de harde limieten, het Claude-model per
+taak en het maandbudget, en de nieuwsbronnen. Wat je daar opslaat:
+
+- geldt direct, zonder herstart (de schedulers en de handelsmotor lezen de nieuwe waarden binnen een
+  halve minuut);
+- staat in de database (tabel `settings`, sleutels `config:*`) en overleeft dus een nieuwe deploy;
+- gaat vóór de omgevingsvariabelen. De waarden uit Coolify of `.env` zijn alleen nog de standaard; per
+  instelling zie je de standaardwaarde en kun je per blok terug naar standaard.
+
+Niet in het portaal, met opzet: de sleutels (`BITVAVO_API_KEY`, `BITVAVO_API_SECRET`,
+`ANTHROPIC_API_KEY`, `CRYPTOPANIC_TOKEN`), `DATABASE_URL` en `LIVE_TRADING_ACK`. Live-modus kun je in het
+portaal pas kiezen als de omgeving `LIVE_TRADING_ACK=true` én een Bitvavo-sleutel heeft; anders weigert
+de app de wijziging en blijft hij in oefenmodus. Dezelfde instellingen zijn er als API:
+`GET/PUT /api/settings`, `DELETE /api/settings[/{key}]`.
+
 ## Strategie en indicatoren
 
 Een strategie is JSON (zie `app/strategy/model.py` voor het schema) met indicatoren (`sma`, `ema`,
@@ -113,15 +131,17 @@ markt uit `MARKETS` toegepast; het `market`-veld van de strategie is alleen de s
 
 1. Draai minimaal enkele weken in `TRADING_MODE=paper` en bekijk de evaluaties.
 2. Maak in Bitvavo een API-key met **trade**-rechten (geen opname) en een IP-whitelist.
-3. Zet `TRADING_MODE=live`, de keys en `LIVE_TRADING_ACK=true`. Zonder die bevestiging start de app niet
-   in live-modus. Begin met een lage `MAX_TRADE_EUR`.
+3. Zet in de omgeving de keys en `LIVE_TRADING_ACK=true`, en kies daarna op **Instellingen** de modus
+   Live (of zet `TRADING_MODE=live` in de omgeving). Zonder die bevestiging weigert de app live-modus en
+   draait hij in oefenmodus. Begin met een laag maximum per order.
 
 ## Claude-kosten
 
 Elke Claude-aanroep wordt met tokens en geschatte kosten opgeslagen in de tabel `claude_usage`.
-`CLAUDE_MONTHLY_BUDGET_USD` (standaard 100) is een harde maandgrens: bij 90% waarschuwt het dashboard,
-bij 100% weigert de app nieuwe Claude-aanroepen tot de volgende maand. Het model per taak is instelbaar:
-`CLAUDE_MODEL_STRATEGY`, `CLAUDE_MODEL_DECISION`, `CLAUDE_MODEL_NEWS`, `CLAUDE_MODEL_EVALUATION`.
+Het maandbudget (standaard `CLAUDE_MONTHLY_BUDGET_USD` = 100) is een harde grens: bij 90% waarschuwt het
+dashboard, bij 100% weigert de app nieuwe Claude-aanroepen tot de volgende maand. Het budget en het model
+per taak (`CLAUDE_MODEL_STRATEGY`, `CLAUDE_MODEL_DECISION`, `CLAUDE_MODEL_NEWS`, `CLAUDE_MODEL_EVALUATION`)
+pas je aan op **Instellingen**.
 Zet daarnaast in de Anthropic Console een uitgavenlimiet op de API-key als tweede slot.
 
 ## Veiligheid

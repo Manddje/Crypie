@@ -1,158 +1,206 @@
-<!doctype html>
-<html lang="nl">
-<head>
-  <meta charset="utf-8">
-  <title>Crypie</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-    body { max-width: 960px; margin: 2rem auto; padding: 0 1rem; line-height: 1.4; }
-    h1 { display: flex; align-items: center; gap: .75rem; }
-    .badge { font-size: .75rem; padding: .2rem .5rem; border-radius: 999px; text-transform: uppercase; }
-    .paper { background: #e0f2fe; color: #075985; }
-    .live { background: #fee2e2; color: #991b1b; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid #8884; }
-    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-    .error { background: #fef3c7; color: #92400e; padding: .75rem; border-radius: .5rem; }
-    .warn { background: #fef9c3; color: #854d0e; padding: .5rem; border-radius: .5rem; }
-    .muted { opacity: .7; font-size: .9rem; }
-    form { display: flex; gap: .5rem; flex-wrap: wrap; align-items: end; }
-    label { display: flex; flex-direction: column; font-size: .85rem; }
-    .buy { color: #15803d; } .sell { color: #b91c1c; }
-    footer { margin-top: 2rem; font-size: .8rem; opacity: .7; }
-  </style>
-</head>
-<body>
-  <h1>Crypie <span class="badge {{ settings.trading_mode }}">{{ settings.trading_mode }}</span></h1>
-  <nav><a href="/">Dashboard</a> · <a href="/trading">Handelen</a> · <a href="/strategy">Strategie</a> · <a href="/news">Nieuws</a> · <a href="/docs">API</a></nav>
-  {% if paused %}<p class="error">Handelen is gepauzeerd (kill switch). <a href="/trading">Hervatten</a></p>{% endif %}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Overzicht{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Overzicht</h1>
+  <p class="subtitle">
+    {% if settings.trading_mode == "live" %}Crypie handelt met echt geld op Bitvavo.{% else %}Crypie oefent met fictief geld; er gaan geen orders naar Bitvavo.{% endif %}
+    {% if settings.trading_enabled and settings.trade_interval_min > 0 %}Elke {{ settings.trade_interval_min }} minuten kijkt de bot naar de koers, de indicatoren en het nieuws.{% else %}De bot draait niet automatisch; je kunt op de pagina Handelen zelf een cyclus starten.{% endif %}
+  </p>
+</div>
 
-  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+<div class="stack">
+  {% if paused %}
+  {% call ui.notice("warn", "Handelen staat op pauze. Er wordt niets gekocht; open posities worden nog wel gesloten op stop-loss of take-profit.") %}
+    <form class="inline" method="post" action="/trading/action"><button class="btn btn-sm btn-primary" name="action" value="resume">Handelen hervatten</button></form>
+  {% endcall %}
+  {% endif %}
+  {% if config_warning %}{{ ui.notice("warn", config_warning) }}{% endif %}
+  {% if error %}{{ ui.notice("error", "Bitvavo is op dit moment niet bereikbaar. Koersen en saldo kunnen verouderd of leeg zijn. (" ~ error ~ ")") }}{% endif %}
+  {% if not settings.anthropic_api_key %}{{ ui.notice("info", "De Claude-sleutel (ANTHROPIC_API_KEY) is nog niet ingesteld. Nieuws wordt niet beoordeeld en beslissingen volgen alleen de regels.") }}{% endif %}
 
-  <div class="grid">
-    <section>
-      <h2>Koersen</h2>
-      <table>
-        <tr><th>Markt</th><th class="num">Prijs (EUR)</th></tr>
-        {% for market, price in prices.items() %}
-        <tr><td>{{ market }}</td><td class="num">{{ "%.2f"|format(price) }}</td></tr>
+  <section class="hero">
+    <div class="hero-row">
+      <div>
+        <div class="big-label">Portefeuille{% if settings.trading_mode == "paper" %} (oefengeld){% endif %}</div>
+        <div class="big-value">{{ portfolio.total_eur|eur if portfolio else "–" }}</div>
+        <div class="big-sub">
+          {% if portfolio %}
+            {{ portfolio.cash_eur|eur }} in euro · {{ portfolio.coins_eur|eur }} in crypto
+            {% if settings.trading_mode == "paper" %}· gestart met {{ settings.paper_start_eur|eur(0) }}{% endif %}
+          {% else %}Saldo kon niet worden opgehaald.{% endif %}
+        </div>
+      </div>
+      {% if portfolio and settings.trading_mode == "paper" %}
+      {% set change = portfolio.total_eur - settings.paper_start_eur %}
+      <div>
+        <div class="big-label">Sinds start</div>
+        <div class="big-value {{ 'pos' if change >= 0 else 'neg' }}" style="font-size: 32px">{{ change|eur }}</div>
+        <div class="big-sub {{ 'pos' if change >= 0 else 'neg' }}">{{ (change / settings.paper_start_eur * 100)|pct }}</div>
+      </div>
+      {% endif %}
+      <div class="hero-status">
+        {% if paused %}
+          <span class="pill pill-orange pill-lg"><span class="dot"></span>Gepauzeerd</span>
+        {% elif settings.trading_enabled %}
+          <span class="pill pill-green pill-lg"><span class="dot"></span>Bot actief</span>
         {% else %}
-        <tr><td colspan="2">Geen koersen beschikbaar.</td></tr>
+          <span class="pill pill-lg"><span class="dot"></span>Bot uitgeschakeld</span>
+        {% endif %}
+        <span class="small muted">Laatste cyclus: {{ last_run|ago }}</span>
+        <a class="small" href="/trading">Naar handelen ›</a>
+      </div>
+    </div>
+  </section>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-header"><h2>Koersen</h2><span class="more muted small">Bitvavo, nu</span></div>
+      {% if prices %}
+      <table>
+        <tr><th>Markt</th><th class="num">Koers</th><th class="num">Nieuws (48u)</th></tr>
+        {% for market, p in prices.items() %}
+        {% set coin = market.split("-")[0] %}
+        {% set s = sentiments|selectattr("coin", "equalto", coin)|first %}
+        <tr>
+          <td><strong>{{ coin }}</strong><span class="sub">{{ market }}</span></td>
+          <td class="num">€ {{ p|price }}</td>
+          <td class="num">{% if s %}<span class="pill {{ s.label()|sentiment_pill }}">{{ s.label() }}</span>{% else %}–{% endif %}</td>
+        </tr>
         {% endfor %}
       </table>
+      {% else %}
+      {{ ui.empty("Geen koersen beschikbaar", "Bitvavo gaf geen antwoord. Probeer het over een minuut opnieuw.") }}
+      {% endif %}
     </section>
 
-    <section>
-      <h2>Saldo ({{ settings.trading_mode }})</h2>
+    <section class="card">
+      <div class="card-header"><h2>Saldo</h2><span class="more muted small">{{ settings.trading_mode|nl }}</span></div>
+      {% if balances %}
       <table>
-        <tr><th>Munt</th><th class="num">Hoeveelheid</th></tr>
-        {% for symbol, amount in balances.items() %}
-        <tr><td>{{ symbol }}</td><td class="num">{{ "%.8f"|format(amount) if symbol != "EUR" else "%.2f"|format(amount) }}</td></tr>
-        {% else %}
-        <tr><td colspan="2">Geen saldo beschikbaar.</td></tr>
+        <tr><th>Munt</th><th class="num">Hoeveelheid</th><th class="num">Waarde</th></tr>
+        {% for symbol, amt in balances.items() %}
+        <tr>
+          <td><strong>{{ symbol }}</strong></td>
+          <td class="num">{{ amt|eur if symbol == "EUR" else amt|amount }}</td>
+          <td class="num">{% if symbol == "EUR" %}{{ amt|eur }}{% elif prices.get(symbol ~ "-EUR") %}{{ (amt * prices[symbol ~ "-EUR"])|eur }}{% else %}–{% endif %}</td>
+        </tr>
         {% endfor %}
       </table>
+      {% else %}
+      {{ ui.empty("Geen saldo beschikbaar", "Het saldo kon niet worden opgehaald bij Bitvavo." if settings.trading_mode == "live" else "Het oefensaldo kon niet worden geladen.") }}
+      {% endif %}
     </section>
   </div>
 
-  <section>
-    <h2>Open posities ({{ settings.trading_mode }})</h2>
+  <section class="card">
+    <div class="card-header"><h2>Open posities</h2><a class="more" href="/trading">Alle details ›</a></div>
+    {% if open_positions %}
+    <div class="table-wrap">
     <table>
-      <tr><th>Markt</th><th class="num">Hoeveelheid</th><th class="num">Instap</th><th class="num">Huidig</th><th class="num">Resultaat</th><th class="num">Stop</th><th class="num">Take-profit</th></tr>
+      <tr><th>Markt</th><th class="num">Hoeveelheid</th><th class="num">Instap</th><th class="num">Nu</th><th class="num">Resultaat</th><th class="num">Stop-loss</th><th class="num">Take-profit</th></tr>
       {% for p in open_positions %}
       {% set cur = prices.get(p.market) %}
       <tr>
-        <td>{{ p.market }}</td>
-        <td class="num">{{ "%.6f"|format(p.amount) }}</td>
-        <td class="num">{{ "%.2f"|format(p.entry_price) }}</td>
-        <td class="num">{{ "%.2f"|format(cur) if cur else "-" }}</td>
-        <td class="num {{ 'buy' if cur and cur >= p.entry_price else 'sell' }}">{{ "%.2f"|format((cur / p.entry_price - 1) * 100) if cur else "-" }}%</td>
-        <td class="num">{{ "%.2f"|format(p.stop_price) if p.stop_price else "-" }}</td>
-        <td class="num">{{ "%.2f"|format(p.take_profit_price) if p.take_profit_price else "-" }}</td>
+        <td class="nowrap"><strong>{{ p.market }}</strong><span class="sub">sinds {{ p.opened_at|dt }}</span></td>
+        <td class="num">{{ p.amount|amount }}</td>
+        <td class="num">€ {{ p.entry_price|price }}</td>
+        <td class="num">{{ ("€ " ~ cur|price) if cur else "–" }}</td>
+        <td class="num {{ 'pos' if cur and cur >= p.entry_price else ('neg' if cur else '') }}">{{ ((cur / p.entry_price - 1) * 100)|pct if cur else "–" }}</td>
+        <td class="num">{{ ("€ " ~ p.stop_price|price) if p.stop_price else "–" }}</td>
+        <td class="num">{{ ("€ " ~ p.take_profit_price|price) if p.take_profit_price else "–" }}</td>
       </tr>
-      {% else %}
-      <tr><td colspan="7">Geen open posities. Laatste handelscyclus: {{ last_run.strftime("%d-%m %H:%M UTC") if last_run else "nog niet gedraaid" }}. <a href="/trading">Details</a></td></tr>
       {% endfor %}
     </table>
+    </div>
+    {% else %}
+    {{ ui.empty("Geen open posities", "De bot wacht op een koopsignaal van de strategie. Laatste cyclus: " ~ last_run|ago ~ ".", "/trading", "Bekijk beslissingen") }}
+    {% endif %}
   </section>
 
-  <div class="grid">
-    <section>
-      <h2>Actieve strategie</h2>
-      <p><strong>{{ strategy.name }}</strong> op {{ strategy.market }} ({{ strategy.interval }})<br>
-        <span class="muted">{{ strategy.description }}</span><br>
-        <a href="/strategy">Bekijken, backtesten of aanpassen</a></p>
+  <div class="grid-3">
+    <section class="card">
+      <div class="card-header"><h3>Strategie</h3><a class="more" href="/strategy">Aanpassen ›</a></div>
+      <p><strong>{{ strategy.name }}</strong></p>
+      <p class="muted small">{{ strategy.market }} · candles van {{ strategy.interval|nl }}</p>
+      {% if strategy.description %}<p class="small" style="margin-top: 10px">{{ strategy.description }}</p>{% endif %}
+      <div class="chips" style="margin-top: 12px">
+        {% for ind in strategy.indicators %}<span class="chip">{{ ind|indicator_nl }}</span>{% endfor %}
+        {% if strategy.stop_loss_pct %}<span class="chip">stop-loss {{ strategy.stop_loss_pct|num(0) }}%</span>{% endif %}
+        {% if strategy.take_profit_pct %}<span class="chip">take-profit {{ strategy.take_profit_pct|num(0) }}%</span>{% endif %}
+      </div>
     </section>
-    <section>
-      <h2>Nieuwssentiment (48 uur)</h2>
-      <table>
-        <tr><th>Coin</th><th>Oordeel</th><th class="num">Score</th><th class="num">Berichten</th></tr>
-        {% for s in sentiments %}
-        <tr><td>{{ s.coin }}</td><td>{{ s.label() }}</td><td class="num">{{ "%.2f"|format(s.score) }}</td><td class="num">{{ s.items }}{% if s.high_impact %} ({{ s.high_impact }} groot){% endif %}</td></tr>
-        {% else %}
-        <tr><td colspan="4">Nog geen beoordeeld nieuws.</td></tr>
-        {% endfor %}
-      </table>
-      <p class="muted"><a href="/news">Alle berichten</a></p>
+
+    <section class="card">
+      <div class="card-header"><h3>Resultaat 30 dagen</h3><a class="more" href="/trading">Details ›</a></div>
+      {% if performance and performance.closed_positions %}
+      <div class="stats" style="grid-template-columns: 1fr 1fr">
+        {{ ui.stat("Resultaat", performance.total_pnl_eur|eur, None, "pos" if performance.total_pnl_eur >= 0 else "neg") }}
+        {{ ui.stat("Winstkans", performance.win_rate_pct|pct(0, false), performance.closed_positions ~ " gesloten") }}
+      </div>
+      {% else %}
+      <p class="muted small">Nog geen afgeronde trades in de laatste 30 dagen. Zodra posities gesloten zijn, zie je hier het resultaat.</p>
+      {% endif %}
     </section>
-    <section>
-      <h2>Claude-budget deze maand</h2>
+
+    <section class="card">
+      <div class="card-header"><h3>Claude-budget</h3><span class="more muted small">deze maand</span></div>
       {% if budget %}
-      <p class="{{ 'error' if budget.exhausted else ('warn' if budget.warning else '') }}">
-        {{ "%.2f"|format(budget.spent_usd) }} van {{ "%.0f"|format(budget.limit_usd) }} USD gebruikt ({{ budget.pct }}%)
-        {% if budget.exhausted %}· budget op, Claude-aanroepen zijn gestopt{% elif budget.warning %}· bijna op{% endif %}
+      <div class="big-value" style="font-size: 26px; font-weight: 600">{{ "$ " ~ budget.spent_usd|num }} <span class="muted" style="font-size: 15px; font-weight: 400">van $ {{ budget.limit_usd|num(0) }}</span></div>
+      <div class="score-bar" style="margin-top: 12px" aria-hidden="true"><div class="fill pos" style="left: 0; right: auto; width: {{ [budget.pct, 100]|min }}%; background: {{ 'var(--red)' if budget.exhausted else ('var(--orange)' if budget.warning else 'var(--accent)') }}"></div></div>
+      <p class="small {{ 'neg' if budget.exhausted else 'muted' }}">
+        {% if budget.exhausted %}Budget is op: Claude wordt deze maand niet meer aangeroepen.{% elif budget.warning %}Bijna op ({{ budget.pct|num(0) }}%). Claude stopt automatisch bij de limiet.{% else %}{{ budget.pct|num(0) }}% gebruikt. Claude stopt automatisch bij de limiet.{% endif %}
       </p>
-      {% else %}<p class="muted">Niet beschikbaar.</p>{% endif %}
+      {% else %}<p class="muted small">Niet beschikbaar.</p>{% endif %}
     </section>
   </div>
 
-  <section>
-    <h2>Handmatige marktorder</h2>
-    <form method="post" action="/orders">
-      <label>Markt
-        <select name="market">
-          {% for m in settings.markets %}<option>{{ m }}</option>{% endfor %}
-        </select>
-      </label>
-      <label>Richting
-        <select name="side"><option value="buy">Kopen</option><option value="sell">Verkopen</option></select>
-      </label>
-      <label>Bedrag (EUR)
-        <input type="number" name="amount_quote" min="5" step="0.01" value="25" required>
-      </label>
-      <button type="submit">Plaats order</button>
-    </form>
-  </section>
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-header"><h2>Handmatige order</h2></div>
+      <p class="card-desc">Koop of verkoop direct tegen de marktprijs{% if settings.trading_mode == "paper" %} met oefengeld{% else %}. <strong>Dit plaatst een echte order op Bitvavo.</strong>{% endif %}</p>
+      <form method="post" action="/orders" onsubmit="return confirm('Weet je zeker dat je deze order wilt plaatsen?')">
+        <div class="form-row">
+          <label>Markt
+            <select name="market">{% for m in settings.markets %}<option>{{ m }}</option>{% endfor %}</select>
+          </label>
+          <label>Richting
+            <select name="side"><option value="buy">Kopen</option><option value="sell">Verkopen</option></select>
+          </label>
+          <label>Bedrag in euro
+            <input type="number" name="amount_quote" min="{{ settings.min_trade_eur|int }}" step="0.01" value="25" required inputmode="decimal">
+          </label>
+          <button class="btn btn-primary" type="submit">Order plaatsen</button>
+        </div>
+      </form>
+      <p class="form-help">Minimaal {{ settings.min_trade_eur|eur(0) }} per order. Handmatige orders tellen niet mee voor de daglimiet van de bot.</p>
+    </section>
 
-  <section>
-    <h2>Laatste orders</h2>
-    <table>
-      <tr><th>Tijd</th><th>Modus</th><th>Markt</th><th>Kant</th><th class="num">Bedrag</th><th class="num">EUR</th><th class="num">Fee</th><th class="num">Prijs</th><th>Status</th><th>Reden</th></tr>
-      {% for o in orders %}
-      <tr>
-        <td>{{ o.created_at.strftime("%d-%m %H:%M") }}</td>
-        <td>{{ o.mode }}</td>
-        <td>{{ o.market }}</td>
-        <td class="{{ o.side }}">{{ o.side }}</td>
-        <td class="num">{{ "%.6f"|format(o.amount) if o.amount else "-" }}</td>
-        <td class="num">{{ "%.2f"|format(o.amount_quote) if o.amount_quote else "-" }}</td>
-        <td class="num">{{ "%.2f"|format(o.fee_quote) if o.fee_quote else "-" }}</td>
-        <td class="num">{{ "%.2f"|format(o.price) if o.price else "-" }}</td>
-        <td>{{ o.status }}</td>
-        <td>{{ o.reason or "" }}</td>
-      </tr>
+    <section class="card">
+      <div class="card-header"><h2>Laatste orders</h2></div>
+      {% if orders %}
+      <div class="table-wrap">
+      <table>
+        <tr><th>Tijd</th><th>Markt</th><th>Kant</th><th class="num">Bedrag</th><th class="num">Kosten</th><th class="num">Koers</th><th>Status</th></tr>
+        {% for o in orders %}
+        <tr>
+          <td class="nowrap">{{ o.created_at|dt }}</td>
+          <td><strong>{{ o.market }}</strong>{% if o.reason %}<span class="sub clip" title="{{ o.reason }}">{{ o.reason|nl }}</span>{% endif %}</td>
+          <td><span class="pill {{ 'pill-green' if o.side == 'buy' else 'pill-red' }}">{{ o.side|nl }}</span></td>
+          <td class="num">{{ o.amount_quote|eur if o.amount_quote else "–" }}<span class="sub">{{ o.amount|amount if o.amount else "" }}</span></td>
+          <td class="num">{{ o.fee_quote|eur if o.fee_quote else "–" }}</td>
+          <td class="num">{{ ("€ " ~ o.price|price) if o.price else "–" }}</td>
+          <td>{{ o.status|nl }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      </div>
       {% else %}
-      <tr><td colspan="10">Nog geen orders.</td></tr>
-      {% endfor %}
-    </table>
-  </section>
-
-  <footer>
-    Markten: {{ settings.markets|join(", ") }}
-    {% if rate_limit is not none %} · Bitvavo rate limit resterend: {{ rate_limit }}{% endif %}
-    · Bitvavo-key {{ "ingesteld" if settings.has_bitvavo_credentials else "niet ingesteld" }}
-  </footer>
-</body>
-</html>
+      {{ ui.empty("Nog geen orders", "Orders van de bot en handmatige orders verschijnen hier.") }}
+      {% endif %}
+    </section>
+  </div>
+</div>
+{% endblock %}
+{% block footer %}{% if rate_limit is not none %}<span>Bitvavo-limiet resterend: {{ rate_limit }}</span>{% endif %}{% endblock %}

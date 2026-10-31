@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Instellingen{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Instellingen</h1>
+  <p class="subtitle">Hier bepaal je hoe de bot handelt. Wat je opslaat geldt direct, zonder herstart, en blijft bewaard. De serveromgeving (Coolify) levert alleen nog de standaardwaarden; sleutels en wachtwoorden blijven daar staan.</p>
+</div>
+
+<div class="stack">
+  {% if message %}{{ ui.notice("ok", message) }}{% endif %}
+  {% if config_warning %}{{ ui.notice("warn", config_warning) }}{% endif %}
+  {% if errors %}{{ ui.notice("error", "Niet opgeslagen. Kijk naar de gemarkeerde velden en probeer het opnieuw.") }}{% endif %}
+
+  <nav class="segmented settings-nav" aria-label="Onderdelen">
+    {% for g in groups %}<a href="#{{ g.key }}">{{ g.title }}</a>{% endfor %}
+    <a href="#omgeving">Omgeving</a>
+  </nav>
+
+  <datalist id="claude-models">{% for m in model_choices %}<option value="{{ m }}">{% endfor %}</datalist>
+
+  {% for g in groups %}
+  {% set changed = g.fields|selectattr("overridden")|list|length %}
+  <section class="card" id="{{ g.key }}">
+    <form method="post" action="/settings#{{ g.key }}" {% if g.key == "trading" %}data-current-mode="{{ settings.trading_mode }}" onsubmit="return confirmLive(this)"{% endif %}>
+      <input type="hidden" name="group" value="{{ g.key }}">
+      <div class="card-header">
+        <h2>{{ g.title }}</h2>
+        {% if changed %}<span class="pill pill-blue">{{ changed }} aangepast</span>{% else %}<span class="pill">standaard</span>{% endif %}
+      </div>
+      <p class="card-desc">{{ g.description }}</p>
+
+      <div class="settings-list">
+        {% for f in g.fields %}
+        {% set fid = "f-" ~ f.key %}
+        <div class="setting{% if f.key in errors %} has-error{% endif %}">
+          <div class="setting-text">
+            <label for="{{ fid }}">{{ f.label }}</label>
+            {% if f.help %}<div class="setting-help">{{ f.help }}</div>{% endif %}
+            {% if f.overridden %}<div class="setting-default">Standaard uit omgeving: <strong>{{ f.default_text }}</strong> · {{ f.env_name }}</div>{% endif %}
+            {% if f.key in errors %}<div class="setting-error" role="alert">{{ errors[f.key] }}</div>{% endif %}
+          </div>
+          <div class="setting-control">
+            {% if f.kind == "bool" %}
+              <input type="hidden" name="{{ f.key }}" value="false">
+              <label class="switch">
+                <input type="checkbox" id="{{ fid }}" name="{{ f.key }}" value="true" {% if f.value %}checked{% endif %}>
+                <span class="track" aria-hidden="true"></span>
+                <span class="state">{{ "Aan" if f.value else "Uit" }}</span>
+              </label>
+            {% elif f.key == "trading_mode" %}
+              <div class="seg-radio" role="radiogroup" aria-label="Modus">
+                {% for value, label in f.choices %}
+                {% set blocked = value == "live" and live_blocker and settings.trading_mode != "live" %}
+                <label class="{% if blocked %}disabled{% endif %}" title="{% if blocked %}{{ live_blocker|capitalize }}{% endif %}">
+                  <input type="radio" name="{{ f.key }}" value="{{ value }}" {% if f.value == value %}checked{% endif %} {% if blocked %}disabled{% endif %}>
+                  <span>{{ label }}</span>
+                </label>
+                {% endfor %}
+              </div>
+              {% if live_blocker and settings.trading_mode != "live" %}
+              <div class="setting-help" style="margin-top: 8px; text-align: right">Live is nog niet mogelijk: {{ live_blocker }}.</div>
+              {% endif %}
+            {% elif f.kind == "choice" %}
+              <select id="{{ fid }}" name="{{ f.key }}">
+                {% for value, label in f.choices %}<option value="{{ value }}" {% if f.value == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+              </select>
+            {% elif f.kind == "model" %}
+              <input type="text" id="{{ fid }}" name="{{ f.key }}" value="{{ f.text }}" list="claude-models" spellcheck="false" autocomplete="off">
+            {% elif f.kind == "lines" %}
+              <textarea id="{{ fid }}" name="{{ f.key }}" rows="4" spellcheck="false">{{ f.text }}</textarea>
+            {% elif f.kind in ("int", "float") %}
+              <div class="unit-input">
+                {% if f.unit in ("€", "$") %}<span class="unit">{{ f.unit }}</span>{% endif %}
+                <input type="number" id="{{ fid }}" name="{{ f.key }}" value="{{ f.text }}" inputmode="decimal"
+                       {% if f.min is not none %}min="{{ f.min }}"{% endif %} {% if f.max is not none %}max="{{ f.max }}"{% endif %}
+                       step="{{ f.step if f.step else (1 if f.kind == 'int' else 'any') }}">
+                {% if f.unit and f.unit not in ("€", "$") %}<span class="unit">{{ f.unit }}</span>{% endif %}
+              </div>
+            {% else %}
+              <input type="text" id="{{ fid }}" name="{{ f.key }}" value="{{ f.text }}" spellcheck="false" {% if f.kind == "markets" %}placeholder="BTC-EUR, ETH-EUR" style="text-transform: uppercase"{% endif %}>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div class="actions" style="margin-top: 18px">
+        <button class="btn btn-primary" type="submit" name="action" value="save">Opslaan</button>
+        <button class="btn" type="submit" name="action" value="reset" {% if not changed %}disabled{% endif %} formnovalidate onclick="return confirm('Alle instellingen in dit blok terugzetten naar de waarden uit de serveromgeving?')">Standaard herstellen</button>
+      </div>
+    </form>
+  </section>
+  {% endfor %}
+
+  <div class="grid-2">
+    <section class="card" id="omgeving">
+      <div class="card-header"><h2>Uit de omgeving</h2><span class="more muted small">alleen op de server</span></div>
+      <p class="card-desc">Sleutels en de live-bevestiging worden bewust niet in het portaal beheerd. Je stelt ze in bij de omgevingsvariabelen van de app in Coolify (of in <code>.env</code>).</p>
+      <dl class="kv">
+        <dt>Bitvavo-sleutel</dt><dd>{% if environment.bitvavo_key %}<span class="pill pill-green">ingesteld</span>{% else %}<span class="pill">niet ingesteld</span> <span class="small muted">BITVAVO_API_KEY, BITVAVO_API_SECRET</span>{% endif %}</dd>
+        <dt>Claude-sleutel</dt><dd>{% if environment.anthropic_key %}<span class="pill pill-green">ingesteld</span>{% else %}<span class="pill">niet ingesteld</span> <span class="small muted">ANTHROPIC_API_KEY</span>{% endif %}</dd>
+        <dt>CryptoPanic-token</dt><dd>{% if environment.cryptopanic_token %}<span class="pill pill-green">ingesteld</span>{% else %}<span class="pill">niet ingesteld</span> <span class="small muted">optioneel, CRYPTOPANIC_TOKEN</span>{% endif %}</dd>
+        <dt>Live-bevestiging</dt><dd>{% if environment.live_ack %}<span class="pill pill-orange">LIVE_TRADING_ACK=true</span>{% else %}<span class="pill">uit</span> <span class="small muted">LIVE_TRADING_ACK=true is nodig om live te kunnen handelen</span>{% endif %}</dd>
+        <dt>Database</dt><dd>{{ environment.database }}</dd>
+      </dl>
+    </section>
+
+    <section class="card">
+      <div class="card-header"><h2>Oefenportefeuille</h2></div>
+      {% if settings.trading_mode == "paper" %}
+      <p class="card-desc">Zet het oefensaldo terug op het startbedrag ({{ settings.paper_start_eur|eur(0) }}) en sluit open oefenposities zonder resultaat. Het logboek met beslissingen en orders blijft bewaard.</p>
+      <form method="post" action="/settings" onsubmit="return confirm('Oefenportefeuille resetten? Het saldo gaat terug naar het startbedrag en open oefenposities worden gesloten.')">
+        <input type="hidden" name="group" value="trading">
+        <button class="btn btn-danger" type="submit" name="action" value="reset_paper">Oefenportefeuille resetten</button>
+      </form>
+      {% else %}
+      <p class="card-desc">Je handelt live. De oefenportefeuille kun je alleen resetten in oefenmodus.</p>
+      {% endif %}
+    </section>
+  </div>
+</div>
+
+<script>
+  function confirmLive(form) {
+    var chosen = form.querySelector('input[name="trading_mode"]:checked');
+    if (chosen && chosen.value === "live" && form.dataset.currentMode !== "live") {
+      return confirm("Overschakelen naar LIVE? Vanaf de volgende cyclus plaatst de bot echte orders op Bitvavo met echt geld.");
+    }
+    return true;
+  }
+  document.querySelectorAll(".switch input").forEach(function (box) {
+    box.addEventListener("change", function () {
+      var state = box.parentElement.querySelector(".state");
+      if (state) state.textContent = box.checked ? "Aan" : "Uit";
+    });
+  });
+</script>
+{% endblock %}
