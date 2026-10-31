@@ -420,7 +420,8 @@ async def test_rules_hold_explains_every_buy_condition(session):
     (result,) = await engine.run_cycle(session)
     assert result.action == "hold" and decider.contexts == []
     d = session.query(Decision).one()
-    assert d.reasoning.startswith("Geen koopsignaal, 1 van 1 koopvoorwaarden niet gehaald")
+    assert d.reasoning.startswith("Geen koopsignaal, 1 van 1 harde koopvoorwaarden niet gehaald")
+    assert "Claude" in d.reasoning
     assert "✗" in d.reasoning and "geen beoordeeld nieuws" in d.reasoning.lower()
     checks = d.check_list()
     assert [c["ok"] for c in checks["buy"]] == [False]
@@ -429,6 +430,30 @@ async def test_rules_hold_explains_every_buy_condition(session):
     assert latest_decisions(session, "paper", ["ETH-EUR", "BTC-EUR"]) == [d]
     assert recent_decisions(session, "paper", days=1) == [d]
     assert recent_decisions(session, "paper", days=0) == []
+
+
+async def test_failed_soft_filter_still_asks_claude_and_halves_the_buy(session):
+    decider = FakeDecider(
+        TradeDecision(action="buy", confidence=0.6, amount_quote=100, reasoning_nl="Dip.")
+    )
+    strategy = cross_strategy(
+        buy=[
+            {"left": "fast", "op": "crosses_above", "right": "slow"},
+            {"left": "close", "op": ">", "right": 1000, "soft": True},  # never holds here
+        ]
+    )
+    engine = make_engine_(
+        session, {"BTC-EUR": candles(BUY_SERIES)}, {"BTC-EUR": 12.0}, decider, strategy=strategy
+    )
+    (result,) = await engine.run_cycle(session)
+    assert result.signal == "buy" and result.executed and result.action == "buy"
+    ctx = decider.contexts[0]
+    assert ctx["soft_filters_failed"] == ["koers hoger dan 1.000 (zacht filter)"]
+    assert ctx["signal_checks"]["buy"][1]["soft"] is True
+    assert open_position(session, "paper", "BTC-EUR").entry_quote == 50.0
+    d = session.query(Decision).one()
+    assert d.reasoning == "Dip." and d.source == "claude"
+    assert d.check_list()["buy"][1]["ok"] is False
 
 
 async def test_fallback_hold_when_claude_unavailable(session):

@@ -85,11 +85,17 @@ PRICE_FIELDS = ("open", "high", "low", "close", "volume")
 
 
 class Condition(BaseModel):
-    """``left op right``; both sides are a series name or (right only) a number."""
+    """``left op right``; both sides are a series name or (right only) a number.
+
+    A ``soft`` condition is a filter rather than a requirement: the signal fires without it,
+    Claude sees whether it held and trades smaller when it did not. At least one condition
+    per side must be hard; if all are soft they are treated as hard.
+    """
 
     left: str
     op: Operator
     right: str | float
+    soft: bool = False
 
     @field_validator("left")
     @classmethod
@@ -139,8 +145,9 @@ class Strategy(BaseModel):
 
 DEFAULT_STRATEGY = Strategy(
     name="RSI dip in opwaartse trend",
-    description="Koop als RSI onder 35 duikt terwijl de koers boven de EMA200 ligt (dip in een "
-    "opwaartse trend); verkoop als RSI boven 70 komt. Stop-loss 5%.",
+    description="Koop als RSI onder 35 duikt. Of de koers boven de EMA200 ligt (opwaartse trend) "
+    "is een zacht filter: Claude weegt het mee met het nieuws en koopt kleiner als het niet "
+    "geldt. Verkoop als RSI boven 70 komt. Stop-loss 5%.",
     market="BTC-EUR",
     interval="1h",
     indicators=[
@@ -149,7 +156,7 @@ DEFAULT_STRATEGY = Strategy(
     ],
     buy=[
         Condition(left="rsi14", op="<", right=35),
-        Condition(left="close", op=">", right="ema200"),
+        Condition(left="close", op=">", right="ema200", soft=True),
     ],
     sell=[Condition(left="rsi14", op=">", right=70)],
     stop_loss_pct=5,

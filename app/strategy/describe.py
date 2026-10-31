@@ -46,8 +46,9 @@ def format_value(value: float, threshold: bool = False) -> str:
 
 
 def condition_nl(cond: Condition) -> str:
-    """'rsi14 lager dan 30', 'koers kruist omhoog door ema50'."""
-    return f"{series_nl(cond.left)} {OPERATORS_NL.get(cond.op, cond.op)} {series_nl(cond.right)}"
+    """'rsi14 lager dan 30', 'koers kruist omhoog door ema50 (zacht filter)'."""
+    text = f"{series_nl(cond.left)} {OPERATORS_NL.get(cond.op, cond.op)} {series_nl(cond.right)}"
+    return f"{text} (zacht filter)" if cond.soft else text
 
 
 @dataclass
@@ -58,6 +59,7 @@ class ConditionCheck:
     left: float | None
     right: float | None
     ok: bool
+    soft: bool = False
 
     @property
     def values_nl(self) -> str:
@@ -66,7 +68,13 @@ class ConditionCheck:
         return f"{format_value(self.left)} t.o.v. {format_value(self.right)}"
 
     def as_dict(self) -> dict[str, object]:
-        return {"text": self.text, "left": self.left, "right": self.right, "ok": self.ok}
+        return {
+            "text": self.text,
+            "left": self.left,
+            "right": self.right,
+            "ok": self.ok,
+            "soft": self.soft,
+        }
 
 
 def check_conditions(
@@ -79,7 +87,9 @@ def check_conditions(
         left = _value(series, cond.left, i)
         right = _value(series, cond.right, i)
         out.append(
-            ConditionCheck(condition_nl(cond), left, right, check_condition(cond, series, i))
+            ConditionCheck(
+                condition_nl(cond), left, right, check_condition(cond, series, i), cond.soft
+            )
         )
     return out
 
@@ -102,13 +112,22 @@ def signal_reason_nl(signal: str, checks: dict[str, list[ConditionCheck]]) -> st
         )
 
     if signal == "buy":
-        return f"Koopsignaal: {describe(checks['buy'])}."
+        soft_failed = [c for c in checks["buy"] if c.soft and not c.ok]
+        note = (
+            f" {len(soft_failed)} zacht filter niet gehaald, Claude weegt dat mee."
+            if len(soft_failed) == 1
+            else f" {len(soft_failed)} zachte filters niet gehaald, Claude weegt dat mee."
+            if soft_failed
+            else ""
+        )
+        return f"Koopsignaal: {describe(checks['buy'])}.{note}"
     if signal == "sell":
         return f"Verkoopsignaal: {describe(checks['sell'])}."
-    failed = [c for c in checks["buy"] if not c.ok]
+    hard = [c for c in checks["buy"] if not c.soft] or checks["buy"]
+    failed = [c for c in hard if not c.ok]
     if not checks["buy"]:
         return "Geen koopsignaal: de strategie heeft geen koopvoorwaarden."
     return (
-        f"Geen koopsignaal, {len(failed)} van {len(checks['buy'])} koopvoorwaarden niet gehaald: "
+        f"Geen koopsignaal, {len(failed)} van {len(hard)} harde koopvoorwaarden niet gehaald: "
         f"{describe(checks['buy'])}."
     )

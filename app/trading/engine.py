@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 # (smaller) position, a strongly negative one can close it. Scores run from -1 to 1.
 NEWS_ENTRY_MIN_SCORE = 0.4
 NEWS_EXIT_MAX_SCORE = -0.3
-NEWS_ENTRY_SIZE_FACTOR = 0.5
+NEWS_ENTRY_SIZE_FACTOR = 0.5  # also used when a soft strategy filter does not hold
 
 
 # -- positions ---------------------------------------------------------------------------
@@ -294,7 +294,7 @@ class TradingEngine:
             else:
                 why = "geen reden om Claude te raadplegen"
             decision.reasoning = (
-                f"{signal_reason} {news[0].upper() + news[1:]}. {why.capitalize()}."
+                f"{signal_reason} {news[0].upper() + news[1:]}. {why[0].upper() + why[1:]}."
             )
             session.add(decision)
             session.commit()
@@ -315,8 +315,10 @@ class TradingEngine:
         )
         decision.source, decision.model = source, model
         decision.action, decision.confidence, decision.reasoning = action, confidence, reasoning
-        if news_entry and action == "buy":
-            # A buy on news alone, without the strategy agreeing, gets at most half the budget.
+        soft_failed = any(c.soft and not c.ok for c in checks["buy"])
+        if action == "buy" and (news_entry or soft_failed):
+            # Without the full strategy behind it (news alone, or a soft filter such as the
+            # trend that does not hold) a buy gets at most half the budget.
             amount_quote = min(amount_quote, self.limits.max_trade_eur * NEWS_ENTRY_SIZE_FACTOR)
         decision.amount_quote = amount_quote
 
@@ -398,6 +400,9 @@ class TradingEngine:
             "signal": signal,
             "news_entry_allowed": news_entry,
             "signal_checks": {k: [c.as_dict() for c in v] for k, v in (checks or {}).items()},
+            "soft_filters_failed": [
+                c.text for c in (checks or {}).get("buy", []) if c.soft and not c.ok
+            ],
             "indicators": indicators,
             "news": sentiment.as_dict(),
             "position": None

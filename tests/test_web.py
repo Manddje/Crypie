@@ -39,5 +39,5 @@ def test_labels_and_strategy_in_words():
     assert [indicator_nl(i) for i in DEFAULT_STRATEGY.indicators] == ["RSI 14", "EMA 200"]
     assert [condition_nl(c) for c in DEFAULT_STRATEGY.buy] == [
         "rsi14 lager dan 35",
-        "koers hoger dan ema200",
+        "koers hoger dan ema200 (zacht filter)",
     ]

@@ -1,6 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
+from app.strategy.describe import explain_signal, signal_reason_nl
 from app.strategy.engine import backtest, compute_series, latest_snapshot, signal_at
 from app.strategy.model import DEFAULT_STRATEGY, Strategy
 
@@ -109,3 +110,37 @@ def test_latest_snapshot_reports_signal_and_values():
 def test_backtest_needs_candles():
     with pytest.raises(ValueError):
         backtest(crossover_strategy(), make_candles([1]))
+
+
+def test_soft_condition_does_not_block_the_live_signal_but_does_in_backtest():
+    closes = [10, 9, 8, 7, 6, 9, 12, 15, 18, 15, 12, 9, 6, 5]
+    candles = make_candles(closes)
+    strict = crossover_strategy()
+    # A trend filter nothing in this series satisfies: close above a very high constant.
+    soft = Strategy.model_validate(
+        {
+            **strict.model_dump(),
+            "buy": [
+                *(c.model_dump() for c in strict.buy),
+                {"left": "close", "op": ">", "right": 1000, "soft": True},
+            ],
+        }
+    )
+    series = compute_series(soft, candles)
+    live = [signal_at(soft, series, i) for i in range(len(closes))]
+    strict_signals = [signal_at(soft, series, i, soft_as_hard=True) for i in range(len(closes))]
+    assert "buy" in live and "buy" not in strict_signals
+    assert backtest(soft, candles, fee_pct=0.0).summary()["trades"] == 0
+
+    i = live.index("buy")
+    checks = explain_signal(soft, series, i)
+    assert [c.soft for c in checks["buy"]] == [False, True]
+    assert checks["buy"][1].ok is False and checks["buy"][1].text.endswith("(zacht filter)")
+    assert "1 zacht filter niet gehaald" in signal_reason_nl("buy", checks)
+
+    # Only soft conditions: they count as hard, otherwise every candle would be a buy.
+    all_soft = Strategy.model_validate(
+        {**soft.model_dump(), "buy": [{"left": "close", "op": ">", "right": 1000, "soft": True}]}
+    )
+    series = compute_series(all_soft, candles)
+    assert all(signal_at(all_soft, series, i) != "buy" for i in range(len(closes)))

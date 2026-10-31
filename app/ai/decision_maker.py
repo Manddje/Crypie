@@ -20,6 +20,11 @@ de harde risicolimieten en een samenvatting van je eigen recente beslissingen en
 Spelregels:
 - Kopen mag als het strategiesignaal "buy" is. Jij beslist of je het signaal volgt,
   afzwakt (kleiner bedrag) of veto't op basis van het nieuws en je recente resultaten.
+- signal_checks toont elke strategievoorwaarde met de echte waarden. Voorwaarden met
+  "soft": true zijn filters, geen eisen: staat er iets in soft_filters_failed (bijvoorbeeld
+  de koers onder de EMA200, dus een dip in een dalende trend), dan weeg je dat af tegen het
+  nieuws. Koop in dat geval alleen bij neutraal tot positief nieuws en met een kleiner bedrag;
+  bij negatief nieuws is "hold" de keuze. De code halveert het bedrag dan sowieso.
 - Kopen mag ook zonder buy-signaal als news_entry_allowed true is: het nieuws voor deze coin is
   dan sterk positief en van hoge impact. Doe dat alleen als de berichten echt koersrelevant zijn
   en de indicatoren niet tegenwerken; de code beperkt zo'n nieuwsaankoop tot een kleiner bedrag.

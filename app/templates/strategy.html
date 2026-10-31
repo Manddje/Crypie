@@ -93,6 +93,7 @@
       {{ ui.stat("Eindwaarde", backtest.final_eur|eur, "fee " ~ backtest.fee_pct|num ~ "% per order") }}
       {{ ui.stat("Signaal nu", backtest.latest.signal|nl, None, "pos" if backtest.latest.signal == "buy" else ("neg" if backtest.latest.signal == "sell" else "")) }}
     </div>
+    <p class="form-help" style="margin-top: 12px">De backtest rekent zonder Claude en telt zachte filters daarom als harde voorwaarden. Live ontstaat het signaal ook als een zacht filter niet geldt; Claude weegt dat dan mee met het nieuws en koopt kleiner.</p>
     <details class="advanced" style="margin-top: 18px">
       <summary>Indicatorwaarden van de laatste candle</summary>
       <div class="chips">{% for k, v in backtest.latest['values'].items() %}<span class="chip">{{ k }} = {{ v }}</span>{% endfor %}</div>

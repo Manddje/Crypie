@@ -115,6 +115,10 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    buy-signaal, of zonder signaal op sterk positief nieuws van hoge impact (**news entry**, dan maximaal de
    helft van `MAX_TRADE_EUR`); verkopen bij een sell-signaal of als news exit. Slecht nieuws is voor de bot
    nooit een reden om "de dip te kopen".
+   Een voorwaarde met `"soft": true` is een **zacht filter**: het signaal ontstaat ook als het niet geldt,
+   Claude ziet dat in `signal_checks` en `soft_filters_failed` en koopt dan hoogstens de helft van
+   `MAX_TRADE_EUR`. De standaardstrategie gebruikt dat voor de EMA200-trendfilter, zodat een RSI-dip in een
+   dalende markt wél aan Claude wordt voorgelegd. De backtest kent geen Claude en rekent zachte filters als hard.
    Elke cyclus komt per markt in het journaal: signaal, de uitkomst van iedere strategievoorwaarde met de
    echte waarden (bijvoorbeeld "rsi14 lager dan 35 ✗ (52,2 t.o.v. 35)"), nieuws, besluit en toelichting.
    Pagina `/trading` toont de laatste cyclus per markt en alle cycli van de laatste

@@ -21,7 +21,10 @@ Regels:
 - Kies ids in kleine letters, bijvoorbeeld "rsi14", "ema50", "macd_std", "bb20".
 - macd levert de series "<id>", "<id>_signal" en "<id>_hist"; bollinger levert
   "<id>_upper", "<id>_middle" en "<id>_lower". Prijsseries: open, high, low, close, volume.
-- Alle koop-condities moeten tegelijk waar zijn, idem voor verkoop-condities.
+- Alle koop-condities moeten tegelijk waar zijn, idem voor verkoop-condities. Een conditie
+  met "soft": true is een zacht filter: het signaal ontstaat ook zonder, Claude ziet of het
+  gold en handelt kleiner als dat niet zo is. Gebruik dat voor trendfilters (koers boven een
+  EMA) als de gebruiker ook in een daling wil kunnen kopen; minstens één conditie blijft hard.
 - Verwijs in condities alleen naar series die je ook definieert.
 - Houd de markt op een van de toegestane markten; interval standaard "1h" tenzij gevraagd.
 - Wees conservatief: voeg een stop_loss_pct toe als de gebruiker er niets over zegt.

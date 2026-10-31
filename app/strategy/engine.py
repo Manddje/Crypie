@@ -68,10 +68,25 @@ def check_condition(cond: Condition, series: dict[str, Series], i: int) -> bool:
     return prev_left >= prev_right and left < right
 
 
-def signal_at(strategy: Strategy, series: dict[str, Series], i: int) -> Signal:
-    if all(check_condition(c, series, i) for c in strategy.buy):
+def hard_conditions(conditions: list[Condition]) -> list[Condition]:
+    """The conditions that must hold for a signal; all of them when none is marked hard."""
+    hard = [c for c in conditions if not c.soft]
+    return hard or list(conditions)
+
+
+def signal_at(
+    strategy: Strategy, series: dict[str, Series], i: int, soft_as_hard: bool = False
+) -> Signal:
+    """Strategy signal on candle ``i``.
+
+    Live, soft conditions do not block the signal (Claude weighs them). A backtest has no
+    Claude, so it passes ``soft_as_hard=True`` and simulates the strict version.
+    """
+    buy = strategy.buy if soft_as_hard else hard_conditions(strategy.buy)
+    sell = strategy.sell if soft_as_hard else hard_conditions(strategy.sell)
+    if all(check_condition(c, series, i) for c in buy):
         return "buy"
-    if all(check_condition(c, series, i) for c in strategy.sell):
+    if all(check_condition(c, series, i) for c in sell):
         return "sell"
     return "hold"
 
@@ -148,6 +163,8 @@ def backtest(
 ) -> BacktestResult:
     """Long-only backtest. Signals on bar i are executed at the close of bar i.
 
+    Soft conditions count as hard here: without Claude the strict rules are simulated.
+
     Stop-loss and take-profit are checked against the bar's low/high and filled at the
     threshold price. Fees are charged on both entry and exit.
     """
@@ -176,7 +193,7 @@ def backtest(
                 target = open_trade.entry_price * (1 + strategy.take_profit_pct / 100)
                 if high >= target:
                     exit_price, reason = target, "take_profit"
-            if exit_price is None and signal_at(strategy, series, i) == "sell":
+            if exit_price is None and signal_at(strategy, series, i, soft_as_hard=True) == "sell":
                 exit_price, reason = close, "signal"
             if exit_price is not None:
                 eur += coin * exit_price * (1 - fee)
@@ -184,7 +201,7 @@ def backtest(
                 open_trade.exit_time, open_trade.exit_price = int(ts), exit_price
                 open_trade.reason = reason
                 open_trade = None
-        elif signal_at(strategy, series, i) == "buy":
+        elif signal_at(strategy, series, i, soft_as_hard=True) == "buy":
             spend = eur * strategy.position_size_pct / 100
             if spend > 0:
                 coin = spend * (1 - fee) / close
