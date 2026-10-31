@@ -64,14 +64,17 @@ class Settings(BaseSettings):
     @classmethod
     def _split_markets(cls, value: object) -> object:
         if isinstance(value, str):
-            return [m.strip().upper() for m in value.split(",") if m.strip()]
+            parsed = [m.strip().upper() for m in value.split(",") if m.strip()]
+            # An empty env value (e.g. Coolify passing MARKETS="") means "use the default".
+            return parsed or cls.model_fields["markets"].default
         return value
 
     @field_validator("news_rss_feeds", mode="before")
     @classmethod
     def _split_feeds(cls, value: object) -> object:
         if isinstance(value, str):
-            return [f.strip() for f in value.split(",") if f.strip()]
+            parsed = [f.strip() for f in value.split(",") if f.strip()]
+            return parsed or cls.model_fields["news_rss_feeds"].default
         return value
 
     @property
