@@ -45,6 +45,19 @@ class Settings(BaseSettings):
     cryptopanic_plan: str = "growth"  # path segment: growth | growth_weekly | enterprise
     news_max_age_hours: int = 48
     news_batch_size: int = 15
+
+    # Trading (step 4). Hard limits are enforced in code, whatever Claude says.
+    trading_enabled: bool = True
+    trade_interval_min: int = 60
+    live_trading_ack: bool = False  # must be true to start in live mode
+    max_trade_eur: float = 100.0  # per order
+    max_exposure_pct: float = 50.0  # of total portfolio value in coins
+    daily_loss_limit_pct: float = 5.0  # realized+unrealized loss today -> pause for the day
+    max_trades_per_day: int = 6
+    cooldown_min_after_stop: int = 240  # no new buy in a market after a stop-loss
+    min_trade_eur: float = 10.0
+    claude_unavailable_mode: Literal["hold", "indicators"] = "hold"
+    evaluation_interval_hours: int = 168
     backtest_fee_pct: float = 0.25
 
     @field_validator("markets", mode="before")
