@@ -627,3 +627,49 @@ footer.site {
 .checks li.nok .mark { color: var(--red); }
 .checks li.soft .mark { color: var(--orange, #e8912d); }
 .checks.compact { font-size: 12px; margin-top: 2px; }
+
+/* -- Trading plan ---------------------------------------------------------------- */
+
+.plan-fields { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+.plan-field label { display: block; font-weight: 600; font-size: 15px; }
+.plan-field .setting-help { margin: 2px 0 8px; }
+.plan-field textarea { min-height: 7rem; }
+.plan-h { margin: 16px 0 6px; font-size: 13px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; }
+.plan-h:first-of-type { margin-top: 4px; }
+.rules { list-style: none; margin: 0; padding: 0; font-size: 14px; }
+.rules li { padding: 4px 0; display: flex; gap: 8px; align-items: baseline; }
+.rules .mark { display: inline-block; width: 14px; font-weight: 700; color: var(--accent); flex: none; }
+.rules li.soft .mark { color: var(--orange, #e8912d); }
+.steps { margin: 0; padding-left: 22px; font-size: 14px; line-height: 1.55; }
+.steps li { margin: 6px 0; }
+.steps li::marker { color: var(--accent); font-weight: 600; }
+
+/* -- Trade journal --------------------------------------------------------------- */
+
+.filters { display: grid; gap: 10px 12px; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); align-items: end; }
+.filters label { display: block; font-size: 12px; color: var(--text-2); font-weight: 500; margin-bottom: 4px; }
+.filters input, .filters select { width: 100%; }
+.filters .actions { display: flex; gap: 8px; }
+.trade { padding: 16px 18px; border: 1px solid var(--hairline); border-radius: 12px; }
+.trade + .trade { margin-top: 12px; }
+.trade:target { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+.trade-head { display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap; }
+.trade-head .title { font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.trade-head .pnl { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; text-align: right; }
+.trade-head .pnl .sub { display: block; font-size: 12px; font-weight: 500; color: var(--text-3); }
+.trade-meta { color: var(--text-2); font-size: 13px; margin-top: 4px; display: flex; gap: 6px 14px; flex-wrap: wrap; }
+.trade-grid { display: grid; gap: 14px 24px; grid-template-columns: 1fr 1fr; margin-top: 14px; }
+.trade-grid h4 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; }
+.trade-grid .kv { font-size: 13px; gap: 4px 14px; }
+.trade-grid .why { font-size: 13px; margin: 8px 0 0; line-height: 1.5; }
+.trade-note { margin-top: 14px; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--fill); font-size: 14px; }
+.trade-note .prose { margin-top: 6px; }
+.trade-note .meta { font-size: 12px; color: var(--text-3); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.trade-note form { margin-top: 10px; display: grid; gap: 8px; }
+.trade-note textarea { min-height: 5rem; }
+.tag { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: var(--card); border: 1px solid var(--hairline-strong); color: var(--text-2); text-decoration: none; }
+.tag:hover { color: var(--accent); text-decoration: none; }
+@media (max-width: 600px) {
+  .trade-grid { grid-template-columns: 1fr; }
+  .trade-head .pnl { text-align: left; }
+}

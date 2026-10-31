@@ -127,6 +127,13 @@ class Position(Base):
     open_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     close_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fees_eur: Mapped[float] = mapped_column(Float, default=0.0)  # entry + exit fees, EUR
+    # Trade journal: the owner's own notes on this trade, written on /journal.
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tags: Mapped[str | None] = mapped_column(String(128), nullable=True)  # "fout,nieuws"
+    note_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    def tag_list(self) -> list[str]:
+        return [t for t in (self.tags or "").split(",") if t]
 
 
 class Decision(Base):

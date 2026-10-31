@@ -28,6 +28,8 @@
       <nav class="nav-links" aria-label="Hoofdnavigatie">
         <a href="/" {% if path == "/" %}class="active" aria-current="page"{% endif %}>Overzicht</a>
         <a href="/trading" {% if path.startswith("/trading") %}class="active" aria-current="page"{% endif %}>Handelen</a>
+        <a href="/journal" {% if path.startswith("/journal") %}class="active" aria-current="page"{% endif %}>Journaal</a>
+        <a href="/plan" {% if path.startswith("/plan") %}class="active" aria-current="page"{% endif %}>Tradingplan</a>
         <a href="/strategy" {% if path.startswith("/strategy") %}class="active" aria-current="page"{% endif %}>Strategie</a>
         <a href="/news" {% if path.startswith("/news") %}class="active" aria-current="page"{% endif %}>Nieuws</a>
         <a href="/settings" {% if path.startswith("/settings") %}class="active" aria-current="page"{% endif %}>Instellingen</a>

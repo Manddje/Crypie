@@ -43,6 +43,9 @@ from app.strategy.model import Strategy
 from app.strategy.store import load_strategy, save_strategy
 from app.trading import risk
 from app.trading.engine import (
+    NEWS_ENTRY_MIN_SCORE,
+    NEWS_ENTRY_SIZE_FACTOR,
+    NEWS_EXIT_MAX_SCORE,
     TradingEngine,
     closed_positions,
     latest_decisions,
@@ -50,6 +53,17 @@ from app.trading.engine import (
     performance_summary,
     recent_decisions,
 )
+from app.trading.journal import (
+    EXIT_NL,
+    JournalFilter,
+    all_tags,
+    journal_entries,
+    journal_entry,
+    journal_totals,
+    save_note,
+    unlinked_orders,
+)
+from app.trading.plan import PLAN_FIELDS, TradingPlan, load_plan, save_plan
 from app.trading.risk import RiskLimits
 from app.trading.trend import load_trends, refresh_trends
 from app.web import STATIC_DIR, templates
@@ -951,6 +965,200 @@ async def trading_action(
             ev.applied = True
             session.commit()
     return RedirectResponse("/trading", status_code=303)
+
+
+# -- Trading plan ---------------------------------------------------------------------
+
+
+def _plan_context(request: Request, engine: TradingEngine, session: Session) -> dict:
+    """Everything the plan page shows: the owner's own text plus the rules the code follows."""
+    settings: Settings = request.app.state.settings
+    strategy = load_strategy(session)
+    return {
+        "settings": settings,
+        "plan": load_plan(session),
+        "fields": PLAN_FIELDS,
+        "strategy": strategy,
+        "mode": engine.mode,
+        "limits": engine.limits,
+        "fee_pct": engine.fee_pct,
+        "news_entry_min_score": NEWS_ENTRY_MIN_SCORE,
+        "news_exit_max_score": NEWS_EXIT_MAX_SCORE,
+        "half_order_pct": int(NEWS_ENTRY_SIZE_FACTOR * 100),
+        "budget": request.app.state.budget.status(session),
+        "paused": risk.is_paused(session),
+        "claude_available": engine.decision_maker.available,
+        "error": None,
+        "message": None,
+    }
+
+
+@app.get("/api/plan")
+async def api_plan(session: Session = Depends(get_session)):
+    return load_plan(session).model_dump()
+
+
+@app.put("/api/plan")
+async def api_put_plan(plan: TradingPlan, session: Session = Depends(get_session)):
+    return save_plan(session, plan).model_dump()
+
+
+@app.get("/plan", response_class=HTMLResponse)
+async def plan_page(
+    request: Request,
+    saved: str | None = None,
+    engine: TradingEngine = Depends(get_engine),
+    session: Session = Depends(get_session),
+):
+    ctx = _plan_context(request, engine, session)
+    if saved:
+        ctx["message"] = (
+            "Tradingplan opgeslagen. Claude krijgt het vanaf de volgende beslissing mee."
+        )
+    return templates.TemplateResponse(request, "plan.html", ctx)
+
+
+@app.post("/plan", response_class=HTMLResponse)
+async def plan_save(
+    request: Request,
+    engine: TradingEngine = Depends(get_engine),
+    session: Session = Depends(get_session),
+):
+    form = await request.form()
+    raw = {key: str(form.get(key) or "") for key in PLAN_FIELDS}
+    try:
+        plan = TradingPlan.model_validate(raw)
+    except ValidationError as exc:
+        ctx = _plan_context(request, engine, session)
+        ctx["plan"] = TradingPlan.model_construct(**raw)
+        ctx["error"] = "Niet opgeslagen: " + "; ".join(
+            f"{PLAN_FIELDS.get(str(e['loc'][0]), (str(e['loc'][0]),))[0]}: {e['msg']}"
+            for e in exc.errors()
+        )
+        return templates.TemplateResponse(request, "plan.html", ctx, status_code=400)
+    save_plan(session, plan)
+    return RedirectResponse("/plan?saved=1", status_code=303)
+
+
+# -- Trade journal --------------------------------------------------------------------
+
+
+def _journal_filter(
+    market: str | None,
+    status: str | None,
+    result: str | None,
+    reason: str | None,
+    tag: str | None,
+    days: int | None,
+    q: str | None,
+) -> JournalFilter:
+    return JournalFilter(
+        market=(market or "").upper() or None,
+        status=status if status in ("open", "closed") else None,
+        result=result if result in ("win", "loss") else None,
+        reason=reason if reason in EXIT_NL else None,
+        tag=(tag or "").strip() or None,
+        days=days if days and days > 0 else None,
+        query=(q or "").strip() or None,
+    )
+
+
+@app.get("/api/journal")
+async def api_journal(
+    market: str | None = None,
+    status: str | None = None,
+    result: str | None = None,
+    reason: str | None = None,
+    tag: str | None = None,
+    days: int | None = None,
+    q: str | None = None,
+    limit: int = 200,
+    engine: TradingEngine = Depends(get_engine),
+    session: Session = Depends(get_session),
+):
+    flt = _journal_filter(market, status, result, reason, tag, days, q)
+    entries = journal_entries(session, engine.mode, flt, min(limit, 1000))
+    return {
+        "mode": engine.mode,
+        "totals": journal_totals(entries),
+        "entries": [e.as_dict() for e in entries],
+    }
+
+
+class NoteIn(BaseModel):
+    note: str = Field(default="", max_length=4000)
+    tags: str = Field(default="", max_length=256)
+
+
+@app.put("/api/journal/{position_id}/note")
+async def api_journal_note(position_id: int, body: NoteIn, session: Session = Depends(get_session)):
+    try:
+        save_note(session, position_id, body.note, body.tags)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    entry = journal_entry(session, position_id)
+    assert entry is not None
+    return entry.as_dict()
+
+
+@app.get("/journal", response_class=HTMLResponse)
+async def journal_page(
+    request: Request,
+    market: str | None = None,
+    status: str | None = None,
+    result: str | None = None,
+    reason: str | None = None,
+    tag: str | None = None,
+    days: int | None = None,
+    q: str | None = None,
+    saved: int | None = None,
+    engine: TradingEngine = Depends(get_engine),
+    session: Session = Depends(get_session),
+):
+    settings: Settings = request.app.state.settings
+    flt = _journal_filter(market, status, result, reason, tag, days, q)
+    entries = journal_entries(session, engine.mode, flt)
+    return templates.TemplateResponse(
+        request,
+        "journal.html",
+        {
+            "settings": settings,
+            "mode": engine.mode,
+            "filter": flt,
+            "entries": entries,
+            "totals": journal_totals(entries),
+            "tags": all_tags(session, engine.mode),
+            "exit_reasons": EXIT_NL,
+            "other_orders": unlinked_orders(session, engine.mode) if not flt.active else [],
+            "saved": saved,
+            # Where the note form returns to: this page with its filters, minus "saved".
+            "back_url": request.url.remove_query_params("saved").path
+            + (f"?{request.url.remove_query_params('saved').query}" if request.url.query else ""),
+        },
+    )
+
+
+@app.post("/journal/{position_id}/note")
+async def journal_note_form(
+    position_id: int,
+    request: Request,
+    note: str = Form(""),
+    tags: str = Form(""),
+    back: str = Form(""),
+    session: Session = Depends(get_session),
+):
+    try:
+        save_note(session, position_id, note, tags)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    target = back if back.startswith("/journal") else "/journal"
+    sep = "&" if "?" in target else "?"
+    url = f"{target}{sep}saved={position_id}#trade-{position_id}"
+    return RedirectResponse(url, status_code=303)
 
 
 # -- Settings -------------------------------------------------------------------------

@@ -23,6 +23,8 @@ from app.strategy.engine import backtest, compute_series, signal_at
 from app.strategy.model import LOOKBACK_OPS, Strategy
 from app.strategy.store import load_strategy
 from app.trading import risk
+from app.trading.journal import JournalFilter, journal_entries, notes_for_claude
+from app.trading.plan import load_plan
 from app.trading.risk import RiskLimits
 from app.trading.trend import load_trend
 
@@ -604,6 +606,8 @@ class TradingEngine:
                 "stijgen om netto iets op te leveren",
             },
             "recent_performance": performance_summary(session, self.mode),
+            # The owner's own plan (goal, rules, lessons) from /plan; None when not written.
+            "trading_plan": load_plan(session).as_context(),
         }
         if self.decision_maker.available:
             try:
@@ -734,6 +738,11 @@ class TradingEngine:
                 }
                 for d in decisions[:60]
             ],
+            "trading_plan": load_plan(session).as_context(),
+            # What the owner wrote in the journal about recent trades.
+            "owner_notes": notes_for_claude(
+                journal_entries(session, self.mode, JournalFilter(days=max(days, 30)))
+            ),
         }
         result = await self.evaluator.evaluate(session, context)
         proposal_json = None
