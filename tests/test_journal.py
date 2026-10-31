@@ -275,12 +275,22 @@ def test_notes_and_tags(session):  # noqa: F811
 
 @pytest.fixture
 async def api():
-    from app.main import app
+    from sqlalchemy import delete
+
+    from app.db import Setting
+    from app.main import SessionLocal, app
+    from app.trading.plan import PLAN_KEY
 
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as c:
             yield c
+    # The in-memory database outlives the test; leave it as the other API tests expect it.
+    with SessionLocal() as s:
+        for model in (Position, Decision, Order):
+            s.execute(delete(model))
+        s.execute(delete(Setting).where(Setting.key == PLAN_KEY))
+        s.commit()
 
 
 async def test_plan_page_and_api(api):
