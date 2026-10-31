@@ -108,6 +108,28 @@ SPECS: tuple[Spec, ...] = (
         unit="minuten",
     ),
     Spec(
+        "watch_interval_min",
+        "trading",
+        "Dipbewaking: controle elke",
+        "Zodra de dip-voorwaarden van de strategie gelden (bijvoorbeeld RSI onder 35) maar de "
+        "draai nog niet, kijkt de bot zo vaak opnieuw naar die markt. Draait de indicator "
+        "weer omhoog, dan gaat de situatie meteen naar Claude. 0 zet de bewaking uit.",
+        kind="int",
+        min=0,
+        max=60,
+        unit="minuten",
+    ),
+    Spec(
+        "watch_max_min",
+        "trading",
+        "Dipbewaking: maximaal",
+        "Hoe lang een dip bewaakt wordt; daarna wacht de bot weer op de gewone cyclus.",
+        kind="int",
+        min=5,
+        max=1440,
+        unit="minuten",
+    ),
+    Spec(
         "decision_history_days",
         "trading",
         "Beslissingen tonen van de laatste",

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from app.indicators.core import Series, bollinger, ema, macd, rsi, sma
-from app.strategy.model import Condition, Strategy
+from app.strategy.model import LOOKBACK_OPS, Condition, Strategy
 
 Candle = list[float]  # [timestamp_ms, open, high, low, close, volume]
 Signal = Literal["buy", "sell", "hold"]
@@ -43,8 +43,19 @@ def _value(series: dict[str, Series], ref: str | float, i: int) -> float | None:
     return float(ref)
 
 
+def lookback_value(cond: Condition, series: dict[str, Series], i: int) -> float | None:
+    """For rising/falling: the value of ``left`` ``right`` candles earlier, else None."""
+    back = i - int(cond.right)
+    return series[cond.left][back] if back >= 0 else None
+
+
 def check_condition(cond: Condition, series: dict[str, Series], i: int) -> bool:
     left = _value(series, cond.left, i)
+    if cond.op in LOOKBACK_OPS:
+        earlier = lookback_value(cond, series, i)
+        if left is None or earlier is None:
+            return False
+        return left > earlier if cond.op == "rising" else left < earlier
     right = _value(series, cond.right, i)
     if left is None or right is None:
         return False

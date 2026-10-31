@@ -144,3 +144,30 @@ def test_soft_condition_does_not_block_the_live_signal_but_does_in_backtest():
     )
     series = compute_series(all_soft, candles)
     assert all(signal_at(all_soft, series, i) != "buy" for i in range(len(closes)))
+
+
+def test_rising_condition_compares_with_its_own_past_value():
+    closes = [10, 9, 8, 7, 6, 9, 12, 15, 18, 15, 12, 9, 6, 5]
+    candles = make_candles(closes)
+    s = Strategy.model_validate(
+        {
+            **crossover_strategy().model_dump(),
+            "buy": [{"left": "close", "op": "rising", "right": 2}],
+            "sell": [{"left": "close", "op": "falling", "right": 1}],
+        }
+    )
+    series = compute_series(s, candles)
+    signals = [signal_at(s, series, i) for i in range(len(closes))]
+    # close rising vs 2 candles ago first at index 5 (9 > 7); falling vs 1 ago at index 1.
+    assert signals[0] == "hold" and signals[1] == "sell" and signals[5] == "buy"
+    checks = explain_signal(s, series, 6)
+    assert checks["buy"][0].text == "koers stijgt t.o.v. 2 candles eerder"
+    assert (checks["buy"][0].left, checks["buy"][0].right, checks["buy"][0].ok) == (12, 6, True)
+    with pytest.raises(ValidationError):
+        Strategy.model_validate(
+            {**s.model_dump(), "buy": [{"left": "close", "op": "rising", "right": "ema50"}]}
+        )
+    with pytest.raises(ValidationError):
+        Strategy.model_validate(
+            {**s.model_dump(), "buy": [{"left": "close", "op": "rising", "right": 0}]}
+        )

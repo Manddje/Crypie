@@ -18,9 +18,9 @@ from app.bitvavo.broker import Broker
 from app.bitvavo.client import BitvavoClient
 from app.db import Decision, Evaluation, Position
 from app.news.service import market_sentiment
-from app.strategy.describe import explain_signal, signal_reason_nl
+from app.strategy.describe import ConditionCheck, explain_signal, signal_reason_nl
 from app.strategy.engine import backtest, compute_series, signal_at
-from app.strategy.model import Strategy
+from app.strategy.model import LOOKBACK_OPS, Strategy
 from app.strategy.store import load_strategy
 from app.trading import risk
 from app.trading.risk import RiskLimits
@@ -131,6 +131,39 @@ def performance_summary(session: Session, mode: str, days: int = 30) -> dict[str
 # -- engine ------------------------------------------------------------------------------
 
 
+TRAJECTORY_CANDLES = 6
+
+
+def recent_trajectory(series: dict[str, list], i: int, n: int = TRAJECTORY_CANDLES) -> dict:
+    """The last ``n`` candles of close and every indicator, oldest first, plus the 24h context.
+
+    Claude uses this to judge whether a dip is still falling or has started to turn; a single
+    indicator value cannot show that.
+    """
+    start = max(0, i - n + 1)
+    rows = {
+        k: [round(v[j], 6) if v[j] is not None else None for j in range(start, i + 1)]
+        for k, v in series.items()
+        if k not in ("open", "high", "low", "volume")
+    }
+    close = series["close"]
+    day = [c for c in close[max(0, i - 23) : i + 1] if c is not None]
+    low_24h = min(day) if day else None
+    high_24h = max(day) if day else None
+    first = day[0] if day else None
+    out: dict = {
+        "note": "oudste eerst; laatste waarde = nu",
+        "values": rows,
+        "close_change_24h_pct": round((close[i] / first - 1) * 100, 2) if first else None,
+        "close_above_low_24h_pct": round((close[i] / low_24h - 1) * 100, 2) if low_24h else None,
+        "close_below_high_24h_pct": round((1 - close[i] / high_24h) * 100, 2) if high_24h else None,
+    }
+    # Still falling? Both the price and every oscillator-like series lower than one candle ago.
+    if i >= 1 and close[i - 1] is not None:
+        out["close_falling"] = close[i] < close[i - 1]
+    return out
+
+
 @dataclass
 class CycleResult:
     market: str
@@ -157,6 +190,7 @@ class TradingEngine:
         claude_unavailable_mode: str = "hold",
         backtest_fee_pct: float = 0.25,
         fee_pct: float = 0.25,
+        watch_max_min: int = 180,
     ):
         self.client = client
         self.broker = broker
@@ -170,6 +204,11 @@ class TradingEngine:
         self.last_run: datetime | None = None
         self.last_results: list[dict[str, Any]] = []
         self.last_error: str | None = None
+        # Dip watch: markets where the dip conditions hold but the turn has not come yet.
+        self.watch_max_min = watch_max_min
+        self.watch: dict[str, dict[str, Any]] = {}
+        self.watch_cooldown: dict[str, datetime] = {}
+        self.last_watch_run: datetime | None = None
 
     @property
     def mode(self) -> str:
@@ -212,8 +251,59 @@ class TradingEngine:
         self.last_results = [r.as_dict() for r in results]
         return results
 
+    # -- dip watch --
+
+    async def run_watch(self, session: Session) -> list[CycleResult]:
+        """Re-check only the armed markets; called every WATCH_INTERVAL_MIN by the scheduler."""
+        if not self.watch:
+            return []
+        strategy = load_strategy(session)
+        markets = [m for m in self.watch if m in self.markets]
+        for stale in set(self.watch) - set(markets):
+            self.watch.pop(stale, None)
+        if not markets:
+            return []
+        prices = await self.client.ticker_prices(markets)
+        results = []
+        for market in markets:
+            try:
+                results.append(await self.run_market(session, strategy, market, prices, watch=True))
+            except Exception as exc:  # noqa: BLE001
+                log.exception("watch check failed for %s", market)
+                results.append(
+                    CycleResult(
+                        market, prices.get(market, 0.0), "error", "hold", "error", False, str(exc)
+                    )
+                )
+        self.last_watch_run = datetime.now(UTC)
+        return results
+
+    def watch_status(self) -> list[dict[str, Any]]:
+        return [
+            {"market": m, **{k: v for k, v in w.items()}} for m, w in sorted(self.watch.items())
+        ]
+
+    def _arm_state(
+        self, strategy: Strategy, checks: dict[str, list[ConditionCheck]]
+    ) -> tuple[bool, list[ConditionCheck], list[ConditionCheck]]:
+        """(dip holds, dip checks, turn checks) for the buy side.
+
+        The "dip" is every hard, non-lookback buy condition (RSI below 35); the "turn" is the
+        lookback conditions (RSI rising). A strategy without a turn condition is never armed.
+        """
+        hard = [c for c in strategy.buy if not c.soft] or list(strategy.buy)
+        pairs = [(cond, chk) for cond, chk in zip(strategy.buy, checks["buy"], strict=True)]
+        turn = [chk for cond, chk in pairs if cond.op in LOOKBACK_OPS and cond in hard]
+        dip = [chk for cond, chk in pairs if cond.op not in LOOKBACK_OPS and cond in hard]
+        return bool(turn) and bool(dip) and all(c.ok for c in dip), dip, turn
+
     async def run_market(
-        self, session: Session, strategy: Strategy, market: str, prices: dict[str, float]
+        self,
+        session: Session,
+        strategy: Strategy,
+        market: str,
+        prices: dict[str, float],
+        watch: bool = False,
     ) -> CycleResult:
         candles = await self.client.candles(market, strategy.interval, 300)
         series = compute_series(strategy, candles)
@@ -222,14 +312,63 @@ class TradingEngine:
         checks = explain_signal(strategy, series, i)
         signal_reason = signal_reason_nl(signal, checks)
         price = prices.get(market) or candles[-1][4]
+        now = datetime.now(UTC)
+        position = open_position(session, self.mode, market)
+
+        # Dip watch: arm on the dip, fire on the turn, give up after watch_max_min.
+        dip_holds, dip_checks, turn_checks = self._arm_state(strategy, checks)
+        armed = self.watch.get(market)
+        watch_triggered = False
+        if position is not None:
+            self.watch.pop(market, None)
+        elif armed is not None:
+            if signal == "buy" or all(c.ok for c in turn_checks):
+                # The turn came (the full signal, or the turn condition alone on the dip we
+                # armed on): straight to Claude.
+                watch_triggered = True
+                signal = "buy"
+                signal_reason = (
+                    "Dipbewaking: dip gezien om "
+                    + armed["since"].strftime("%H:%M")
+                    + " UTC en nu de draai: "
+                    + "; ".join(f"{c.text} ✓ ({c.values_nl})" for c in turn_checks)
+                    + ". "
+                    + signal_reason_nl("buy", checks)
+                )
+                self.watch.pop(market, None)
+            elif now - armed["since"] > timedelta(minutes=self.watch_max_min):
+                self.watch.pop(market, None)
+                log.info("dip watch %s: no turn in %s min, giving up", market, self.watch_max_min)
+            else:
+                armed["last_check"] = now
+                armed["values"] = {c.text: c.left for c in dip_checks + turn_checks}
+        elif signal == "buy":
+            pass  # a plain signal; the normal path below handles it
+        elif dip_holds and now >= self.watch_cooldown.get(market, now):
+            self.watch[market] = {
+                "since": now,
+                "last_check": now,
+                "dip": "; ".join(f"{c.text} ({c.values_nl})" for c in dip_checks),
+                "waiting_for": "; ".join(c.text for c in turn_checks),
+                "values": {c.text: c.left for c in dip_checks + turn_checks},
+            }
+            log.info("dip watch %s armed: %s", market, self.watch[market]["dip"])
+        if watch and not watch_triggered and signal != "buy":
+            # A quiet watch check: no journal entry, the hourly cycle writes those.
+            return CycleResult(
+                market, price, signal, "hold", "watch", False, "dipbewaking: nog geen draai"
+            )
+        if watch_triggered:
+            # Claude decides once per dip; do not re-arm on the same dip for a while.
+            self.watch_cooldown[market] = now + timedelta(minutes=60)
         indicators = {
             k: round(v[i], 6)
             for k, v in series.items()
             if k not in ("open", "high", "low", "volume") and v[i] is not None
         }
+        trajectory = recent_trajectory(series, i)
         coin = market.split("-")[0]
         sentiment = market_sentiment(session, coin, 48)
-        position = open_position(session, self.mode, market)
 
         decision = Decision(
             mode=self.mode,
@@ -291,6 +430,11 @@ class TradingEngine:
                 why = "positie blijft open: geen verkoopsignaal en geen zwaar negatief nieuws"
             elif signal == "sell":
                 why = "verkoopsignaal zonder open positie, niets te verkopen"
+            elif market in self.watch:
+                why = (
+                    "dip gesignaleerd, dipbewaking actief: wacht op de draai en kijkt daarvoor "
+                    "vaker dan de gewone cyclus"
+                )
             else:
                 why = "geen reden om Claude te raadplegen"
             decision.reasoning = (
@@ -312,6 +456,7 @@ class TradingEngine:
             position,
             news_entry,
             checks,
+            trajectory,
         )
         decision.source, decision.model = source, model
         decision.action, decision.confidence, decision.reasoning = action, confidence, reasoning
@@ -392,6 +537,7 @@ class TradingEngine:
         position,
         news_entry: bool = False,
         checks: dict | None = None,
+        trajectory: dict | None = None,
     ) -> tuple[str, float | None, float, str, str, str | None]:
         context = {
             "market": market,
@@ -404,6 +550,7 @@ class TradingEngine:
                 c.text for c in (checks or {}).get("buy", []) if c.soft and not c.ok
             ],
             "indicators": indicators,
+            "recent_candles": trajectory or {},
             "news": sentiment.as_dict(),
             "position": None
             if position is None

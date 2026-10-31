@@ -30,7 +30,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 INTERVALS = ("1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d")
-Operator = Literal["<", "<=", ">", ">=", "crosses_above", "crosses_below"]
+Operator = Literal["<", "<=", ">", ">=", "crosses_above", "crosses_below", "rising", "falling"]
+LOOKBACK_OPS = ("rising", "falling")  # right = number of candles to look back
 IdStr = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")]
 
 
@@ -87,6 +88,9 @@ PRICE_FIELDS = ("open", "high", "low", "close", "volume")
 class Condition(BaseModel):
     """``left op right``; both sides are a series name or (right only) a number.
 
+    ``rising`` / ``falling`` compare ``left`` with its own value ``right`` candles earlier
+    (``{"left": "rsi14", "op": "rising", "right": 1}``: the RSI turned up this candle).
+
     A ``soft`` condition is a filter rather than a requirement: the signal fires without it,
     Claude sees whether it held and trades smaller when it did not. At least one condition
     per side must be hard; if all are soft they are treated as hard.
@@ -96,6 +100,14 @@ class Condition(BaseModel):
     op: Operator
     right: str | float
     soft: bool = False
+
+    @model_validator(mode="after")
+    def _lookback_is_a_count(self) -> Condition:
+        if self.op in LOOKBACK_OPS:
+            if isinstance(self.right, str) or self.right < 1 or self.right != int(self.right):
+                raise ValueError(f"{self.op} needs a whole number of candles (1 or more) as right")
+            self.right = float(int(self.right))
+        return self
 
     @field_validator("left")
     @classmethod
@@ -135,7 +147,8 @@ class Strategy(BaseModel):
             raise ValueError("indicator ids must be unique")
         names = self.series_names()
         for cond in self.buy + self.sell:
-            for side in (cond.left, cond.right):
+            sides = (cond.left,) if cond.op in LOOKBACK_OPS else (cond.left, cond.right)
+            for side in sides:
                 if isinstance(side, str) and side not in names:
                     raise ValueError(
                         f"unknown series {side!r}; available: {', '.join(sorted(names))}"
@@ -145,9 +158,10 @@ class Strategy(BaseModel):
 
 DEFAULT_STRATEGY = Strategy(
     name="RSI dip in opwaartse trend",
-    description="Koop als RSI onder 35 duikt. Of de koers boven de EMA200 ligt (opwaartse trend) "
-    "is een zacht filter: Claude weegt het mee met het nieuws en koopt kleiner als het niet "
-    "geldt. Verkoop als RSI boven 70 komt. Stop-loss 5%.",
+    description="Koop als RSI onder 35 staat en alweer stijgt (de draai is begonnen, geen vallend "
+    "mes). Of de koers boven de EMA200 ligt (opwaartse trend) is een zacht filter: Claude weegt "
+    "het mee met het nieuws en koopt kleiner als het niet geldt. Verkoop als RSI boven 70 komt. "
+    "Stop-loss 5%.",
     market="BTC-EUR",
     interval="1h",
     indicators=[
@@ -156,6 +170,7 @@ DEFAULT_STRATEGY = Strategy(
     ],
     buy=[
         Condition(left="rsi14", op="<", right=35),
+        Condition(left="rsi14", op="rising", right=1),
         Condition(left="close", op=">", right="ema200", soft=True),
     ],
     sell=[Condition(left="rsi14", op=">", right=70)],

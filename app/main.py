@@ -114,6 +114,9 @@ def apply_settings(app: FastAPI, new: Settings) -> None:
     engine.claude_unavailable_mode = new.claude_unavailable_mode
     engine.backtest_fee_pct = new.backtest_fee_pct
     engine.fee_pct = new.trading_fee_pct
+    engine.watch_max_min = new.watch_max_min
+    if new.watch_interval_min <= 0:
+        engine.watch.clear()
     if isinstance(state.broker, PaperBroker):
         state.broker.fee_pct = new.trading_fee_pct
     engine.decision_maker.model = new.claude_model_decision
@@ -199,12 +202,14 @@ async def lifespan(app: FastAPI):
         settings.claude_unavailable_mode,
         settings.backtest_fee_pct,
         settings.trading_fee_pct,
+        settings.watch_max_min,
     )
     # The schedulers read the interval and on/off switch from app.state.settings on every
     # tick, so a change in the portal takes effect within a tick, without a restart.
     tasks = [
         asyncio.create_task(news_scheduler(app)),
         asyncio.create_task(trading_scheduler(app)),
+        asyncio.create_task(watch_scheduler(app)),
         asyncio.create_task(evaluation_scheduler(app)),
     ]
     try:
@@ -278,6 +283,27 @@ async def trading_scheduler(app: FastAPI) -> None:
         job,
         lambda s: s.trade_interval_min * 60 if s.trading_enabled else 0,
         initial_delay=20,  # let news land first
+    )
+
+
+async def watch_scheduler(app: FastAPI) -> None:
+    """Re-check markets in dip watch every WATCH_INTERVAL_MIN minutes (only while any is armed)."""
+
+    async def job(session: Session) -> None:
+        engine: TradingEngine = app.state.engine
+        if engine.watch:
+            results = await engine.run_watch(session)
+            log.info("dip watch: %s", [r.as_dict() for r in results])
+
+    await _run_periodically(
+        app,
+        "dip watch",
+        job,
+        lambda s: (
+            s.watch_interval_min * 60 if s.trading_enabled and s.watch_interval_min > 0 else 0
+        ),
+        initial_delay=60,
+        run_at_start=False,
     )
 
 
@@ -726,6 +752,10 @@ def _trading_status(engine: TradingEngine, session: Session, settings: Settings)
         "interval_min": settings.trade_interval_min,
         "limits": engine.limits.__dict__,
         "fee_pct": engine.fee_pct,
+        "watch": engine.watch_status(),
+        "watch_interval_min": settings.watch_interval_min,
+        "watch_max_min": settings.watch_max_min,
+        "last_watch_run": engine.last_watch_run,
         "claude_available": engine.decision_maker.available,
         "last_run": engine.last_run,
         "last_results": engine.last_results,

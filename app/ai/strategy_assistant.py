@@ -25,6 +25,9 @@ Regels:
   met "soft": true is een zacht filter: het signaal ontstaat ook zonder, Claude ziet of het
   gold en handelt kleiner als dat niet zo is. Gebruik dat voor trendfilters (koers boven een
   EMA) als de gebruiker ook in een daling wil kunnen kopen; minstens één conditie blijft hard.
+- Operators: <, <=, >, >=, crosses_above, crosses_below, rising, falling. Bij rising/falling is
+  "right" het aantal candles terug: {"left": "rsi14", "op": "rising", "right": 1} betekent dat
+  de RSI hoger is dan één candle eerder (bevestiging dat een dip draait, geen vallend mes).
 - Verwijs in condities alleen naar series die je ook definieert.
 - Houd de markt op een van de toegestane markten; interval standaard "1h" tenzij gevraagd.
 - Wees conservatief: voeg een stop_loss_pct toe als de gebruiker er niets over zegt.

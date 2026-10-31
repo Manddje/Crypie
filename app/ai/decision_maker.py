@@ -40,6 +40,10 @@ Spelregels:
 - Transactiekosten tellen: "costs" geeft de fee per kant en wat een rondje kopen+verkopen
   samen kost. Een trade is pas zinvol als de verwachte beweging daar ruim boven ligt; de
   genoemde winsten en unrealized_net_pct zijn al netto na kosten.
+- Koop niet in een vallend mes. recent_candles toont de laatste candles (oudste eerst):
+  dalen koers en oscillatoren (zoals RSI) nog steeds en staat de koers vlak bij het 24-uurs
+  dieptepunt, dan is "hold" de keuze en wacht je een cyclus op een draai. Alleen sterk positief
+  nieuws van hoge impact rechtvaardigt eerder instappen, en dan met een kleiner bedrag.
 - Bij twijfel: "hold". Niet handelen kost niets, een slechte trade wel.
 - reasoning_nl: twee tot vier zinnen Nederlands met de doorslaggevende argumenten.
 """

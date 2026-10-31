@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.strategy.engine import Series, _value
-from app.strategy.model import Condition, Strategy
+from app.strategy.engine import Series, _value, lookback_value
+from app.strategy.model import LOOKBACK_OPS, Condition, Strategy
 
 OPERATORS_NL = {
     "<": "lager dan",
@@ -14,6 +14,8 @@ OPERATORS_NL = {
     ">=": "minstens",
     "crosses_above": "kruist omhoog door",
     "crosses_below": "kruist omlaag door",
+    "rising": "stijgt t.o.v.",
+    "falling": "daalt t.o.v.",
 }
 
 SERIES_NL = {
@@ -47,7 +49,12 @@ def format_value(value: float, threshold: bool = False) -> str:
 
 def condition_nl(cond: Condition) -> str:
     """'rsi14 lager dan 30', 'koers kruist omhoog door ema50 (zacht filter)'."""
-    text = f"{series_nl(cond.left)} {OPERATORS_NL.get(cond.op, cond.op)} {series_nl(cond.right)}"
+    if cond.op in LOOKBACK_OPS:
+        n = int(cond.right)
+        right = "1 candle eerder" if n == 1 else f"{n} candles eerder"
+    else:
+        right = series_nl(cond.right)
+    text = f"{series_nl(cond.left)} {OPERATORS_NL.get(cond.op, cond.op)} {right}"
     return f"{text} (zacht filter)" if cond.soft else text
 
 
@@ -85,7 +92,10 @@ def check_conditions(
     out = []
     for cond in conditions:
         left = _value(series, cond.left, i)
-        right = _value(series, cond.right, i)
+        if cond.op in LOOKBACK_OPS:
+            right = lookback_value(cond, series, i)  # show what it is compared with
+        else:
+            right = _value(series, cond.right, i)
         out.append(
             ConditionCheck(
                 condition_nl(cond), left, right, check_condition(cond, series, i), cond.soft

@@ -115,6 +115,14 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    buy-signaal, of zonder signaal op sterk positief nieuws van hoge impact (**news entry**, dan maximaal de
    helft van `MAX_TRADE_EUR`); verkopen bij een sell-signaal of als news exit. Slecht nieuws is voor de bot
    nooit een reden om "de dip te kopen".
+   **Dipbewaking**: gelden de harde koopvoorwaarden behalve de `rising`/`falling`-bevestiging (de dip is er,
+   de draai nog niet), dan controleert de bot die markt elke `WATCH_INTERVAL_MIN` minuten (standaard 5, 0 = uit)
+   in plaats van eens per cyclus, zonder journaalregels. Zodra de bevestiging komt gaat de situatie meteen naar
+   Claude; na `WATCH_MAX_MIN` minuten (standaard 180) zonder draai stopt de bewaking. Beide instelbaar in het portaal.
+   Operators `rising`/`falling` vergelijken een serie met zichzelf `right` candles eerder
+   (`{"left": "rsi14", "op": "rising", "right": 1}`: de RSI draait omhoog), zodat een dip pas gekocht wordt als
+   de draai begonnen is. Claude krijgt daarnaast `recent_candles` (laatste 6 candles van koers en indicatoren,
+   24-uurs verandering en afstand tot het dieptepunt) met de instructie niet in een nog dalende koers te kopen.
    Een voorwaarde met `"soft": true` is een **zacht filter**: het signaal ontstaat ook als het niet geldt,
    Claude ziet dat in `signal_checks` en `soft_filters_failed` en koopt dan hoogstens de helft van
    `MAX_TRADE_EUR`. De standaardstrategie gebruikt dat voor de EMA200-trendfilter, zodat een RSI-dip in een
