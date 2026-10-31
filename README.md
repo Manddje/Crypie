@@ -32,12 +32,16 @@ pytest
 
 ## Deployen op Coolify
 
-1. Nieuwe resource: **Docker Compose** vanuit deze Git-repository, bestand `docker-compose.yml`.
+1. Nieuwe resource: **Docker Compose** vanuit deze Git-repository (branch `main`), bestand
+   `docker-compose.yaml`. Alle instellingen uit `.env.example` worden via `${VAR:-default}` aan de
+   `app`-service doorgegeven, dus elke variabele die je in Coolify zet komt in de container terecht.
 2. Zet in de Coolify-omgeving minimaal `POSTGRES_PASSWORD` (sterk wachtwoord) en `TRADING_MODE=paper`.
-3. Voeg `BITVAVO_API_KEY` en `BITVAVO_API_SECRET` toe. Begin met een key met alleen **view**-rechten;
-   **trade**-rechten pas bij live gaan. Zet in Bitvavo een IP-whitelist op het Coolify-serveradres.
-4. Koppel een domein aan de `app`-service op poort 8000. Zet het dashboard achter Coolify's
-   basic-auth of een eigen login voordat je naar live gaat.
+3. Voeg `BITVAVO_API_KEY`, `BITVAVO_API_SECRET` en `ANTHROPIC_API_KEY` toe. Begin met een
+   Bitvavo-key met alleen **view**-rechten; **trade**-rechten pas bij live gaan. Zet in Bitvavo een
+   IP-whitelist op het Coolify-serveradres.
+4. Koppel een domein aan de `app`-service op poort 8000 (de poort wordt niet op de host gepubliceerd;
+   alleen Coolify's proxy komt erbij). Zet het dashboard achter Coolify's basic-auth of een eigen
+   login voordat je naar live gaat.
 
 ## Strategie en indicatoren
 

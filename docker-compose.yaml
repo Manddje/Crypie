@@ -1,0 +1,66 @@
+# Works locally with `docker compose up` and as a Docker Compose resource in Coolify.
+# Coolify writes the variables from its UI to a .env that is used for the ${VAR:-default}
+# substitutions below; locally they come from .env. Every setting the app reads is listed
+# here so a value set in Coolify always reaches the container.
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      TRADING_MODE: ${TRADING_MODE:-paper}
+      BITVAVO_API_KEY: ${BITVAVO_API_KEY:-}
+      BITVAVO_API_SECRET: ${BITVAVO_API_SECRET:-}
+      MARKETS: ${MARKETS:-BTC-EUR,ETH-EUR}
+      PAPER_START_EUR: ${PAPER_START_EUR:-1000}
+      DATABASE_URL: postgresql+psycopg://crypie:${POSTGRES_PASSWORD:-crypie}@db:5432/crypie
+      # Claude
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_MONTHLY_BUDGET_USD: ${CLAUDE_MONTHLY_BUDGET_USD:-100}
+      CLAUDE_MODEL_STRATEGY: ${CLAUDE_MODEL_STRATEGY:-claude-opus-5-5}
+      CLAUDE_MODEL_DECISION: ${CLAUDE_MODEL_DECISION:-claude-sonnet-5-5}
+      CLAUDE_MODEL_NEWS: ${CLAUDE_MODEL_NEWS:-claude-haiku-5-5}
+      CLAUDE_MODEL_EVALUATION: ${CLAUDE_MODEL_EVALUATION:-claude-fable-5-1}
+      BACKTEST_FEE_PCT: ${BACKTEST_FEE_PCT:-0.25}
+      # News
+      NEWS_ENABLED: ${NEWS_ENABLED:-true}
+      NEWS_FETCH_INTERVAL_MIN: ${NEWS_FETCH_INTERVAL_MIN:-15}
+      NEWS_RSS_FEEDS: ${NEWS_RSS_FEEDS:-}
+      GDELT_ENABLED: ${GDELT_ENABLED:-true}
+      CRYPTOPANIC_TOKEN: ${CRYPTOPANIC_TOKEN:-}
+      CRYPTOPANIC_PLAN: ${CRYPTOPANIC_PLAN:-growth}
+      # Trading limits (hard limits, enforced in code)
+      TRADING_ENABLED: ${TRADING_ENABLED:-true}
+      TRADE_INTERVAL_MIN: ${TRADE_INTERVAL_MIN:-60}
+      MAX_TRADE_EUR: ${MAX_TRADE_EUR:-100}
+      MAX_EXPOSURE_PCT: ${MAX_EXPOSURE_PCT:-50}
+      DAILY_LOSS_LIMIT_PCT: ${DAILY_LOSS_LIMIT_PCT:-5}
+      MAX_TRADES_PER_DAY: ${MAX_TRADES_PER_DAY:-6}
+      COOLDOWN_MIN_AFTER_STOP: ${COOLDOWN_MIN_AFTER_STOP:-240}
+      CLAUDE_UNAVAILABLE_MODE: ${CLAUDE_UNAVAILABLE_MODE:-hold}
+      EVALUATION_INTERVAL_HOURS: ${EVALUATION_INTERVAL_HOURS:-168}
+      LIVE_TRADING_ACK: ${LIVE_TRADING_ACK:-false}
+    # Only exposed inside the Docker network; Coolify's proxy routes the domain to this port.
+    # Locally docker-compose.override.yaml publishes it on localhost:8000.
+    expose:
+      - "8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: crypie
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crypie}
+      POSTGRES_DB: crypie
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crypie -d crypie"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

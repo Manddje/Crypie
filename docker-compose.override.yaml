@@ -1,0 +1,6 @@
+# Picked up automatically by `docker compose up` for local development only.
+# Coolify reads docker-compose.yaml alone, so the app is never published on a host port there.
+services:
+  app:
+    ports:
+      - "8000:8000"
