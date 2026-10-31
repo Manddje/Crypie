@@ -1,0 +1,16 @@
+{% extends "auth/_base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Herstelcodes{% endblock %}
+{% block content %}
+<h1>Herstelcodes</h1>
+<p class="auth-sub">{{ "Je authenticator is gekoppeld." if fresh else "Je oude herstelcodes werken niet meer." }}</p>
+{{ ui.notice("warn", "Bewaar deze codes op een veilige plek, bijvoorbeeld in je wachtwoordmanager. Ze worden maar één keer getoond.") }}
+<p class="muted">Als je telefoon kwijt is, kun je met een herstelcode toch inloggen. Elke code werkt één keer.</p>
+<ul class="recovery-codes">
+  {% for c in codes %}<li class="mono">{{ c }}</li>{% endfor %}
+</ul>
+<div class="actions">
+  <button class="btn" type="button" onclick="navigator.clipboard && navigator.clipboard.writeText({{ codes|join('\n')|tojson }}).then(function(){ this.textContent='Gekopieerd' }.bind(this))">Kopiëren</button>
+  <a class="btn btn-primary" href="{{ next }}">Ik heb ze opgeslagen</a>
+</div>
+{% endblock %}

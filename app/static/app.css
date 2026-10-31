@@ -520,3 +520,27 @@ footer.site {
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* -- Login flow ------------------------------------------------------------------------ */
+.auth-body { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
+.auth-wrap { width: 100%; max-width: 420px; padding: 24px 16px; display: flex; flex-direction: column; gap: 18px; align-items: stretch; }
+.auth-brand { display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 700; font-size: 20px; letter-spacing: -0.02em; }
+.auth-brand svg { width: 32px; height: 32px; }
+.auth-card h1 { font-size: 24px; margin-bottom: 2px; }
+.auth-sub { color: var(--text-2); font-size: 14px; margin-bottom: 18px; }
+.auth-form { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
+.auth-form input { width: 100%; }
+.auth-form .actions { margin-top: 2px; }
+.btn-block { width: 100%; justify-content: center; }
+.code-input { font-family: var(--mono); font-size: 22px; letter-spacing: 0.25em; text-align: center; }
+.auth-steps { margin: 0 0 14px 20px; color: var(--text-2); font-size: 14px; line-height: 1.5; }
+.auth-steps li + li { margin-top: 6px; }
+.qr { display: flex; justify-content: center; padding: 14px; border-radius: var(--radius-sm); background: #fff; color: #000; }
+.qr svg { width: 200px; height: 200px; display: block; }
+.auth-details { margin-top: 14px; font-size: 14px; }
+.auth-details summary { cursor: pointer; color: var(--accent); }
+.auth-details p { margin-top: 8px; }
+.auth-secret { font-size: 15px; letter-spacing: 0.08em; word-break: break-all; user-select: all; }
+.recovery-codes { list-style: none; padding: 0; margin: 14px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.recovery-codes li { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--fill); font-size: 15px; text-align: center; user-select: all; }
+.auth-below { display: flex; justify-content: center; }

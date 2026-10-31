@@ -1,0 +1,23 @@
+{% extends "auth/_base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Verificatiecode{% endblock %}
+{% block content %}
+<h1>Verificatiecode</h1>
+<p class="auth-sub">Stap 2 van 2 · authenticator-app</p>
+{% if error %}{{ ui.notice("error", error) }}{% endif %}
+<p class="muted">Open je authenticator-app en voer de 6-cijferige code voor Crypie in.</p>
+<form method="post" action="/login/mfa" class="auth-form">
+  <input type="hidden" name="next" value="{{ next }}">
+  <label>Code
+    <input class="code-input" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}|[a-zA-Z0-9-]{10,11}" placeholder="123 456" required autofocus>
+  </label>
+  <button class="btn btn-primary btn-block" type="submit">Inloggen</button>
+</form>
+<details class="auth-details">
+  <summary>Geen toegang tot je authenticator-app?</summary>
+  <p class="small muted">Voer hierboven een van je herstelcodes in (zoals <span class="mono">abcde-fghjk</span>). Elke herstelcode werkt één keer. Stel daarna via Account een nieuwe authenticator in.</p>
+</details>
+{% endblock %}
+{% block below %}
+<form method="post" action="/logout" class="auth-below"><button class="btn btn-sm" type="submit">Terug naar inloggen</button></form>
+{% endblock %}

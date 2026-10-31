@@ -1,0 +1,28 @@
+{% extends "auth/_base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Authenticator instellen{% endblock %}
+{% block content %}
+<h1>{{ "Nieuwe authenticator" if reenrol else "Authenticator instellen" }}</h1>
+<p class="auth-sub">{{ "Vervangt de huidige koppeling en je herstelcodes" if reenrol else "Eenmalig, voor je eerste login" }}</p>
+{% if error %}{{ ui.notice("error", error) }}{% endif %}
+<ol class="auth-steps">
+  <li>Open een authenticator-app op je telefoon, bijvoorbeeld Google Authenticator, Microsoft Authenticator, 1Password of Apple Wachtwoorden.</li>
+  <li>Scan deze QR-code.</li>
+</ol>
+<div class="qr">{{ qr_svg|safe }}</div>
+<details class="auth-details">
+  <summary>Scannen lukt niet? Voer de sleutel handmatig in</summary>
+  <p class="mono auth-secret">{{ secret_pretty }}</p>
+  <p class="small muted">Type: op tijd gebaseerd (TOTP), 6 cijfers, 30 seconden.</p>
+</details>
+<form method="post" action="/login/mfa/setup" class="auth-form">
+  <input type="hidden" name="next" value="{{ next }}">
+  <label>3. Voer de code in die de app nu toont
+    <input class="code-input" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" placeholder="123 456" required autofocus>
+  </label>
+  <button class="btn btn-primary btn-block" type="submit">Bevestigen</button>
+</form>
+{% endblock %}
+{% block below %}
+<form method="post" action="/logout" class="auth-below"><button class="btn btn-sm" type="submit">Annuleren</button></form>
+{% endblock %}

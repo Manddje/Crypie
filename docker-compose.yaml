@@ -44,6 +44,13 @@ services:
       CLAUDE_UNAVAILABLE_MODE: ${CLAUDE_UNAVAILABLE_MODE:-hold}
       EVALUATION_INTERVAL_HOURS: ${EVALUATION_INTERVAL_HOURS:-168}
       LIVE_TRADING_ACK: ${LIVE_TRADING_ACK:-false}
+      # Login (password + authenticator app). Set AUTH_PASSWORD or AUTH_PASSWORD_HASH.
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
+      AUTH_USERNAME: ${AUTH_USERNAME:-admin}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      AUTH_PASSWORD_HASH: ${AUTH_PASSWORD_HASH:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      AUTH_SESSION_HOURS: ${AUTH_SESSION_HOURS:-24}
     # Only exposed inside the Docker network; Coolify's proxy routes the domain to this port.
     expose:
       - "8000"

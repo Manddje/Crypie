@@ -1,0 +1,18 @@
+{% extends "auth/_base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Inloggen{% endblock %}
+{% block content %}
+<h1>Inloggen</h1>
+<p class="auth-sub">Stap 1 van 2 · wachtwoord</p>
+{% if error %}{{ ui.notice("error", error) }}{% endif %}
+<form method="post" action="/login" class="auth-form">
+  <input type="hidden" name="next" value="{{ next }}">
+  <label>Gebruikersnaam
+    <input type="text" name="username" value="{{ username }}" autocomplete="username" autocapitalize="off" spellcheck="false" required autofocus>
+  </label>
+  <label>Wachtwoord
+    <input type="password" name="password" autocomplete="current-password" required>
+  </label>
+  <button class="btn btn-primary btn-block" type="submit">Verder</button>
+</form>
+{% endblock %}

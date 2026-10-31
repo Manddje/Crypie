@@ -19,6 +19,9 @@ from app.ai.decision_maker import DecisionMaker
 from app.ai.evaluator import Evaluator
 from app.ai.news_analyst import NewsAnalyst
 from app.ai.strategy_assistant import StrategyAssistant
+from app.auth.routes import new_session_secret, require_login
+from app.auth.routes import router as auth_router
+from app.auth.service import AuthService
 from app.bitvavo.broker import Broker, LiveBroker, PaperBroker, recent_orders
 from app.bitvavo.client import BitvavoClient, BitvavoError
 from app.config import Settings, get_settings
@@ -52,6 +55,20 @@ def build_broker(settings: Settings, client: BitvavoClient) -> Broker:
     return PaperBroker(client, settings.paper_start_eur)
 
 
+def build_auth(settings: Settings) -> AuthService | None:
+    """Login is on unless AUTH_ENABLED=false. Without SESSION_SECRET, restarts log everyone out."""
+    if not settings.auth_enabled:
+        log.warning("AUTH_ENABLED=false: the dashboard is reachable without logging in")
+        return None
+    secret = settings.session_secret
+    if not secret:
+        log.warning("SESSION_SECRET is not set; sessions will not survive a restart")
+        secret = new_session_secret()
+    if not settings.auth_configured:
+        log.warning("AUTH_PASSWORD is not set; every page shows how to configure the login")
+    return AuthService(settings, secret)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -60,6 +77,7 @@ async def lifespan(app: FastAPI):
         settings.bitvavo_api_key, settings.bitvavo_api_secret, settings.bitvavo_rest_url
     )
     app.state.settings = settings
+    app.state.auth = build_auth(settings)
     app.state.client = client
     app.state.broker = build_broker(settings, client)
     app.state.budget = BudgetGuard(settings.claude_monthly_budget_usd)
@@ -138,6 +156,8 @@ async def news_scheduler(service: NewsService, interval_min: int) -> None:
 
 app = FastAPI(title="Crypie", version="0.1.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+app.middleware("http")(require_login)
+app.include_router(auth_router)
 
 
 async def trading_scheduler(engine: TradingEngine, interval_min: int) -> None:
