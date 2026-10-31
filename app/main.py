@@ -28,7 +28,13 @@ from app.bitvavo.broker import PAPER_WALLET_KEY, Broker, LiveBroker, PaperBroker
 from app.bitvavo.client import BitvavoClient, BitvavoError
 from app.config import Settings, get_settings
 from app.db import Evaluation, SessionLocal, Setting, get_session, init_db
-from app.news.service import NewsService, load_market_mood, market_sentiment, recent_items
+from app.news.service import (
+    NewsService,
+    load_market_mood,
+    market_sentiment,
+    recent_items,
+    requeue_items_without_event_key,
+)
 from app.news.sources import NewsFetcher
 from app.settings_store import SettingsError
 from app.strategy.engine import backtest, latest_snapshot
@@ -148,6 +154,9 @@ async def lifespan(app: FastAPI):
     app.state.auth = build_auth(env)
     with SessionLocal() as session:
         settings = cfg.effective_settings(session, env)
+        requeued = requeue_items_without_event_key(session)
+        if requeued:
+            log.info("news: %d items re-queued for an event key", requeued)
     client = BitvavoClient(env.bitvavo_api_key, env.bitvavo_api_secret, env.bitvavo_rest_url)
     app.state.client = client
     if client.authenticated:

@@ -8,11 +8,11 @@ import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai.budget import BudgetExceeded
-from app.ai.news_analyst import NewsAnalyst, apply_assessments
+from app.ai.news_analyst import NewsAnalyst, apply_assessments, normalize_key
 from app.db import NewsItem, Setting
 from app.news.sources import NewsFetcher, RawItem
 
@@ -90,13 +90,55 @@ def recent_items(session: Session, hours: int = 24, limit: int = 100) -> list[Ne
     )
 
 
+def event_key_for(item: NewsItem) -> str:
+    """Claude's event key, or the normalised title for items assessed before keys existed."""
+    return item.event_key or ("title:" + normalize_key(item.title))
+
+
+def requeue_items_without_event_key(session: Session, hours: int = 48) -> int:
+    """Send relevant items assessed before event keys existed back to Claude once.
+
+    Only items that still count in the sentiment (relevant, recent) are re-queued; irrelevant
+    ones never need a key. Idempotent: after re-assessment every item has a key.
+    """
+    cutoff = datetime.now(UTC) - timedelta(hours=hours)
+    rows = session.scalars(
+        select(NewsItem).where(
+            NewsItem.assessed.is_(True),
+            NewsItem.relevant.is_(True),
+            NewsItem.event_key.is_(None),
+            NewsItem.published_at >= cutoff,
+        )
+    ).all()
+    for it in rows:
+        it.assessed = False
+    session.commit()
+    return len(rows)
+
+
+def recent_event_keys(
+    session: Session, hours: int = 48, limit: int = 40, now: datetime | None = None
+) -> list[str]:
+    """Most-used event keys of the last ``hours``, so Claude reuses them for new items."""
+    cutoff = (now or datetime.now(UTC)) - timedelta(hours=hours)
+    rows = session.execute(
+        select(NewsItem.event_key, func.count(NewsItem.id))
+        .where(NewsItem.event_key.is_not(None), NewsItem.published_at >= cutoff)
+        .group_by(NewsItem.event_key)
+        .order_by(func.count(NewsItem.id).desc())
+        .limit(limit)
+    ).all()
+    return [key for key, _ in rows]
+
+
 @dataclass
 class MarketSentiment:
     coin: str
     score: float  # -1 .. 1, impact-weighted and time-decayed
     items: int
     high_impact: int
-    top: list[NewsItem]
+    top: list[NewsItem]  # the lead article per news fact; ``sources`` = how many outlets ran it
+    articles: int = 0  # ``items`` counts news facts; this counts the articles behind them
 
     def label(self) -> str:
         if self.items == 0:
@@ -117,10 +159,12 @@ class MarketSentiment:
             "score": round(self.score, 3),
             "label": self.label(),
             "items": self.items,
+            "articles": self.articles,
             "high_impact": self.high_impact,
             "top": [
                 {
                     "title": t.title,
+                    "sources": getattr(t, "sources", 1),
                     "summary_nl": t.summary_nl,
                     "sentiment": t.sentiment,
                     "impact": t.impact,
@@ -138,7 +182,12 @@ HORIZON_HALF_LIFE_H = {"hours": 6.0, "days": 36.0, "weeks": 168.0}
 def market_sentiment(
     session: Session, coin: str, hours: int = 48, now: datetime | None = None
 ) -> MarketSentiment:
-    """Impact-weighted, time-decayed average sentiment of relevant news for one coin."""
+    """Impact-weighted, time-decayed average sentiment of relevant news for one coin.
+
+    Articles about the same news fact (same event key) are folded into one event first, so a
+    hack that twelve outlets report weighs like one hack, not twelve. The event takes the
+    highest impact and the average sentiment of its articles, and ages from its newest article.
+    """
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(hours=hours)
     rows = session.scalars(
@@ -148,32 +197,43 @@ def market_sentiment(
             NewsItem.published_at >= cutoff,
         )
     ).all()
-    weighted = 0.0
-    total_w = 0.0
-    count = 0
-    high = 0
-    scored: list[tuple[float, NewsItem]] = []
+    events: dict[str, list[NewsItem]] = {}
     for it in rows:
         coins = it.coin_list()
         if coin not in coins and "ALL" not in coins:
             continue
         if not it.impact or it.sentiment is None:
             continue
-        published = (
-            it.published_at if it.published_at.tzinfo else it.published_at.replace(tzinfo=UTC)
-        )
-        age_h = max((now - published).total_seconds() / 3600, 0.0)
-        half_life = HORIZON_HALF_LIFE_H.get(it.horizon or "days", 36.0)
+        events.setdefault(event_key_for(it), []).append(it)
+
+    weighted = 0.0
+    total_w = 0.0
+    high = 0
+    articles = 0
+    scored: list[tuple[float, NewsItem]] = []
+    for members in events.values():
+        lead = max(members, key=lambda m: (m.impact or 0, _published(m)))
+        impact = lead.impact or 0
+        sentiment = sum(m.sentiment or 0.0 for m in members) / len(members)
+        age_h = max((now - max(_published(m) for m in members)).total_seconds() / 3600, 0.0)
+        half_life = HORIZON_HALF_LIFE_H.get(lead.horizon or "days", 36.0)
         decay = math.exp(-math.log(2) * age_h / half_life)
-        w = it.impact * decay
-        weighted += it.sentiment * w
+        w = impact * decay
+        weighted += sentiment * w
         total_w += w
-        count += 1
-        high += 1 if it.impact >= 2 else 0
-        scored.append((w, it))
+        high += 1 if impact >= 2 else 0
+        articles += len(members)
+        lead.sources = len(members)  # type: ignore[attr-defined]  # shown as "n bronnen"
+        scored.append((w, lead))
     scored.sort(key=lambda x: -x[0])
     score = weighted / total_w if total_w > 0 else 0.0
-    return MarketSentiment(coin, score, count, high, [it for _, it in scored[:5]])
+    return MarketSentiment(
+        coin, score, len(events), high, [it for _, it in scored[:5]], articles=articles
+    )
+
+
+def _published(item: NewsItem) -> datetime:
+    return item.published_at if item.published_at.tzinfo else item.published_at.replace(tzinfo=UTC)
 
 
 class NewsService:
@@ -209,7 +269,9 @@ class NewsService:
                 if not batch:
                     break
                 try:
-                    results = await self.analyst.assess(session, batch, self.coins)
+                    results = await self.analyst.assess(
+                        session, batch, self.coins, known_keys=recent_event_keys(session)
+                    )
                 except BudgetExceeded as exc:
                     self.last_error = str(exc)
                     log.warning("News assessment stopped: %s", exc)

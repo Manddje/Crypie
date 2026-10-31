@@ -98,8 +98,11 @@ Een achtergrondtaak haalt elke `NEWS_FETCH_INTERVAL_MIN` minuten nieuws op en la
 Nieuwe berichten (ontdubbeld op URL, maximaal `NEWS_MAX_AGE_HOURS` oud) gaan in batches van
 `NEWS_BATCH_SIZE` naar Claude (`CLAUDE_MODEL_NEWS`, standaard Haiku 5.5). Per bericht komt terug:
 relevant ja/nee, sentiment (-1 tot 1), impact (0 tot 3), horizon (uren/dagen/weken), geraakte coins en
-een Nederlandse samenvatting. Per coin wordt daaruit een **marktsentiment** berekend: gewogen op impact en
-met vervaltijd per horizon (6 uur, 36 uur, 1 week halfwaardetijd). Dit sentiment is de input voor de
+een Nederlandse samenvatting, plus een `event_key` voor het nieuwsfeit (bijvoorbeeld `binance-hack`), zodat
+berichten van verschillende bronnen over hetzelfde feit bij elkaar horen; Claude krijgt de sleutels van de laatste
+48 uur mee om ze te hergebruiken. Per coin wordt daaruit een **marktsentiment** berekend **per nieuwsfeit** (niet
+per bericht: tien bronnen over één hack wegen als één hack, met de hoogste impact en het gemiddelde sentiment
+van die berichten): gewogen op impact en met vervaltijd per horizon (6 uur, 36 uur, 1 week halfwaardetijd). Dit sentiment is de input voor de
 handelsbeslissing in stap 4. Pagina **/news** toont alles; API: `GET /api/news`, `GET /api/news/sentiment`,
 `POST /api/news/refresh`.
 
