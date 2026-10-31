@@ -67,8 +67,7 @@ def _item(session, title, sentiment, impact, coins, hours_ago, horizon="days", r
 
 
 def test_market_sentiment_weights_impact_and_recency(session):
-    # Market-wide news reaches coins without their own items too.
-    assert market_sentiment(session, "XRP", 48, NOW).label() == "negatief"
+    assert market_sentiment(session, "XRP", 48, NOW).label() == "geen nieuws"
     _item(session, "hack", -1.0, 3, "ALL", hours_ago=1)
     _item(session, "etf", 1.0, 1, "BTC", hours_ago=1)
     _item(session, "eth-only", 1.0, 3, "ETH", hours_ago=1)
@@ -92,7 +91,8 @@ def test_market_sentiment_weights_impact_and_recency(session):
     assert sol.items == 3
     assert sol.score == pytest.approx((-3 + 1.5 - w_hack) / (4.5 + w_hack), abs=0.001)
 
-    assert market_sentiment(session, "XRP", 48, NOW).label() == "geen nieuws"
+    # Market-wide news reaches coins without their own items too.
+    assert market_sentiment(session, "XRP", 48, NOW).label() == "negatief"
 
 
 class FakeMessages:
