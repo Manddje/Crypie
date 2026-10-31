@@ -138,18 +138,18 @@ class Strategy(BaseModel):
 
 
 DEFAULT_STRATEGY = Strategy(
-    name="RSI mean reversion",
-    description="Koop als RSI onder 30 duikt terwijl de koers boven de EMA50 ligt; "
-    "verkoop als RSI boven 70 komt. Stop-loss 5%.",
+    name="RSI dip in opwaartse trend",
+    description="Koop als RSI onder 35 duikt terwijl de koers boven de EMA200 ligt (dip in een "
+    "opwaartse trend); verkoop als RSI boven 70 komt. Stop-loss 5%.",
     market="BTC-EUR",
     interval="1h",
     indicators=[
         RsiSpec(type="rsi", id="rsi14", period=14),
-        EmaSpec(type="ema", id="ema50", period=50),
+        EmaSpec(type="ema", id="ema200", period=200),
     ],
     buy=[
-        Condition(left="rsi14", op="<", right=30),
-        Condition(left="close", op=">", right="ema50"),
+        Condition(left="rsi14", op="<", right=35),
+        Condition(left="close", op=">", right="ema200"),
     ],
     sell=[Condition(left="rsi14", op=">", right=70)],
     stop_loss_pct=5,

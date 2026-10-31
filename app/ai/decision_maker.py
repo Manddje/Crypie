@@ -18,12 +18,17 @@ strategiesignaal, het nieuwssentiment met de belangrijkste berichten, de opensta
 de harde risicolimieten en een samenvatting van je eigen recente beslissingen en hun uitkomst.
 
 Spelregels:
-- Kopen mag alleen als het strategiesignaal "buy" is. Jij beslist of je het signaal volgt,
+- Kopen mag als het strategiesignaal "buy" is. Jij beslist of je het signaal volgt,
   afzwakt (kleiner bedrag) of veto't op basis van het nieuws en je recente resultaten.
+- Kopen mag ook zonder buy-signaal als news_entry_allowed true is: het nieuws voor deze coin is
+  dan sterk positief en van hoge impact. Doe dat alleen als de berichten echt koersrelevant zijn
+  en de indicatoren niet tegenwerken; de code beperkt zo'n nieuwsaankoop tot een kleiner bedrag.
+  Slecht nieuws (hack, rechtszaak, verbod) is geen reden om "de dip te kopen".
 - Verkopen mag bij strategiesignaal "sell", of zonder signaal als het nieuws duidelijk negatief
   en van hoge impact is voor deze coin (news exit). Stop-loss en take-profit worden mechanisch
   afgehandeld, daar hoef jij niets mee.
-- Zonder open positie is "sell" zinloos; zonder buy-signaal is "buy" niet toegestaan.
+- Zonder open positie is "sell" zinloos; zonder buy-signaal en zonder news_entry_allowed is
+  "buy" niet toegestaan.
 - amount_quote is in EUR en mag nooit boven max_trade_eur liggen; de code kapt het verder af.
 - Leer van de samenvatting van recente beslissingen: als vergelijkbare situaties recent slecht
   uitpakten, wees terughoudender; als ze goed uitpakten, mag je het signaal volgen.

@@ -26,6 +26,12 @@ from app.trading.risk import RiskLimits
 
 log = logging.getLogger(__name__)
 
+# News alone may trigger a Claude consult: a strongly positive, high-impact story can open a
+# (smaller) position, a strongly negative one can close it. Scores run from -1 to 1.
+NEWS_ENTRY_MIN_SCORE = 0.4
+NEWS_EXIT_MAX_SCORE = -0.3
+NEWS_ENTRY_SIZE_FACTOR = 0.5
+
 
 # -- positions ---------------------------------------------------------------------------
 
@@ -236,6 +242,12 @@ class TradingEngine:
                 return CycleResult(market, price, signal, "sell", "mechanical", True, reason)
 
         # 2. Nothing to decide? Save the Claude call.
+        news_entry = (
+            position is None
+            and signal == "hold"
+            and sentiment.high_impact > 0
+            and sentiment.score >= NEWS_ENTRY_MIN_SCORE
+        )
         needs_claude = (
             signal == "buy"
             and position is None
@@ -243,7 +255,8 @@ class TradingEngine:
             and position is not None
             or position is not None
             and sentiment.high_impact > 0
-            and sentiment.score <= -0.3
+            and sentiment.score <= NEWS_EXIT_MAX_SCORE
+            or news_entry
         )
         if not needs_claude:
             decision.reasoning = "geen signaal en geen reden om in te grijpen"
@@ -253,10 +266,13 @@ class TradingEngine:
 
         # 3. Ask Claude, or fall back.
         action, confidence, amount_quote, reasoning, source, model = await self._decide(
-            session, strategy, market, price, signal, indicators, sentiment, position
+            session, strategy, market, price, signal, indicators, sentiment, position, news_entry
         )
         decision.source, decision.model = source, model
         decision.action, decision.confidence, decision.reasoning = action, confidence, reasoning
+        if news_entry and action == "buy":
+            # A buy on news alone, without the strategy agreeing, gets at most half the budget.
+            amount_quote = min(amount_quote, self.limits.max_trade_eur * NEWS_ENTRY_SIZE_FACTOR)
         decision.amount_quote = amount_quote
 
         # 4. Enforce the rules and hard limits, then execute.
@@ -264,8 +280,10 @@ class TradingEngine:
         blocked = None
         order_id = None
         if action == "buy":
-            if signal != "buy" or position is not None:
-                blocked = "kopen zonder buy-signaal of met open positie is niet toegestaan"
+            if position is not None:
+                blocked = "kopen met een open positie is niet toegestaan"
+            elif signal != "buy" and not news_entry:
+                blocked = "kopen zonder buy-signaal of sterk positief nieuws is niet toegestaan"
             else:
                 total, exposure = await self.portfolio(session, prices)
                 allowed, blocked = risk.check_buy(
@@ -316,13 +334,23 @@ class TradingEngine:
         return CycleResult(market, price, signal, action, source, executed, blocked or reasoning)
 
     async def _decide(
-        self, session, strategy, market, price, signal, indicators, sentiment, position
+        self,
+        session,
+        strategy,
+        market,
+        price,
+        signal,
+        indicators,
+        sentiment,
+        position,
+        news_entry: bool = False,
     ) -> tuple[str, float | None, float, str, str, str | None]:
         context = {
             "market": market,
             "price": price,
             "strategy": strategy.model_dump(),
             "signal": signal,
+            "news_entry_allowed": news_entry,
             "indicators": indicators,
             "news": sentiment.as_dict(),
             "position": None

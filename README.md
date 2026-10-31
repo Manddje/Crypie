@@ -107,11 +107,14 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
 1. **Mechanisch**: een open positie wordt gesloten als de koers de stop-loss of take-profit van de
    strategie raakt. Daar komt Claude niet aan.
 2. **Niets te beslissen?** Geen buy-signaal zonder positie, geen sell-signaal met positie en geen
-   zwaar negatief nieuws: dan wordt alleen een `hold` gelogd en wordt Claude niet aangeroepen (bespaart kosten).
+   zwaar positief of negatief nieuws (impact-gewogen score ≥ 0,4 of ≤ -0,3 met minstens één bericht van
+   hoge impact): dan wordt alleen een `hold` gelogd en wordt Claude niet aangeroepen (bespaart kosten).
 3. **Claude beslist** (`CLAUDE_MODEL_DECISION`, Sonnet 5.5): krijgt strategie, indicatorwaarden, signaal,
    nieuwssentiment met topberichten, open positie, limieten en een samenvatting van zijn eigen recente
-   beslissingen met uitkomst. Antwoord: buy/sell/hold, zekerheid, bedrag, toelichting. Kopen mag alleen bij
-   een buy-signaal; verkopen bij een sell-signaal of als news exit.
+   beslissingen met uitkomst. Antwoord: buy/sell/hold, zekerheid, bedrag, toelichting. Kopen mag bij een
+   buy-signaal, of zonder signaal op sterk positief nieuws van hoge impact (**news entry**, dan maximaal de
+   helft van `MAX_TRADE_EUR`); verkopen bij een sell-signaal of als news exit. Slecht nieuws is voor de bot
+   nooit een reden om "de dip te kopen".
 4. **Harde limieten** (`app/trading/risk.py`), in code afgedwongen: `MAX_TRADE_EUR`, `MAX_EXPOSURE_PCT`,
    `DAILY_LOSS_LIMIT_PCT`, `MAX_TRADES_PER_DAY`, `COOLDOWN_MIN_AFTER_STOP`, plus een kill switch
    (pauzeren op `/trading`). Zonder Claude (budget op, geen key): `CLAUDE_UNAVAILABLE_MODE` = `hold` of `indicators`.

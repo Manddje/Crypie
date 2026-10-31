@@ -46,6 +46,9 @@ from app.trading.risk import RiskLimits
 from app.web import STATIC_DIR, templates
 
 log = logging.getLogger("crypie")
+# Uvicorn only configures its own loggers; without this the cycle and news results never show
+# up in the container logs.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
 def live_blocker(settings: Settings, client: BitvavoClient) -> str | None:
