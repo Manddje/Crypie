@@ -36,9 +36,14 @@ def test_labels_and_strategy_in_words():
     assert nl("buy") == "Kopen"
     assert nl("stop_loss") == "Stop-loss"
     assert nl("iets_onbekends") == "iets_onbekends"
-    assert [indicator_nl(i) for i in DEFAULT_STRATEGY.indicators] == ["RSI 14", "EMA 200"]
+    assert [indicator_nl(i) for i in DEFAULT_STRATEGY.indicators] == [
+        "RSI 14",
+        "EMA 200",
+        "% onder hoogste koers van 168 candles",
+    ]
     assert [condition_nl(c) for c in DEFAULT_STRATEGY.buy] == [
         "rsi14 lager dan 35",
         "rsi14 stijgt t.o.v. 1 candle eerder",
         "koers hoger dan ema200 (zacht filter)",
+        "dd7d minstens 5 (zacht filter)",
     ]

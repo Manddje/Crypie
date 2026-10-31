@@ -40,6 +40,10 @@ Spelregels:
 - Transactiekosten tellen: "costs" geeft de fee per kant en wat een rondje kopen+verkopen
   samen kost. Een trade is pas zinvol als de verwachte beweging daar ruim boven ligt; de
   genoemde winsten en unrealized_net_pct zijn al netto na kosten.
+- recent_candles.price_context zegt hoe ver de koers onder het 7- en 30-daags hoog staat en
+  hoe hij t.o.v. het 30-daags gemiddelde ligt. Een lagere koers dan vorige week is op zich geen
+  koopreden (de markt kan verder dalen); het telt pas mee als er ook een draai zichtbaar is of
+  het nieuws positief is. Dan mag een flinke korting je wél iets meer vertrouwen geven.
 - Koop niet in een vallend mes. recent_candles toont de laatste candles (oudste eerst):
   dalen koers en oscillatoren (zoals RSI) nog steeds en staat de koers vlak bij het 24-uurs
   dieptepunt, dan is "hold" de keuze en wacht je een cyclus op een draai. Alleen sterk positief

@@ -72,7 +72,7 @@ de app de wijziging en blijft hij in oefenmodus. Dezelfde instellingen zijn er a
 ## Strategie en indicatoren
 
 Een strategie is JSON (zie `app/strategy/model.py` voor het schema) met indicatoren (`sma`, `ema`,
-`rsi`, `macd`, `bollinger`), koopcondities, verkoopcondities en optioneel stop-loss en take-profit.
+`rsi`, `macd`, `bollinger`, `drawdown` = % onder de hoogste koers van N candles), koopcondities, verkoopcondities en optioneel stop-loss en take-profit.
 Op de pagina **/strategy** kun je:
 
 - in gewone taal beschrijven wat je wilt; Claude vertaalt het naar een geldige strategie met toelichting
@@ -123,6 +123,8 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    (`{"left": "rsi14", "op": "rising", "right": 1}`: de RSI draait omhoog), zodat een dip pas gekocht wordt als
    de draai begonnen is. Claude krijgt daarnaast `recent_candles` (laatste 6 candles van koers en indicatoren,
    24-uurs verandering en afstand tot het dieptepunt) met de instructie niet in een nog dalende koers te kopen.
+   Claude krijgt in `recent_candles.price_context` ook de korting t.o.v. het 7- en 30-daags hoog en de
+   afstand tot het 30-daags gemiddelde, met de kanttekening dat lager niet de bodem is.
    Een voorwaarde met `"soft": true` is een **zacht filter**: het signaal ontstaat ook als het niet geldt,
    Claude ziet dat in `signal_checks` en `soft_filters_failed` en koopt dan hoogstens de helft van
    `MAX_TRADE_EUR`. De standaardstrategie gebruikt dat voor de EMA200-trendfilter, zodat een RSI-dip in een
@@ -214,7 +216,7 @@ app/
   auth/                     login: wachtwoord (passwords.py), TOTP (totp.py), cookie (session.py), account (service.py), routes + middleware (routes.py), CLI (__main__.py)
   bitvavo/client.py         Bitvavo REST-client (publiek + gesigneerd)
   bitvavo/broker.py         PaperBroker / LiveBroker
-  indicators/core.py        SMA, EMA, RSI, MACD, Bollinger (pure Python)
+  indicators/core.py        SMA, EMA, RSI, MACD, Bollinger, drawdown (pure Python)
   strategy/model.py         strategie-schema (pydantic) en standaardstrategie
   strategy/engine.py        indicatorseries, signalen en backtester
   strategy/store.py         actieve strategie in de settings-tabel

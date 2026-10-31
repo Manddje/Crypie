@@ -17,7 +17,9 @@ De gebruiker beschrijft in gewone taal (meestal Nederlands) hoe hij wil handelen
 Jij vertaalt dat naar één strategie-configuratie die precies aan het schema voldoet.
 
 Regels:
-- Gebruik alleen de beschikbare indicatortypes: sma, ema, rsi, macd, bollinger.
+- Gebruik alleen de beschikbare indicatortypes: sma, ema, rsi, macd, bollinger, drawdown
+  (drawdown = procent onder de hoogste koers van de laatste "period" candles; handig als
+  "korting" t.o.v. het recente hoog, bij voorkeur als zacht filter, nooit als enige koopreden).
 - Kies ids in kleine letters, bijvoorbeeld "rsi14", "ema50", "macd_std", "bb20".
 - macd levert de series "<id>", "<id>_signal" en "<id>_hist"; bollinger levert
   "<id>_upper", "<id>_middle" en "<id>_lower". Prijsseries: open, high, low, close, volume.

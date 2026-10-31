@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from app.indicators.core import Series, bollinger, ema, macd, rsi, sma
+from app.indicators.core import Series, bollinger, drawdown, ema, macd, rsi, sma
 from app.strategy.model import LOOKBACK_OPS, Condition, Strategy
 
 Candle = list[float]  # [timestamp_ms, open, high, low, close, volume]
@@ -34,6 +34,8 @@ def compute_series(strategy: Strategy, candles: list[Candle]) -> dict[str, Serie
         elif ind.type == "bollinger":
             up, mid, low = bollinger(closes, ind.period, ind.std_dev)
             out[f"{ind.id}_upper"], out[f"{ind.id}_middle"], out[f"{ind.id}_lower"] = up, mid, low
+        elif ind.type == "drawdown":
+            out[ind.id] = drawdown(closes, ind.period)
     return out
 
 

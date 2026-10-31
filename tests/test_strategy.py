@@ -171,3 +171,19 @@ def test_rising_condition_compares_with_its_own_past_value():
         Strategy.model_validate(
             {**s.model_dump(), "buy": [{"left": "close", "op": "rising", "right": 0}]}
         )
+
+
+def test_drawdown_indicator_measures_discount_to_rolling_high():
+    from app.indicators.core import drawdown
+
+    assert drawdown([100, 110, 99, 88], 3) == [0.0, 0.0, 10.0, 20.0]
+    s = Strategy.model_validate(
+        {
+            **crossover_strategy().model_dump(),
+            "indicators": [{"type": "drawdown", "id": "dd3", "period": 3}],
+            "buy": [{"left": "dd3", "op": ">=", "right": 15}],
+            "sell": [{"left": "dd3", "op": "<", "right": 1}],
+        }
+    )
+    series = compute_series(s, make_candles([100, 110, 99, 88]))
+    assert signal_at(s, series, 3) == "buy" and signal_at(s, series, 1) == "sell"

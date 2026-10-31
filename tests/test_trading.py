@@ -452,6 +452,8 @@ async def test_failed_soft_filter_still_asks_claude_and_halves_the_buy(session):
     traj = ctx["recent_candles"]
     assert traj["values"]["close"] == BUY_SERIES[-6:] and traj["close_falling"] is False
     assert traj["close_change_24h_pct"] == 20.0  # 10 -> 12 over the whole short series
+    pc = traj["price_context"]  # FakeClient serves the same candles for "1d"
+    assert pc["below_30d_high_pct"] == 0.99 and pc["change_30d_pct"] == 20.0  # high = close*1.01
     assert ctx["signal_checks"]["buy"][1]["soft"] is True
     assert open_position(session, "paper", "BTC-EUR").entry_quote == 50.0
     d = session.query(Decision).one()

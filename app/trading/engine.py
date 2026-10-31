@@ -278,6 +278,28 @@ class TradingEngine:
         self.last_watch_run = datetime.now(UTC)
         return results
 
+    async def _price_context(self, market: str, price: float) -> dict[str, Any]:
+        """Where the price sits against the last 7 and 30 days: discount is not the bottom."""
+        try:
+            daily = await self.client.candles(market, "1d", 31)
+        except Exception as exc:  # noqa: BLE001 - context only, never block a cycle
+            log.warning("daily candles for %s failed: %s", market, exc)
+            return {}
+        if not daily:
+            return {}
+        highs = [c[2] for c in daily]
+        closes = [c[4] for c in daily]
+        avg30 = sum(closes) / len(closes)
+        return {
+            "below_7d_high_pct": round((1 - price / max(highs[-7:])) * 100, 2),
+            "below_30d_high_pct": round((1 - price / max(highs)) * 100, 2),
+            "vs_30d_average_pct": round((price / avg30 - 1) * 100, 2),
+            "change_7d_pct": round((price / closes[-8] - 1) * 100, 2) if len(closes) >= 8 else None,
+            "change_30d_pct": round((price / closes[0] - 1) * 100, 2),
+            "note": "korting t.o.v. het recente hoog is context, geen bodem; een dalende "
+            "markt kan verder dalen",
+        }
+
     def watch_status(self) -> list[dict[str, Any]]:
         return [
             {"market": m, **{k: v for k, v in w.items()}} for m, w in sorted(self.watch.items())
@@ -367,6 +389,7 @@ class TradingEngine:
             if k not in ("open", "high", "low", "volume") and v[i] is not None
         }
         trajectory = recent_trajectory(series, i)
+        trajectory["price_context"] = await self._price_context(market, price)
         coin = market.split("-")[0]
         sentiment = market_sentiment(session, coin, 48)
 

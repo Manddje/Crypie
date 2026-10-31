@@ -160,6 +160,8 @@ def indicator_nl(ind: IndicatorSpec) -> str:
         return f"MACD {ind.fast}/{ind.slow}/{ind.signal}"
     if ind.type == "bollinger":
         return f"Bollinger {ind.period} (σ {ind.std_dev:g})"
+    if ind.type == "drawdown":
+        return f"% onder hoogste koers van {ind.period} candles"
     return f"{ind.type.upper()} {ind.period}"
 
 
