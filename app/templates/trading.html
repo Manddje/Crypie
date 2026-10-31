@@ -1,126 +1,190 @@
-<!doctype html>
-<html lang="nl">
-<head>
-  <meta charset="utf-8">
-  <title>Crypie · Handelen</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-    body { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; line-height: 1.4; }
-    .badge { font-size: .75rem; padding: .2rem .5rem; border-radius: 999px; text-transform: uppercase; }
-    .paper { background: #e0f2fe; color: #075985; } .live { background: #fee2e2; color: #991b1b; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid #8884; vertical-align: top; }
-    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-    .error { background: #fef3c7; color: #92400e; padding: .75rem; border-radius: .5rem; }
-    .ok { background: #dcfce7; color: #166534; padding: .75rem; border-radius: .5rem; }
-    .muted { opacity: .7; font-size: .9rem; }
-    .pos { color: #15803d; } .neg { color: #b91c1c; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem; }
-    .card { border: 1px solid #8884; border-radius: .5rem; padding: .75rem; }
-    form.inline { display: inline; }
-    .report { white-space: pre-wrap; background: #8881; padding: .75rem; border-radius: .5rem; }
-    .blocked { opacity: .6; }
-  </style>
-</head>
-<body>
-  <h1>Handelen <span class="badge {{ settings.trading_mode }}">{{ settings.trading_mode }}</span></h1>
-  <nav><a href="/">Dashboard</a> · <a href="/trading">Handelen</a> · <a href="/strategy">Strategie</a> · <a href="/news">Nieuws</a> · <a href="/docs">API</a></nav>
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Handelen{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Handelen</h1>
+  <p class="subtitle">Hier zie je wat de bot doet en waarom. {% if status.enabled and status.interval_min > 0 %}Elke {{ status.interval_min }} minuten{% else %}Bij elke cyclus{% endif %} kijkt hij per markt naar het signaal van de strategie en het nieuws, en legt hij zijn beslissing vast.</p>
+</div>
 
-  {% if status.paused %}
-  <p class="error">Handelen is <strong>gepauzeerd</strong> (kill switch). Open posities worden nog wel mechanisch gesloten op stop-loss, take-profit of verkoopsignaal; er wordt niets gekocht.
-    <form class="inline" method="post" action="/trading/action"><button name="action" value="resume">Hervatten</button></form></p>
-  {% else %}
-  <p class="ok">Handelen is actief: elke {{ status.interval_min }} minuten een cyclus per markt ({{ settings.markets|join(", ") }}).
-    <form class="inline" method="post" action="/trading/action"><button name="action" value="pause">Pauzeren (kill switch)</button></form>
-    <form class="inline" method="post" action="/trading/action"><button name="action" value="cycle">Nu een cyclus draaien</button></form></p>
-  {% endif %}
-  {% if status.last_error %}<p class="error">Laatste fout: {{ status.last_error }}</p>{% endif %}
-  {% if not status.claude_available %}<p class="error">ANTHROPIC_API_KEY ontbreekt. Bij een signaal doet de bot nu: <strong>{{ settings.claude_unavailable_mode }}</strong>.</p>{% endif %}
+<div class="stack">
+  {% if status.last_error %}{{ ui.notice("error", "Laatste fout: " ~ status.last_error) }}{% endif %}
+  {% if not status.claude_available %}{{ ui.notice("info", "De Claude-sleutel (ANTHROPIC_API_KEY) ontbreekt. Bij een signaal doet de bot nu: " ~ ("afwachten" if settings.claude_unavailable_mode == "hold" else "de indicatoren volgen") ~ ".") }}{% endif %}
 
-  <div class="grid">
-    <div class="card">
-      <h3>Harde limieten</h3>
-      <div>Max. per order: € {{ status.limits.max_trade_eur }}</div>
-      <div>Max. blootstelling: {{ status.limits.max_exposure_pct }}% van de portefeuille</div>
-      <div>Dagverlieslimiet: {{ status.limits.daily_loss_limit_pct }}%</div>
-      <div>Max. trades per dag: {{ status.limits.max_trades_per_day }} (vandaag {{ status.trades_today }})</div>
-      <div>Afkoelen na stop-loss: {{ status.limits.cooldown_min_after_stop }} min</div>
-      <div class="muted">Instelbaar via omgevingsvariabelen; Claude kan ze niet omzeilen.</div>
+  <section class="hero">
+    <div class="hero-row">
+      <div>
+        <div class="big-label">Status van de bot</div>
+        <div class="big-value" style="font-size: 32px">
+          {% if status.paused %}<span class="pill pill-orange pill-lg"><span class="dot"></span>Gepauzeerd</span>
+          {% elif status.enabled %}<span class="pill pill-green pill-lg"><span class="dot"></span>Actief</span>
+          {% else %}<span class="pill pill-lg"><span class="dot"></span>Uitgeschakeld</span>{% endif %}
+        </div>
+        <div class="big-sub">
+          {% if status.paused %}Er wordt niets gekocht. Open posities worden nog wel gesloten op stop-loss, take-profit of een verkoopsignaal.
+          {% elif status.enabled %}Handelt op {{ settings.markets|join(" en ") }} · laatste cyclus {{ status.last_run|ago }}.
+          {% else %}TRADING_ENABLED staat uit; je kunt wel handmatig een cyclus draaien.{% endif %}
+        </div>
+      </div>
+      <div class="hero-status" style="flex-direction: row; align-items: center; gap: 10px">
+        {% if status.paused %}
+        <form class="inline" method="post" action="/trading/action"><button class="btn btn-primary" name="action" value="resume">Hervatten</button></form>
+        {% else %}
+        <form class="inline" method="post" action="/trading/action" onsubmit="return confirm('De bot pauzeren? Er wordt dan niets meer gekocht totdat je hervat.')"><button class="btn btn-danger" name="action" value="pause">Pauzeren</button></form>
+        {% endif %}
+        <form class="inline" method="post" action="/trading/action"><button class="btn" name="action" value="cycle">Nu een cyclus draaien</button></form>
+      </div>
     </div>
-    <div class="card">
-      <h3>Resultaat (30 dagen)</h3>
+  </section>
+
+  <div class="grid-3">
+    <section class="card">
+      <div class="card-header"><h3>Resultaat 30 dagen</h3></div>
       {% set perf = status.performance_30d %}
-      <div>Gesloten posities: {{ perf.closed_positions }}</div>
-      <div>Winstpercentage: {{ perf.win_rate_pct if perf.win_rate_pct is not none else "-" }}{% if perf.win_rate_pct is not none %}%{% endif %}</div>
-      <div>Totaal resultaat: <span class="{{ 'pos' if perf.total_pnl_eur >= 0 else 'neg' }}">€ {{ perf.total_pnl_eur }}</span></div>
-      <div>Gemiddeld per trade: {{ perf.avg_pnl_pct if perf.avg_pnl_pct is not none else "-" }}{% if perf.avg_pnl_pct is not none %}%{% endif %}</div>
-      <div>Vandaag gerealiseerd: € {{ status.realized_pnl_today }}</div>
-    </div>
-    <div class="card">
-      <h3>Laatste cyclus</h3>
-      <div class="muted">{{ status.last_run.strftime("%d-%m %H:%M UTC") if status.last_run else "nog niet gedraaid" }}</div>
-      {% for r in status.last_results %}
-      <div>{{ r.market }}: signaal <strong>{{ r.signal }}</strong>, actie <strong>{{ r.action }}</strong> ({{ r.source }}){% if r.executed %} · uitgevoerd{% endif %}
-        {% if r.reason %}<div class="muted">{{ r.reason }}</div>{% endif %}</div>
+      <div class="stats" style="grid-template-columns: 1fr 1fr">
+        {{ ui.stat("Resultaat", perf.total_pnl_eur|eur, None, "pos" if perf.total_pnl_eur >= 0 else "neg") }}
+        {{ ui.stat("Winstkans", perf.win_rate_pct|pct(0, false) if perf.win_rate_pct is not none else "–", perf.closed_positions ~ " gesloten") }}
+        {{ ui.stat("Per trade", perf.avg_pnl_pct|pct if perf.avg_pnl_pct is not none else "–", "gemiddeld") }}
+        {{ ui.stat("Vandaag", status.realized_pnl_today|eur, "gerealiseerd", "pos" if status.realized_pnl_today >= 0 else "neg") }}
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-header"><h3>Harde limieten</h3><span class="more muted small">altijd van kracht</span></div>
+      <dl class="kv">
+        <dt>Per order</dt><dd>max. {{ status.limits.max_trade_eur|eur(0) }}</dd>
+        <dt>In crypto</dt><dd>max. {{ status.limits.max_exposure_pct|num(0) }}% van de portefeuille</dd>
+        <dt>Dagverlies</dt><dd>pauze bij {{ status.limits.daily_loss_limit_pct|num(0) }}% verlies</dd>
+        <dt>Trades per dag</dt><dd>max. {{ status.limits.max_trades_per_day }} <span class="muted">(vandaag {{ status.trades_today }})</span></dd>
+        <dt>Na stop-loss</dt><dd>{{ status.limits.cooldown_min_after_stop }} min niet kopen</dd>
+      </dl>
+      <p class="form-help">Deze grenzen zitten in de code. Claude kan ze niet omzeilen; aanpassen kan alleen via de instellingen van de server.</p>
+    </section>
+
+    <section class="card">
+      <div class="card-header"><h3>Laatste cyclus</h3><span class="more muted small">{{ status.last_run|dt }}</span></div>
+      {% if status.last_results %}
+      <ul class="list">
+        {% for r in status.last_results %}
+        <li>
+          <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
+            <strong>{{ r.market }}</strong>
+            <span class="pill {{ r.action|action_pill }}">{{ r.action|nl }}</span>
+            <span class="small muted">signaal {{ r.signal|nl|lower }} · {{ r.source|nl|lower }}{% if r.executed %} · uitgevoerd{% endif %}</span>
+          </div>
+          {% if r.reason %}<div class="small muted" style="margin-top: 4px">{{ r.reason }}</div>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="muted small">De bot heeft nog geen cyclus gedraaid. De eerste start kort na het opstarten.</p>
+      {% endif %}
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-header"><h2>Open posities</h2></div>
+    {% if open_positions %}
+    <div class="table-wrap">
+    <table>
+      <tr><th>Markt</th><th>Geopend</th><th class="num">Hoeveelheid</th><th class="num">Instap</th><th class="num">Inleg</th><th class="num">Stop-loss</th><th class="num">Take-profit</th></tr>
+      {% for p in open_positions %}
+      <tr>
+        <td><strong>{{ p.market }}</strong></td>
+        <td class="nowrap">{{ p.opened_at|dt }}</td>
+        <td class="num">{{ p.amount|amount }}</td>
+        <td class="num">€ {{ p.entry_price|price }}</td>
+        <td class="num">{{ p.entry_quote|eur }}</td>
+        <td class="num">{{ ("€ " ~ p.stop_price|price) if p.stop_price else "–" }}</td>
+        <td class="num">{{ ("€ " ~ p.take_profit_price|price) if p.take_profit_price else "–" }}</td>
+      </tr>
       {% endfor %}
+    </table>
     </div>
-  </div>
-
-  <h2>Open posities</h2>
-  <table>
-    <tr><th>Markt</th><th>Geopend</th><th class="num">Hoeveelheid</th><th class="num">Instap</th><th class="num">Inleg</th><th class="num">Stop</th><th class="num">Take-profit</th></tr>
-    {% for p in open_positions %}
-    <tr><td>{{ p.market }}</td><td>{{ p.opened_at.strftime("%d-%m %H:%M") }}</td><td class="num">{{ "%.6f"|format(p.amount) }}</td><td class="num">{{ "%.2f"|format(p.entry_price) }}</td><td class="num">€ {{ "%.2f"|format(p.entry_quote) }}</td><td class="num">{{ "%.2f"|format(p.stop_price) if p.stop_price else "-" }}</td><td class="num">{{ "%.2f"|format(p.take_profit_price) if p.take_profit_price else "-" }}</td></tr>
-    {% else %}<tr><td colspan="7">Geen open posities.</td></tr>{% endfor %}
-  </table>
-
-  <h2>Beslissingen</h2>
-  <p class="muted">Elke cyclus wordt vastgelegd met signaal, nieuws, bron van de beslissing (claude, rules, mechanical) en de koers 1, 24 en 72 uur later. Deze uitkomsten gaan terug naar Claude bij de volgende beslissing.</p>
-  <table>
-    <tr><th>Tijd</th><th>Markt</th><th>Signaal</th><th>Nieuws</th><th>Actie</th><th class="num">EUR</th><th class="num">1u</th><th class="num">24u</th><th class="num">72u</th><th>Toelichting</th></tr>
-    {% for d in decisions %}
-    <tr class="{{ 'blocked' if d.blocked_by else '' }}">
-      <td>{{ d.created_at.strftime("%d-%m %H:%M") }}</td>
-      <td>{{ d.market }}</td>
-      <td>{{ d.signal }}</td>
-      <td>{{ d.news_label or "" }}</td>
-      <td><strong>{{ d.action }}</strong> <span class="muted">{{ d.source }}{% if d.confidence is not none %} {{ "%.0f"|format(d.confidence * 100) }}%{% endif %}</span>{% if d.executed %} ✓{% endif %}</td>
-      <td class="num">{{ "%.0f"|format(d.amount_quote) if d.amount_quote else "" }}</td>
-      <td class="num {{ 'pos' if d.price_1h and d.price_1h >= d.price else ('neg' if d.price_1h else '') }}">{{ "%.1f"|format((d.price_1h / d.price - 1) * 100) ~ "%" if d.price_1h else "" }}</td>
-      <td class="num {{ 'pos' if d.price_24h and d.price_24h >= d.price else ('neg' if d.price_24h else '') }}">{{ "%.1f"|format((d.price_24h / d.price - 1) * 100) ~ "%" if d.price_24h else "" }}</td>
-      <td class="num {{ 'pos' if d.price_72h and d.price_72h >= d.price else ('neg' if d.price_72h else '') }}">{{ "%.1f"|format((d.price_72h / d.price - 1) * 100) ~ "%" if d.price_72h else "" }}</td>
-      <td class="muted">{{ d.reasoning or "" }}{% if d.blocked_by %}<br><em>Geblokkeerd: {{ d.blocked_by }}</em>{% endif %}</td>
-    </tr>
-    {% else %}<tr><td colspan="10">Nog geen beslissingen.</td></tr>{% endfor %}
-  </table>
-
-  <h2>Gesloten posities</h2>
-  <table>
-    <tr><th>Markt</th><th>Geopend</th><th>Gesloten</th><th class="num">Instap</th><th class="num">Uitstap</th><th class="num">Resultaat</th><th>Reden</th></tr>
-    {% for p in closed_positions %}
-    <tr><td>{{ p.market }}</td><td>{{ p.opened_at.strftime("%d-%m %H:%M") }}</td><td>{{ p.closed_at.strftime("%d-%m %H:%M") }}</td><td class="num">{{ "%.2f"|format(p.entry_price) }}</td><td class="num">{{ "%.2f"|format(p.exit_price) }}</td><td class="num {{ 'pos' if p.pnl_eur >= 0 else 'neg' }}">€ {{ "%.2f"|format(p.pnl_eur) }} ({{ "%.2f"|format(p.pnl_pct) }}%)</td><td>{{ p.close_reason }}</td></tr>
-    {% else %}<tr><td colspan="7">Nog geen gesloten posities.</td></tr>{% endfor %}
-  </table>
-
-  <h2>Evaluaties door Claude</h2>
-  <p class="muted">Elke {{ settings.evaluation_interval_hours }} uur beoordeelt {{ settings.claude_model_evaluation }} de beslissingen en resultaten en doet eventueel een voorstel voor een aangepaste strategie. Een voorstel wordt pas actief als jij het toepast.
-    <form class="inline" method="post" action="/trading/action"><button name="action" value="evaluate">Nu evalueren</button></form></p>
-  {% for ev in evaluations %}
-  <div class="card">
-    <div class="muted">{{ ev.created_at.strftime("%d-%m-%Y %H:%M") }} · {{ ev.model }} · {{ ev.period_days }} dagen{% if ev.applied %} · voorstel toegepast{% endif %}</div>
-    <div class="report">{{ ev.report_nl }}</div>
-    {% if ev.proposed_strategy %}
-    <h4>Voorgestelde strategie: {{ ev.proposed_strategy.name }}</h4>
-    {% if ev.proposal_backtest and ev.proposal_backtest.proposed %}
-    <div>Backtest voorstel: {{ ev.proposal_backtest.proposed.return_pct }}% ({{ ev.proposal_backtest.proposed.trades }} trades, drawdown {{ ev.proposal_backtest.proposed.max_drawdown_pct }}%)
-      {% if ev.proposal_backtest.current %} · huidige strategie: {{ ev.proposal_backtest.current.return_pct }}% ({{ ev.proposal_backtest.current.trades }} trades){% endif %}</div>
+    {% else %}
+    {{ ui.empty("Geen open posities", "Zodra de bot koopt, zie je hier de positie met stop-loss en take-profit.") }}
     {% endif %}
-    {% if not ev.applied %}
-    <form class="inline" method="post" action="/trading/action"><button name="action" value="apply:{{ ev.id }}">Voorstel toepassen als actieve strategie</button></form>
+  </section>
+
+  <section class="card">
+    <div class="card-header"><h2>Beslissingen</h2><span class="more muted small">laatste {{ decisions|length }}</span></div>
+    <p class="card-desc">Elke cyclus wordt vastgelegd: het signaal, het nieuws, wie besliste (Claude, de regels of automatisch) en hoe de koers daarna bewoog. Die uitkomsten krijgt Claude terug bij de volgende beslissing, zodat hij van zijn eigen keuzes leert.</p>
+    {% if decisions %}
+    <div class="table-wrap">
+    <table>
+      <tr><th>Tijd</th><th>Markt</th><th>Signaal</th><th>Nieuws</th><th>Besluit</th><th class="num">Bedrag</th><th class="num">Na 1u</th><th class="num">Na 24u</th><th class="num">Na 72u</th><th>Toelichting</th></tr>
+      {% for d in decisions %}
+      <tr class="{{ 'dim' if d.blocked_by else '' }}">
+        <td class="nowrap">{{ d.created_at|dt }}</td>
+        <td class="nowrap"><strong>{{ d.market }}</strong><span class="sub">€ {{ d.price|price }}</span></td>
+        <td>{{ d.signal|nl }}</td>
+        <td>{% if d.news_label %}<span class="pill {{ d.news_label|sentiment_pill }}">{{ d.news_label }}</span>{% endif %}</td>
+        <td class="nowrap"><span class="pill {{ d.action|action_pill }}">{{ d.action|nl }}</span>{% if d.executed %} <span class="pill pill-blue">uitgevoerd</span>{% endif %}<span class="sub">{{ d.source|nl }}{% if d.confidence is not none %} · {{ (d.confidence * 100)|num(0) }}% zeker{% endif %}</span></td>
+        <td class="num">{{ d.amount_quote|eur(0) if d.amount_quote else "" }}</td>
+        {% for later in (d.price_1h, d.price_24h, d.price_72h) %}
+        <td class="num {{ 'pos' if later and later >= d.price else ('neg' if later else '') }}">{{ ((later / d.price - 1) * 100)|pct if later else "" }}</td>
+        {% endfor %}
+        <td class="small muted" style="min-width: 220px">{{ d.reasoning or "" }}{% if d.blocked_by %}<br><em>Niet uitgevoerd: {{ d.blocked_by }}</em>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    </div>
+    {% else %}
+    {{ ui.empty("Nog geen beslissingen", "Na de eerste cyclus zie je hier per markt wat de bot besloot en waarom.") }}
     {% endif %}
+  </section>
+
+  <section class="card">
+    <div class="card-header"><h2>Gesloten posities</h2></div>
+    {% if closed_positions %}
+    <div class="table-wrap">
+    <table>
+      <tr><th>Markt</th><th>Geopend</th><th>Gesloten</th><th class="num">Instap</th><th class="num">Uitstap</th><th class="num">Resultaat</th><th>Reden</th></tr>
+      {% for p in closed_positions %}
+      <tr>
+        <td><strong>{{ p.market }}</strong></td>
+        <td class="nowrap">{{ p.opened_at|dt }}</td>
+        <td class="nowrap">{{ p.closed_at|dt }}</td>
+        <td class="num">€ {{ p.entry_price|price }}</td>
+        <td class="num">€ {{ p.exit_price|price }}</td>
+        <td class="num {{ 'pos' if p.pnl_eur >= 0 else 'neg' }}">{{ p.pnl_eur|eur }}<span class="sub {{ 'pos' if p.pnl_eur >= 0 else 'neg' }}">{{ p.pnl_pct|pct }}</span></td>
+        <td>{{ p.close_reason|nl }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    </div>
+    {% else %}
+    {{ ui.empty("Nog geen gesloten posities", "Afgeronde trades met hun resultaat verschijnen hier.") }}
     {% endif %}
-  </div>
-  {% else %}<p class="muted">Nog geen evaluaties.</p>{% endfor %}
-</body>
-</html>
+  </section>
+
+  <section class="card">
+    <div class="card-header">
+      <h2>Evaluaties door Claude</h2>
+      <form class="inline" method="post" action="/trading/action"><button class="btn btn-tint btn-sm" name="action" value="evaluate" {% if not status.claude_available %}disabled{% endif %}>Nu evalueren</button></form>
+    </div>
+    <p class="card-desc">Elke {{ (settings.evaluation_interval_hours / 24)|num(0) }} dagen kijkt {{ settings.claude_model_evaluation }} terug op de beslissingen en resultaten. Soms stelt hij een aangepaste strategie voor, inclusief backtest. Een voorstel wordt pas actief als jij het toepast.</p>
+    {% for ev in evaluations %}
+    <article class="card" style="box-shadow: none; background: var(--card-2)">
+      <div class="meta small muted" style="margin-bottom: 10px">{{ ev.created_at|dt(true) }} · {{ ev.model }} · afgelopen {{ ev.period_days }} dagen{% if ev.applied %} · <span class="pos">voorstel toegepast</span>{% endif %}</div>
+      <div class="report">{{ ev.report_nl }}</div>
+      {% if ev.proposed_strategy %}
+      <h4 style="margin-top: 16px">Voorstel: {{ ev.proposed_strategy.name }}</h4>
+      {% if ev.proposal_backtest and ev.proposal_backtest.proposed %}
+      {% set pb = ev.proposal_backtest %}
+      <div class="stats" style="margin-top: 10px">
+        {{ ui.stat("Voorstel", pb.proposed.return_pct|pct, pb.proposed.trades ~ " trades · terugval " ~ pb.proposed.max_drawdown_pct|pct(1, false), "pos" if pb.proposed.return_pct >= 0 else "neg") }}
+        {% if pb.current %}{{ ui.stat("Huidige strategie", pb.current.return_pct|pct, pb.current.trades ~ " trades", "pos" if pb.current.return_pct >= 0 else "neg") }}{% endif %}
+      </div>
+      {% endif %}
+      {% if not ev.applied %}
+      <form class="inline" method="post" action="/trading/action" style="display: block; margin-top: 14px" onsubmit="return confirm('Dit voorstel vervangt de huidige strategie. Doorgaan?')"><button class="btn btn-primary btn-sm" name="action" value="apply:{{ ev.id }}">Voorstel toepassen als actieve strategie</button></form>
+      {% endif %}
+      {% endif %}
+    </article>
+    {% else %}
+    {{ ui.empty("Nog geen evaluaties", "De eerste evaluatie volgt na " ~ (settings.evaluation_interval_hours / 24)|num(0) ~ " dagen handelen, of klik op 'Nu evalueren'.") }}
+    {% endfor %}
+  </section>
+</div>
+{% endblock %}
