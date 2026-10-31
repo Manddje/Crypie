@@ -148,6 +148,10 @@ async def test_news_endpoints(api):
     titles = [i["title"] for i in r.json()]
     assert "Binance & $6.3B hack sparks debate" in titles
     assert "Old item" not in titles
+    first = r.json()[0]
+    assert first["counts"] is False and first["counts_reason"] == "nog niet beoordeeld door Claude"
+    r = await api.get("/api/news?hours=24&counts=true")
+    assert r.json() == []  # nothing assessed without an API key, so nothing counts yet
 
     r = await api.get("/api/news/sentiment")
     assert set(r.json()) == {"BTC", "ETH"}
@@ -156,6 +160,12 @@ async def test_news_endpoints(api):
     r = await api.get("/news")
     assert r.status_code == 200 and "hack sparks debate" in r.text
     assert "Fear" in r.text and "30" in r.text  # Fear & Greed index shown
+    assert "telt niet mee" in r.text and "nog niet beoordeeld door Claude" in r.text
+    r = await api.get("/news?hours=24&telt=ja")
+    assert r.status_code == 200 and "hack sparks debate" not in r.text
+    assert "Geen nieuwsfeiten die meetellen" in r.text
+    r = await api.get("/news?hours=24&telt=nee")
+    assert "hack sparks debate" in r.text
 
 
 @respx.mock

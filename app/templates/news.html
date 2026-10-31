@@ -50,25 +50,35 @@
   </div>
 
   <section class="card">
+    {% set q = "&telt=" ~ telt if telt else "" %}
     <div class="card-header">
       <h2>Berichten</h2>
-      <nav class="segmented" aria-label="Periode">
-        <a href="/news?hours=6" {% if hours == 6 %}class="active"{% endif %}>6 uur</a>
-        <a href="/news?hours=24" {% if hours == 24 %}class="active"{% endif %}>24 uur</a>
-        <a href="/news?hours=72" {% if hours == 72 %}class="active"{% endif %}>3 dagen</a>
-      </nav>
+      <div class="actions">
+        <nav class="segmented" aria-label="Telt mee voor het sentiment">
+          <a href="/news?hours={{ hours }}" {% if not telt %}class="active"{% endif %}>Alles</a>
+          <a href="/news?hours={{ hours }}&telt=ja" {% if telt == "ja" %}class="active"{% endif %}>Telt mee</a>
+          <a href="/news?hours={{ hours }}&telt=nee" {% if telt == "nee" %}class="active"{% endif %}>Telt niet mee</a>
+        </nav>
+        <nav class="segmented" aria-label="Periode">
+          <a href="/news?hours=6{{ q }}" {% if hours == 6 %}class="active"{% endif %}>6 uur</a>
+          <a href="/news?hours=24{{ q }}" {% if hours == 24 %}class="active"{% endif %}>24 uur</a>
+          <a href="/news?hours=72{{ q }}" {% if hours == 72 %}class="active"{% endif %}>3 dagen</a>
+        </nav>
+      </div>
     </div>
-    <p class="card-desc">Berichten over hetzelfde nieuwsfeit staan bij elkaar; het sentiment is dan het gemiddelde van die bronnen, de impact de hoogste. Berichten die volgens Claude niets met de koers te maken hebben, staan lichter weergegeven. Bronnen: {{ settings.news_rss_feeds|length }} RSS-feeds{% if settings.gdelt_enabled %}, GDELT (wereldnieuws){% endif %}{% if settings.cryptopanic_token %}, CryptoPanic{% endif %}.</p>
+    <p class="card-desc">Berichten over hetzelfde nieuwsfeit staan bij elkaar; het sentiment is dan het gemiddelde van die bronnen, de impact de hoogste. Bij elk nieuwsfeit staat of het nu meetelt in het sentiment van jouw coins en zo niet, waarom: nog niet beoordeeld, niet koersrelevant, ouder dan 48 uur, over andere coins, of impact 0. Van de {{ n_total }} nieuwsfeit{{ "en" if n_total != 1 }} in deze periode {{ "telt" if n_counted == 1 else "tellen" }} er {{ n_counted }} mee. Bronnen: {{ settings.news_rss_feeds|length }} RSS-feeds{% if settings.gdelt_enabled %}, GDELT (wereldnieuws){% endif %}{% if settings.cryptopanic_token %}, CryptoPanic{% endif %}.</p>
     {% for g in groups %}
     {% set it = g.lead %}
-    <article class="news-item {{ 'dim' if g.assessed and not g.relevant else '' }}">
+    <article class="news-item {{ 'dim' if not g.status.counts and g.status.code != 'pending' else '' }}">
       <div>
         <div class="meta">
           <span>{{ it.published_at|dt }}</span>
           <span>·</span>
           <span>{{ it.source_name }}</span>
           {% if g.sources > 1 %}<span>·</span><span class="pill pill-blue">{{ g.sources }} bronnen</span>{% endif %}
-          {% if not g.assessed %}<span>·</span><span>nog niet beoordeeld</span>{% endif %}
+          <span>·</span>
+          {% if g.status.counts %}<span class="pill pill-green" title="{{ g.status.reason_nl }}">telt mee</span>{% else %}<span class="pill" title="{{ g.status.reason_nl }}">telt niet mee</span>{% endif %}
+          <span class="count-reason">{{ g.status.reason_nl }}</span>
         </div>
         <a class="title" href="{{ it.url }}" target="_blank" rel="noopener">{{ it.title }}</a>
         {% if it.summary_nl %}<div class="summary">{{ it.summary_nl }}</div>{% endif %}
@@ -77,7 +87,7 @@
           <summary>Ook gemeld door {{ g.others|map(attribute="source_name")|unique|join(", ") }}</summary>
           <ul>
             {% for o in g.others %}
-            <li><span class="muted nowrap">{{ o.published_at|dt }} · {{ o.source_name }}</span> <a href="{{ o.url }}" target="_blank" rel="noopener">{{ o.title }}</a>{% if o.sentiment is not none and o.relevant %} <span class="muted nowrap">({{ o.sentiment|num }})</span>{% endif %}</li>
+            <li><span class="muted nowrap">{{ o.published_at|dt }} · {{ o.source_name }}</span> <a href="{{ o.url }}" target="_blank" rel="noopener">{{ o.title }}</a>{% if o.sentiment is not none and o.relevant %} <span class="muted nowrap">({{ o.sentiment|num }})</span>{% endif %}{% if o.counting is defined and o.counting.code != g.status.code %} <span class="muted">· {{ o.counting.reason_nl }}</span>{% endif %}</li>
             {% endfor %}
           </ul>
         </details>
@@ -94,7 +104,9 @@
       </div>
     </article>
     {% else %}
-    {{ ui.empty("Nog geen berichten", "Klik op 'Nu verversen' om het nieuws van de afgelopen " ~ hours ~ " uur op te halen.") }}
+    {% if telt == "ja" %}{{ ui.empty("Geen nieuwsfeiten die meetellen", "In deze periode weegt geen enkel nieuwsfeit mee in het sentiment van jouw coins.") }}
+    {% elif telt == "nee" %}{{ ui.empty("Alles telt mee", "Elk nieuwsfeit in deze periode weegt mee in het sentiment.") }}
+    {% else %}{{ ui.empty("Nog geen berichten", "Klik op 'Nu verversen' om het nieuws van de afgelopen " ~ hours ~ " uur op te halen.") }}{% endif %}
     {% endfor %}
   </section>
 </div>

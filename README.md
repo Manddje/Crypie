@@ -103,7 +103,10 @@ berichten van verschillende bronnen over hetzelfde feit bij elkaar horen; Claude
 48 uur mee om ze te hergebruiken. Per coin wordt daaruit een **marktsentiment** berekend **per nieuwsfeit** (niet
 per bericht: tien bronnen over één hack wegen als één hack, met de hoogste impact en het gemiddelde sentiment
 van die berichten): gewogen op impact en met vervaltijd per horizon (6 uur, 36 uur, 1 week halfwaardetijd). Dit sentiment is de input voor de
-handelsbeslissing in stap 4. Pagina **/news** toont alles; API: `GET /api/news`, `GET /api/news/sentiment`,
+handelsbeslissing in stap 4. Pagina **/news** toont alles, met per nieuwsfeit of het nu **meetelt** in dat
+sentiment en zo niet waarom (nog niet beoordeeld, niet koersrelevant, ouder dan 48 uur, over andere coins,
+impact 0); de knoppen *Telt mee* / *Telt niet mee* filteren daarop (`?telt=ja|nee`). API: `GET /api/news`
+(velden `counts`, `counts_reason`; filter `?counts=true|false`), `GET /api/news/sentiment`,
 `POST /api/news/refresh`.
 
 ## Handelen

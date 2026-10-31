@@ -500,6 +500,7 @@ details.advanced > *:not(summary) { margin-top: 14px; }
 .news-item .title { font-weight: 600; font-size: 15px; color: var(--text); }
 .news-item .title:hover { color: var(--accent); }
 .news-item .summary { color: var(--text-2); font-size: 14px; margin-top: 4px; }
+.news-item .count-reason { color: var(--text-2); }
 .news-others { margin-top: 6px; font-size: 13px; }
 .news-others summary { cursor: pointer; color: var(--text-2); }
 .news-others summary:hover { color: var(--accent); }

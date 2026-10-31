@@ -116,6 +116,43 @@ def requeue_items_without_event_key(session: Session, hours: int = 48) -> int:
     return len(rows)
 
 
+SENTIMENT_WINDOW_H = 48  # the engine and /news weigh news of the last 48 hours
+
+
+@dataclass(frozen=True)
+class CountStatus:
+    """Whether an article weighs in the market sentiment, and why (not), in Dutch."""
+
+    counts: bool
+    code: str  # counted | pending | irrelevant | too_old | other_coins | no_impact
+    reason_nl: str
+    coins: tuple[str, ...] = ()  # the tracked coins this article weighs for
+
+
+def count_status(
+    item: NewsItem,
+    tracked: list[str],
+    now: datetime | None = None,
+    hours: int = SENTIMENT_WINDOW_H,
+) -> CountStatus:
+    """Mirror the filters of :func:`market_sentiment` for one article, with a reason."""
+    now = now or datetime.now(UTC)
+    if not item.assessed:
+        return CountStatus(False, "pending", "nog niet beoordeeld door Claude")
+    if not item.relevant:
+        return CountStatus(False, "irrelevant", "volgens Claude niet koersrelevant")
+    if _published(item) < now - timedelta(hours=hours):
+        return CountStatus(False, "too_old", f"ouder dan {hours} uur")
+    coins = item.coin_list()
+    hits = tuple(c for c in tracked if c in coins or "ALL" in coins)
+    if not hits:
+        about = ", ".join(c for c in coins if c != "ALL") or "geen coin"
+        return CountStatus(False, "other_coins", f"gaat over {about}, niet over jouw coins")
+    if not item.impact or item.sentiment is None:
+        return CountStatus(False, "no_impact", "impact 0: weegt niet mee")
+    return CountStatus(True, "counted", "telt mee voor " + ", ".join(hits), hits)
+
+
 @dataclass
 class NewsGroup:
     """Articles about one news fact, for the /news list: the lead plus the other outlets."""
@@ -123,6 +160,7 @@ class NewsGroup:
     key: str
     lead: NewsItem  # highest impact, then newest
     items: list[NewsItem]  # all articles, newest first
+    status: CountStatus | None = None  # set by :func:`annotate_groups`
 
     @property
     def sources(self) -> int:
@@ -158,6 +196,18 @@ class NewsGroup:
                     coins.append(c)
         return coins
 
+    def count_status(self, tracked: list[str], now: datetime | None = None) -> CountStatus:
+        """The fact counts when any of its articles does; otherwise the lead's reason."""
+        statuses = [count_status(it, tracked, now) for it in self.items]
+        counting = [st for st in statuses if st.counts]
+        if not counting:
+            return statuses[self.items.index(self.lead)]
+        coins = tuple(dict.fromkeys(c for st in counting for c in st.coins))
+        reason = "telt mee voor " + ", ".join(coins)
+        if len(counting) > 1:
+            reason += f" · sentiment gemiddeld over {len(counting)} bronnen, hoogste impact"
+        return CountStatus(True, "counted", reason, coins)
+
 
 def group_items(items: list[NewsItem]) -> list[NewsGroup]:
     """Fold a newest-first list of articles into one group per news fact, newest fact first."""
@@ -168,6 +218,28 @@ def group_items(items: list[NewsItem]) -> list[NewsGroup]:
     for key, members in groups.items():
         lead = max(members, key=lambda m: (m.impact or 0, _published(m)))
         out.append(NewsGroup(key, lead, members))
+    return out
+
+
+def annotate_groups(
+    groups: list[NewsGroup],
+    tracked: list[str],
+    counted: bool | None = None,
+    now: datetime | None = None,
+) -> list[NewsGroup]:
+    """Set ``status`` on every group and ``counting`` on every article; filter on ``counted``.
+
+    ``counted=None`` keeps all groups, ``True`` only facts that weigh in the sentiment, ``False``
+    only facts that do not.
+    """
+    now = now or datetime.now(UTC)
+    out = []
+    for g in groups:
+        for it in g.items:
+            it.counting = count_status(it, tracked, now)  # type: ignore[attr-defined]
+        g.status = g.count_status(tracked, now)
+        if counted is None or g.status.counts == counted:
+            out.append(g)
     return out
 
 
@@ -235,7 +307,10 @@ HORIZON_HALF_LIFE_H = {"hours": 6.0, "days": 36.0, "weeks": 168.0}
 
 
 def market_sentiment(
-    session: Session, coin: str, hours: int = 48, now: datetime | None = None
+    session: Session,
+    coin: str,
+    hours: int = SENTIMENT_WINDOW_H,
+    now: datetime | None = None,
 ) -> MarketSentiment:
     """Impact-weighted, time-decayed average sentiment of relevant news for one coin.
 
