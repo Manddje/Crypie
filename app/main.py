@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -12,14 +14,19 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from app.ai.budget import BudgetExceeded, BudgetGuard
+from app.ai.news_analyst import NewsAnalyst
 from app.ai.strategy_assistant import StrategyAssistant
 from app.bitvavo.broker import Broker, LiveBroker, PaperBroker, recent_orders
 from app.bitvavo.client import BitvavoClient, BitvavoError
 from app.config import Settings, get_settings
-from app.db import get_session, init_db
+from app.db import SessionLocal, get_session, init_db
+from app.news.service import NewsService, market_sentiment, recent_items
+from app.news.sources import NewsFetcher
 from app.strategy.engine import backtest, latest_snapshot
 from app.strategy.model import Strategy
 from app.strategy.store import load_strategy, save_strategy
+
+log = logging.getLogger("crypie")
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -55,10 +62,47 @@ async def lifespan(app: FastAPI):
     app.state.assistant = StrategyAssistant(
         settings.anthropic_api_key, settings.claude_model_strategy, app.state.budget
     )
+    fetcher = NewsFetcher(
+        settings.news_rss_feeds,
+        settings.gdelt_query if settings.gdelt_enabled else None,
+        settings.cryptopanic_token,
+        settings.cryptopanic_plan,
+        settings.coins,
+    )
+    app.state.news = NewsService(
+        fetcher,
+        NewsAnalyst(settings.anthropic_api_key, settings.claude_model_news, app.state.budget),
+        settings.coins,
+        settings.news_max_age_hours,
+        settings.news_batch_size,
+    )
+    scheduler = (
+        asyncio.create_task(news_scheduler(app.state.news, settings.news_fetch_interval_min))
+        if settings.news_enabled and settings.news_fetch_interval_min > 0
+        else None
+    )
     try:
         yield
     finally:
+        if scheduler is not None:
+            scheduler.cancel()
+        await fetcher.aclose()
         await client.aclose()
+
+
+async def news_scheduler(service: NewsService, interval_min: int) -> None:
+    """Fetch and assess news every ``interval_min`` minutes for as long as the app runs."""
+    await asyncio.sleep(5)  # let the server come up first
+    while True:
+        try:
+            with SessionLocal() as session:
+                result = await service.refresh(session)
+            log.info("news refresh: %s", result)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("news refresh failed")
+        await asyncio.sleep(interval_min * 60)
 
 
 app = FastAPI(title="Crypie", version="0.1.0", lifespan=lifespan)
@@ -78,6 +122,10 @@ def get_assistant(request: Request) -> StrategyAssistant:
 
 def get_budget(request: Request) -> BudgetGuard:
     return request.app.state.budget
+
+
+def get_news(request: Request) -> NewsService:
+    return request.app.state.news
 
 
 # -- API -------------------------------------------------------------------------------
@@ -336,6 +384,80 @@ async def strategy_action(
     return templates.TemplateResponse(request, "strategy.html", ctx, status_code=status)
 
 
+# -- News -----------------------------------------------------------------------------
+
+
+def _news_dict(it) -> dict:
+    return {
+        "id": it.id,
+        "source": it.source,
+        "source_name": it.source_name,
+        "title": it.title,
+        "url": it.url,
+        "published_at": it.published_at,
+        "assessed": it.assessed,
+        "relevant": it.relevant,
+        "sentiment": it.sentiment,
+        "impact": it.impact,
+        "horizon": it.horizon,
+        "coins": it.coin_list(),
+        "summary_nl": it.summary_nl,
+    }
+
+
+@app.get("/api/news")
+async def list_news(hours: int = 24, limit: int = 100, session: Session = Depends(get_session)):
+    return [_news_dict(it) for it in recent_items(session, hours, min(limit, 500))]
+
+
+@app.post("/api/news/refresh")
+async def refresh_news(
+    news: NewsService = Depends(get_news), session: Session = Depends(get_session)
+):
+    return await news.refresh(session)
+
+
+@app.get("/api/news/sentiment")
+async def news_sentiment(
+    request: Request, hours: int = 48, session: Session = Depends(get_session)
+):
+    return {
+        coin: market_sentiment(session, coin, hours).as_dict()
+        for coin in request.app.state.settings.coins
+    }
+
+
+@app.get("/news", response_class=HTMLResponse)
+async def news_page(
+    request: Request,
+    hours: int = 24,
+    news: NewsService = Depends(get_news),
+    session: Session = Depends(get_session),
+):
+    settings: Settings = request.app.state.settings
+    return templates.TemplateResponse(
+        request,
+        "news.html",
+        {
+            "settings": settings,
+            "hours": hours,
+            "items": recent_items(session, hours, 150),
+            "sentiments": [market_sentiment(session, c, 48) for c in settings.coins],
+            "last_run": news.last_run,
+            "last_error": news.last_error,
+            "analyst_available": news.analyst.available,
+        },
+    )
+
+
+@app.post("/news/refresh")
+async def news_refresh_form(
+    news: NewsService = Depends(get_news), session: Session = Depends(get_session)
+):
+    await news.refresh(session)
+    return RedirectResponse("/news", status_code=303)
+
+
 # -- Dashboard -------------------------------------------------------------------------
 
 
@@ -368,6 +490,7 @@ async def dashboard(
             "rate_limit": client.rate_limit_remaining,
             "budget": budget.status(session),
             "strategy": load_strategy(session),
+            "sentiments": [market_sentiment(session, c, 48) for c in settings.coins],
         },
     )
 
@@ -396,6 +519,7 @@ async def dashboard_order(
                 "rate_limit": None,
                 "budget": None,
                 "strategy": load_strategy(session),
+                "sentiments": [],
             },
             status_code=400,
         )

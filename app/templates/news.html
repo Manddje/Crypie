@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <title>Crypie · Nieuws</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; line-height: 1.4; }
+    .badge { font-size: .75rem; padding: .2rem .5rem; border-radius: 999px; text-transform: uppercase; }
+    .paper { background: #e0f2fe; color: #075985; } .live { background: #fee2e2; color: #991b1b; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid #8884; vertical-align: top; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .error { background: #fef3c7; color: #92400e; padding: .75rem; border-radius: .5rem; }
+    .muted { opacity: .7; font-size: .9rem; }
+    .pos { color: #15803d; } .neg { color: #b91c1c; }
+    .irrelevant { opacity: .45; }
+    .impact3 { font-weight: 700; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
+    .card { border: 1px solid #8884; border-radius: .5rem; padding: .75rem; }
+    .card h3 { margin: 0 0 .25rem; }
+    form.inline { display: inline; }
+  </style>
+</head>
+<body>
+  <h1>Nieuws <span class="badge {{ settings.trading_mode }}">{{ settings.trading_mode }}</span></h1>
+  <nav><a href="/">Dashboard</a> · <a href="/strategy">Strategie</a> · <a href="/news">Nieuws</a> · <a href="/docs">API</a></nav>
+
+  {% if last_error %}<p class="error">{{ last_error }}</p>{% endif %}
+  {% if not analyst_available %}<p class="error">ANTHROPIC_API_KEY ontbreekt: nieuws wordt wel opgehaald maar niet beoordeeld.</p>{% endif %}
+
+  <p class="muted">
+    Bronnen: {{ settings.news_rss_feeds|length }} RSS-feeds{% if settings.gdelt_enabled %}, GDELT{% endif %}{% if settings.cryptopanic_token %}, CryptoPanic{% endif %}.
+    Elke {{ settings.news_fetch_interval_min }} minuten opgehaald; beoordeeld door {{ settings.claude_model_news }}.
+    Laatste run: {{ last_run.strftime("%d-%m %H:%M UTC") if last_run else "nog niet" }}.
+    <form class="inline" method="post" action="/news/refresh"><button type="submit">Nu verversen</button></form>
+  </p>
+
+  <div class="grid">
+    {% for s in sentiments %}
+    <div class="card">
+      <h3>{{ s.coin }}: {{ s.label() }}</h3>
+      <div class="muted">score {{ "%.2f"|format(s.score) }} · {{ s.items }} relevante berichten, {{ s.high_impact }} met grote impact (48 uur, gewogen op impact en versheid)</div>
+      {% for t in s.top[:3] %}<div class="muted">· {{ t.summary_nl or t.title }}</div>{% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <h2>Berichten (laatste {{ hours }} uur)</h2>
+  <p class="muted"><a href="/news?hours=6">6 uur</a> · <a href="/news?hours=24">24 uur</a> · <a href="/news?hours=72">72 uur</a></p>
+  <table>
+    <tr><th>Tijd</th><th>Bron</th><th>Bericht</th><th>Coins</th><th class="num">Sentiment</th><th class="num">Impact</th><th>Horizon</th></tr>
+    {% for it in items %}
+    <tr class="{{ 'irrelevant' if it.assessed and not it.relevant else '' }} {{ 'impact3' if it.impact == 3 else '' }}">
+      <td>{{ it.published_at.strftime("%d-%m %H:%M") }}</td>
+      <td>{{ it.source_name }}<br><span class="muted">{{ it.source }}</span></td>
+      <td><a href="{{ it.url }}" target="_blank" rel="noopener">{{ it.title }}</a>
+        {% if it.summary_nl %}<br><span class="muted">{{ it.summary_nl }}</span>{% endif %}
+        {% if not it.assessed %}<br><span class="muted">nog niet beoordeeld</span>{% endif %}</td>
+      <td>{{ it.coin_list()|join(", ") }}</td>
+      <td class="num {{ 'pos' if (it.sentiment or 0) > 0.1 else ('neg' if (it.sentiment or 0) < -0.1 else '') }}">{{ "%.2f"|format(it.sentiment) if it.sentiment is not none else "-" }}</td>
+      <td class="num">{{ it.impact if it.impact is not none else "-" }}</td>
+      <td>{{ it.horizon or "" }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7">Nog geen berichten. Klik op "Nu verversen".</td></tr>
+    {% endfor %}
+  </table>
+</body>
+</html>

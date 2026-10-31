@@ -26,6 +26,25 @@ class Settings(BaseSettings):
     claude_model_news: str = "claude-haiku-5-5"
     claude_model_evaluation: str = "claude-fable-5-1"
     claude_monthly_budget_usd: float = 100.0
+
+    # News (step 3)
+    news_enabled: bool = True
+    news_fetch_interval_min: int = 15
+    news_rss_feeds: Annotated[list[str], NoDecode] = [
+        "https://www.coindesk.com/arc/outboundfeeds/rss/",
+        "https://cointelegraph.com/rss",
+        "https://www.theblock.co/rss.xml",
+        "https://decrypt.co/feed",
+    ]
+    gdelt_enabled: bool = True
+    gdelt_query: str = (
+        '(bitcoin OR ethereum OR crypto OR stablecoin OR "central bank" OR "interest rate" '
+        "OR tariff OR sanctions OR SEC) sourcelang:english"
+    )
+    cryptopanic_token: str = ""
+    cryptopanic_plan: str = "growth"  # path segment: growth | growth_weekly | enterprise
+    news_max_age_hours: int = 48
+    news_batch_size: int = 15
     backtest_fee_pct: float = 0.25
 
     @field_validator("markets", mode="before")
@@ -34,6 +53,18 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [m.strip().upper() for m in value.split(",") if m.strip()]
         return value
+
+    @field_validator("news_rss_feeds", mode="before")
+    @classmethod
+    def _split_feeds(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [f.strip() for f in value.split(",") if f.strip()]
+        return value
+
+    @property
+    def coins(self) -> list[str]:
+        """Base currencies of the configured markets, e.g. ['BTC', 'ETH']."""
+        return [m.split("-")[0] for m in self.markets]
 
     @property
     def has_bitvavo_credentials(self) -> bool:

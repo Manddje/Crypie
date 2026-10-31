@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, Text, create_engine
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.config import get_settings
@@ -66,6 +66,37 @@ class ClaudeUsage(Base):
     cache_read_tokens: Mapped[int] = mapped_column(Integer, default=0)
     cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0)
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class NewsItem(Base):
+    """A news article from any source, plus Claude's assessment once scored."""
+
+    __tablename__ = "news_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), index=True)  # rss | gdelt | cryptopanic
+    source_name: Mapped[str] = mapped_column(String(128))  # e.g. "CoinDesk"
+    url: Mapped[str] = mapped_column(String(1024), unique=True)
+    title: Mapped[str] = mapped_column(Text)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    source_coins: Mapped[str | None] = mapped_column(String(128), nullable=True)  # "BTC,ETH"
+    source_votes: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON (CryptoPanic)
+
+    # Assessment (filled by Claude)
+    assessed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    assessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    assessment_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    relevant: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    sentiment: Mapped[float | None] = mapped_column(Float, nullable=True)  # -1 .. 1
+    impact: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0 .. 3
+    horizon: Mapped[str | None] = mapped_column(String(16), nullable=True)  # hours|days|weeks
+    coins: Mapped[str | None] = mapped_column(String(128), nullable=True)  # "BTC,ETH" or "ALL"
+    summary_nl: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    def coin_list(self) -> list[str]:
+        return [c for c in (self.coins or "").split(",") if c]
 
 
 def make_engine(url: str | None = None):

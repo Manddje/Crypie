@@ -8,8 +8,8 @@ combineert tot handelsbeslissingen. Draait in Docker en is bedoeld voor deployme
 | Stap | Inhoud | Status |
 |------|--------|--------|
 | 1 | Docker-fundament, Bitvavo-koppeling, database, dashboard | klaar |
-| 2 | Configureerbare indicatoren, samen met Claude in te stellen, met backtests en budgetbewaking | in deze PR |
-| 3 | Nieuws inlezen (RSS, GDELT, CryptoPanic) en door Claude laten beoordelen | gepland |
+| 2 | Configureerbare indicatoren, samen met Claude in te stellen, met backtests en budgetbewaking | klaar |
+| 3 | Nieuws inlezen (RSS, GDELT, CryptoPanic) en door Claude laten beoordelen | in deze PR |
 | 4 | Paper trading met logboek en evaluatielus, daarna live met harde limieten | gepland |
 
 ## Lokaal draaien
@@ -52,6 +52,24 @@ Op de pagina **/strategy** kun je:
 De backtest is long-only, rekent Bitvavo-fees mee (`BACKTEST_FEE_PCT`), vult stop-loss en
 take-profit op de drempelprijs en vergelijkt met kopen-en-houden.
 
+## Nieuws
+
+Een achtergrondtaak haalt elke `NEWS_FETCH_INTERVAL_MIN` minuten nieuws op en laat het beoordelen:
+
+| Bron | Kosten | Instelling |
+|------|--------|------------|
+| RSS (CoinDesk, Cointelegraph, The Block, Decrypt) | gratis | `NEWS_RSS_FEEDS` (komma-gescheiden) |
+| GDELT DOC API (wereldnieuws, elke 15 min bijgewerkt) | gratis, max. 1 verzoek per 5 s per IP | `GDELT_ENABLED`, `GDELT_QUERY` |
+| CryptoPanic v2 | betaald (Growth-plan); zonder token overgeslagen | `CRYPTOPANIC_TOKEN`, `CRYPTOPANIC_PLAN` |
+
+Nieuwe berichten (ontdubbeld op URL, maximaal `NEWS_MAX_AGE_HOURS` oud) gaan in batches van
+`NEWS_BATCH_SIZE` naar Claude (`CLAUDE_MODEL_NEWS`, standaard Haiku 5.5). Per bericht komt terug:
+relevant ja/nee, sentiment (-1 tot 1), impact (0 tot 3), horizon (uren/dagen/weken), geraakte coins en
+een Nederlandse samenvatting. Per coin wordt daaruit een **marktsentiment** berekend: gewogen op impact en
+met vervaltijd per horizon (6 uur, 36 uur, 1 week halfwaardetijd). Dit sentiment is de input voor de
+handelsbeslissing in stap 4. Pagina **/news** toont alles; API: `GET /api/news`, `GET /api/news/sentiment`,
+`POST /api/news/refresh`.
+
 ## Claude-kosten
 
 Elke Claude-aanroep wordt met tokens en geschatte kosten opgeslagen in de tabel `claude_usage`.
@@ -73,7 +91,7 @@ Zet daarnaast in de Anthropic Console een uitgavenlimiet op de API-key als tweed
 app/
   main.py                   FastAPI: JSON-API (/api/...), dashboard (/) en strategiepagina (/strategy)
   config.py                 instellingen uit omgevingsvariabelen
-  db.py                     SQLAlchemy-modellen: orders, settings, claude_usage
+  db.py                     SQLAlchemy-modellen: orders, settings, claude_usage, news_items
   bitvavo/client.py         Bitvavo REST-client (publiek + gesigneerd)
   bitvavo/broker.py         PaperBroker / LiveBroker
   indicators/core.py        SMA, EMA, RSI, MACD, Bollinger (pure Python)
@@ -81,6 +99,9 @@ app/
   strategy/engine.py        indicatorseries, signalen en backtester
   strategy/store.py         actieve strategie in de settings-tabel
   ai/strategy_assistant.py  Claude vertaalt een beschrijving naar een strategie (structured output)
+  ai/news_analyst.py        Claude beoordeelt nieuwsberichten in batches (structured output)
   ai/budget.py              kosten per aanroep, maandbudget
+  news/sources.py           RSS-, GDELT- en CryptoPanic-fetchers en parsers
+  news/service.py           opslaan, ontdubbelen, beoordelen, marktsentiment per coin
 tests/                      pytest (respx mockt Bitvavo, Claude wordt gemockt)
 ```
