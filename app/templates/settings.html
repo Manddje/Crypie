@@ -74,7 +74,7 @@
                 {% if f.unit in ("€", "$") %}<span class="unit">{{ f.unit }}</span>{% endif %}
                 <input type="number" id="{{ fid }}" name="{{ f.key }}" value="{{ f.text }}" inputmode="decimal"
                        {% if f.min is not none %}min="{{ f.min }}"{% endif %} {% if f.max is not none %}max="{{ f.max }}"{% endif %}
-                       step="{{ f.step if f.step else (1 if f.kind == 'int' else 'any') }}">
+                       step="{{ 1 if f.kind == 'int' else 'any' }}">
                 {% if f.unit and f.unit not in ("€", "$") %}<span class="unit">{{ f.unit }}</span>{% endif %}
               </div>
             {% else %}

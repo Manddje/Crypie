@@ -59,7 +59,6 @@ class Spec:
     choices: tuple[tuple[str, str], ...] = ()
     min: float | None = None
     max: float | None = None
-    step: float | None = None
     unit: str = ""
     restart: bool = False  # True when a change only takes effect after a restart
     extra: dict[str, Any] = field(default_factory=dict)
@@ -117,7 +116,6 @@ SPECS: tuple[Spec, ...] = (
         kind="float",
         min=10,
         max=10_000_000,
-        step=10,
         unit="€",
     ),
     Spec(
@@ -137,7 +135,6 @@ SPECS: tuple[Spec, ...] = (
         kind="float",
         min=5,
         max=1_000_000,
-        step=5,
         unit="€",
     ),
     Spec(
@@ -148,7 +145,6 @@ SPECS: tuple[Spec, ...] = (
         kind="float",
         min=5,
         max=100_000,
-        step=1,
         unit="€",
     ),
     Spec(
@@ -159,7 +155,6 @@ SPECS: tuple[Spec, ...] = (
         kind="float",
         min=0,
         max=100,
-        step=1,
         unit="%",
     ),
     Spec(
@@ -170,7 +165,6 @@ SPECS: tuple[Spec, ...] = (
         kind="float",
         min=0.1,
         max=100,
-        step=0.5,
         unit="%",
     ),
     Spec(
@@ -202,7 +196,6 @@ SPECS: tuple[Spec, ...] = (
         kind="float",
         min=0,
         max=100_000,
-        step=5,
         unit="$",
     ),
     Spec(
@@ -257,7 +250,6 @@ SPECS: tuple[Spec, ...] = (
         kind="float",
         min=0,
         max=5,
-        step=0.05,
         unit="%",
     ),
     # -- news --
@@ -603,7 +595,6 @@ def describe(session: Session, current: Settings, env: Settings | None = None) -
                     "choices": list(spec.choices),
                     "min": spec.min,
                     "max": spec.max,
-                    "step": spec.step,
                     "unit": spec.unit,
                     "env_name": spec.env_name,
                     "value": getattr(current, spec.key),
