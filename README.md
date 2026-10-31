@@ -115,10 +115,14 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
 4. **Harde limieten** (`app/trading/risk.py`), in code afgedwongen: `MAX_TRADE_EUR`, `MAX_EXPOSURE_PCT`,
    `DAILY_LOSS_LIMIT_PCT`, `MAX_TRADES_PER_DAY`, `COOLDOWN_MIN_AFTER_STOP`, plus een kill switch
    (pauzeren op `/trading`). Zonder Claude (budget op, geen key): `CLAUDE_UNAVAILABLE_MODE` = `hold` of `indicators`.
-5. **Logboek**: elke beslissing komt in `decisions` met alle input en later de koers 1, 24 en 72 uur erna.
+5. **Transactiekosten**: paper-orders betalen dezelfde taker-fee als Bitvavo (`TRADING_FEE_PCT`,
+   standaard 0,25% per kant; met een live key wordt het echte tarief van je account gelezen). Winst en
+   verlies zijn altijd netto na kosten, ook live (Bitvavo meldt de betaalde fee per order terug), en
+   Claude krijgt de kosten mee in zijn afweging.
+6. **Logboek**: elke beslissing komt in `decisions` met alle input en later de koers 1, 24 en 72 uur erna.
    Posities staan in `positions`. Deze uitkomsten gaan terug naar Claude bij de volgende beslissing: zo
    "leert" de bot zonder dat het model verandert.
-6. **Evaluatie**: elke `EVALUATION_INTERVAL_HOURS` (standaard wekelijks) schrijft `CLAUDE_MODEL_EVALUATION`
+7. **Evaluatie**: elke `EVALUATION_INTERVAL_HOURS` (standaard wekelijks) schrijft `CLAUDE_MODEL_EVALUATION`
    (Fable 5.1) een rapport over de resultaten en doet eventueel een strategievoorstel, inclusief backtest.
    Een voorstel wordt pas actief als jij het op `/trading` toepast.
 

@@ -46,7 +46,9 @@
         {{ ui.stat("Winstkans", perf.win_rate_pct|pct(0, false) if perf.win_rate_pct is not none else "–", perf.closed_positions ~ " gesloten") }}
         {{ ui.stat("Per trade", perf.avg_pnl_pct|pct if perf.avg_pnl_pct is not none else "–", "gemiddeld") }}
         {{ ui.stat("Vandaag", status.realized_pnl_today|eur, "gerealiseerd", "pos" if status.realized_pnl_today >= 0 else "neg") }}
+        {{ ui.stat("Kosten", perf.total_fees_eur|eur, status.fee_pct|num(2) ~ "% per kant") }}
       </div>
+      <p class="form-help">Resultaten zijn netto, na de Bitvavo-kosten van kopen en verkopen.</p>
     </section>
 
     <section class="card">
@@ -139,7 +141,7 @@
     {% if closed_positions %}
     <div class="table-wrap">
     <table>
-      <tr><th>Markt</th><th>Geopend</th><th>Gesloten</th><th class="num">Instap</th><th class="num">Uitstap</th><th class="num">Resultaat</th><th>Reden</th></tr>
+      <tr><th>Markt</th><th>Geopend</th><th>Gesloten</th><th class="num">Instap</th><th class="num">Uitstap</th><th class="num">Kosten</th><th class="num">Netto resultaat</th><th>Reden</th></tr>
       {% for p in closed_positions %}
       <tr>
         <td><strong>{{ p.market }}</strong></td>
@@ -147,6 +149,7 @@
         <td class="nowrap">{{ p.closed_at|dt }}</td>
         <td class="num">€ {{ p.entry_price|price }}</td>
         <td class="num">€ {{ p.exit_price|price }}</td>
+        <td class="num">{{ (p.fees_eur or 0)|eur }}</td>
         <td class="num {{ 'pos' if p.pnl_eur >= 0 else 'neg' }}">{{ p.pnl_eur|eur }}<span class="sub {{ 'pos' if p.pnl_eur >= 0 else 'neg' }}">{{ p.pnl_pct|pct }}</span></td>
         <td>{{ p.close_reason|nl }}</td>
       </tr>

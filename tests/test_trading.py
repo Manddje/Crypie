@@ -104,10 +104,12 @@ SELL_SERIES = [6, 9, 12, 15, 18, 15, 12]  # fast crosses below slow on the last 
 FLAT_SERIES = [10, 10, 10, 10, 10, 10, 10]
 
 
-def make_engine_(session, series, prices, decider, strategy=None, evaluator=None, mode="hold"):
+def make_engine_(
+    session, series, prices, decider, strategy=None, evaluator=None, mode="hold", fee_pct=0.0
+):
     save_strategy(session, strategy or cross_strategy())
     client = FakeClient(series, prices)
-    broker = PaperBroker(client, start_eur=1000)
+    broker = PaperBroker(client, start_eur=1000, fee_pct=fee_pct)
     return TradingEngine(
         client,
         broker,
@@ -116,6 +118,7 @@ def make_engine_(session, series, prices, decider, strategy=None, evaluator=None
         list(series),
         LIMITS,
         claude_unavailable_mode=mode,
+        fee_pct=fee_pct,
     )
 
 
@@ -250,6 +253,49 @@ async def test_sell_signal_closes_position_with_pnl(session):
     assert pos.status == "closed" and pos.close_reason == "signal"
     assert pos.exit_quote == pytest.approx(90) and pos.pnl_eur == pytest.approx(10)
     assert pos.pnl_pct == pytest.approx(12.5)
+
+
+async def test_fees_flow_into_position_pnl_and_claude_context(session):
+    decider = FakeDecider(
+        TradeDecision(action="buy", confidence=0.8, amount_quote=100, reasoning_nl="Go.")
+    )
+    engine = make_engine_(
+        session, {"BTC-EUR": candles(BUY_SERIES)}, {"BTC-EUR": 12.0}, decider, fee_pct=0.25
+    )
+    await engine.run_cycle(session)
+    ctx = decider.contexts[0]
+    assert ctx["costs"]["fee_pct_per_side"] == 0.25 and ctx["costs"]["round_trip_pct"] == 0.5
+    pos = open_position(session, "paper", "BTC-EUR")
+    assert pos.entry_quote == pytest.approx(100) and pos.fees_eur == pytest.approx(0.25)
+    assert pos.amount == pytest.approx(99.75 / 12)
+
+    # Sell at the same price via the engine: the round trip loses exactly the two fees.
+    decider.decision = TradeDecision(action="sell", confidence=1, amount_quote=0, reasoning_nl="x")
+    engine.client.series["BTC-EUR"] = candles(SELL_SERIES)
+    await engine.run_cycle(session)
+    ctx = decider.contexts[1]
+    assert ctx["position"]["unrealized_net_pct"] == pytest.approx(-0.499, abs=0.01)
+    pos = session.query(Position).one()
+    assert pos.status == "closed"
+    assert pos.fees_eur == pytest.approx(0.25 + 99.75 * 0.0025)
+    assert pos.pnl_eur == pytest.approx(-pos.fees_eur)
+    assert pos.exit_quote == pytest.approx(99.75 * 0.9975)
+    perf = performance_summary(session, "paper")
+    assert perf["total_fees_eur"] == pytest.approx(round(pos.fees_eur, 2))
+
+
+def test_add_missing_columns_adds_new_fee_columns():
+    from sqlalchemy import inspect, text
+
+    from app.db import add_missing_columns
+
+    engine = make_engine("sqlite:///:memory:")
+    with engine.begin() as conn:  # an "old" orders table without fee_quote
+        conn.execute(text("CREATE TABLE orders (id INTEGER PRIMARY KEY, mode VARCHAR(8))"))
+    add_missing_columns(engine)
+    cols = {c["name"] for c in inspect(engine).get_columns("orders")}
+    assert "fee_quote" in cols
+    add_missing_columns(engine)  # idempotent
 
 
 async def test_stop_loss_is_mechanical_and_skips_claude(session):

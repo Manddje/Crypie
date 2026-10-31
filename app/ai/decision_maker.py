@@ -27,6 +27,9 @@ Spelregels:
 - amount_quote is in EUR en mag nooit boven max_trade_eur liggen; de code kapt het verder af.
 - Leer van de samenvatting van recente beslissingen: als vergelijkbare situaties recent slecht
   uitpakten, wees terughoudender; als ze goed uitpakten, mag je het signaal volgen.
+- Transactiekosten tellen: "costs" geeft de fee per kant en wat een rondje kopen+verkopen
+  samen kost. Een trade is pas zinvol als de verwachte beweging daar ruim boven ligt; de
+  genoemde winsten en unrealized_net_pct zijn al netto na kosten.
 - Bij twijfel: "hold". Niet handelen kost niets, een slechte trade wel.
 - reasoning_nl: twee tot vier zinnen Nederlands met de doorslaggevende argumenten.
 """

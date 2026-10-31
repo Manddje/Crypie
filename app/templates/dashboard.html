@@ -182,13 +182,14 @@
       {% if orders %}
       <div class="table-wrap">
       <table>
-        <tr><th>Tijd</th><th>Markt</th><th>Kant</th><th class="num">Bedrag</th><th class="num">Koers</th><th>Status</th></tr>
+        <tr><th>Tijd</th><th>Markt</th><th>Kant</th><th class="num">Bedrag</th><th class="num">Kosten</th><th class="num">Koers</th><th>Status</th></tr>
         {% for o in orders %}
         <tr>
           <td class="nowrap">{{ o.created_at|dt }}</td>
           <td><strong>{{ o.market }}</strong>{% if o.reason %}<span class="sub clip" title="{{ o.reason }}">{{ o.reason|nl }}</span>{% endif %}</td>
           <td><span class="pill {{ 'pill-green' if o.side == 'buy' else 'pill-red' }}">{{ o.side|nl }}</span></td>
           <td class="num">{{ o.amount_quote|eur if o.amount_quote else "–" }}<span class="sub">{{ o.amount|amount if o.amount else "" }}</span></td>
+          <td class="num">{{ o.fee_quote|eur if o.fee_quote else "–" }}</td>
           <td class="num">{{ ("€ " ~ o.price|price) if o.price else "–" }}</td>
           <td>{{ o.status|nl }}</td>
         </tr>

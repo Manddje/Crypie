@@ -67,7 +67,7 @@ def build_broker(settings: Settings, client: BitvavoClient) -> Broker:
         if blocker:
             raise RuntimeError(f"live handelen is niet toegestaan: {blocker}")
         return LiveBroker(client)
-    return PaperBroker(client, settings.paper_start_eur)
+    return PaperBroker(client, settings.paper_start_eur, settings.trading_fee_pct)
 
 
 def build_auth(settings: Settings) -> AuthService | None:
@@ -109,6 +109,9 @@ def apply_settings(app: FastAPI, new: Settings) -> None:
     )
     engine.claude_unavailable_mode = new.claude_unavailable_mode
     engine.backtest_fee_pct = new.backtest_fee_pct
+    engine.fee_pct = new.trading_fee_pct
+    if isinstance(state.broker, PaperBroker):
+        state.broker.fee_pct = new.trading_fee_pct
     engine.decision_maker.model = new.claude_model_decision
     engine.evaluator.model = new.claude_model_evaluation
     news: NewsService = state.news
@@ -135,6 +138,12 @@ async def lifespan(app: FastAPI):
         settings = cfg.effective_settings(session, env)
     client = BitvavoClient(env.bitvavo_api_key, env.bitvavo_api_secret, env.bitvavo_rest_url)
     app.state.client = client
+    if client.authenticated:
+        # Use the account's real taker fee when Bitvavo tells us; otherwise the configured one.
+        real_fee = await client.taker_fee_pct()
+        if real_fee is not None and real_fee != settings.trading_fee_pct:
+            log.info("Bitvavo taker fee is %.4f%%, overriding TRADING_FEE_PCT", real_fee)
+            settings = settings.model_copy(update={"trading_fee_pct": real_fee})
     try:
         broker = build_broker(settings, client)
     except RuntimeError as exc:
@@ -148,7 +157,7 @@ async def lifespan(app: FastAPI):
             with SessionLocal() as session:
                 cfg.reset_overrides(session, ["trading_mode"])
         settings = settings.model_copy(update={"trading_mode": "paper"})
-        broker = PaperBroker(client, settings.paper_start_eur)
+        broker = PaperBroker(client, settings.paper_start_eur, settings.trading_fee_pct)
     app.state.settings = settings
     app.state.broker = broker
     app.state.budget = BudgetGuard(settings.claude_monthly_budget_usd)
@@ -185,6 +194,7 @@ async def lifespan(app: FastAPI):
         ),
         settings.claude_unavailable_mode,
         settings.backtest_fee_pct,
+        settings.trading_fee_pct,
     )
     # The schedulers read the interval and on/off switch from app.state.settings on every
     # tick, so a change in the portal takes effect within a tick, without a restart.
@@ -367,6 +377,7 @@ async def list_orders(session: Session = Depends(get_session)):
             "side": o.side,
             "amount": o.amount,
             "amount_quote": o.amount_quote,
+            "fee_quote": o.fee_quote,
             "price": o.price,
             "status": o.status,
             "reason": o.reason,
@@ -391,7 +402,15 @@ async def create_order(
         raise HTTPException(400, str(exc)) from exc
     except BitvavoError as exc:
         raise HTTPException(502, str(exc)) from exc
-    return {"id": o.id, "status": o.status, "price": o.price, "amount": o.amount, "mode": o.mode}
+    return {
+        "id": o.id,
+        "status": o.status,
+        "price": o.price,
+        "amount": o.amount,
+        "amount_quote": o.amount_quote,
+        "fee_quote": o.fee_quote,
+        "mode": o.mode,
+    }
 
 
 # -- Strategy ------------------------------------------------------------------------
@@ -702,6 +721,7 @@ def _trading_status(engine: TradingEngine, session: Session, settings: Settings)
         "enabled": settings.trading_enabled,
         "interval_min": settings.trade_interval_min,
         "limits": engine.limits.__dict__,
+        "fee_pct": engine.fee_pct,
         "claude_available": engine.decision_maker.available,
         "last_run": engine.last_run,
         "last_results": engine.last_results,

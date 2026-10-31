@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     claude_unavailable_mode: Literal["hold", "indicators"] = "hold"
     evaluation_interval_hours: int = 168
     backtest_fee_pct: float = 0.25
+    # Bitvavo taker fee per side (percent). Default is the entry tier; live mode reads the
+    # real fee from the account at startup when it can.
+    trading_fee_pct: float = 0.25
 
     # Login (dashboard). The account is created in the browser at /setup and lives in the DB.
     auth_enabled: bool = True

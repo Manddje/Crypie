@@ -47,10 +47,13 @@ async def test_paper_order_flow(api):
     body = {"market": "eth-eur", "side": "buy", "amount_quote": 100}
     r = await api.post("/api/orders", json=body)
     assert r.status_code == 201, r.text
-    assert r.json()["mode"] == "paper" and r.json()["amount"] == pytest.approx(0.05)
+    # 100 EUR minus the 0.25% taker fee buys 99.75 / 2000 ETH.
+    assert r.json()["mode"] == "paper" and r.json()["amount"] == pytest.approx(0.049875)
+    assert r.json()["fee_quote"] == pytest.approx(0.25)
 
     r = await api.get("/api/balance")
-    assert r.json()["balances"] == {"EUR": 900.0, "ETH": 0.05}
+    balances = r.json()["balances"]
+    assert balances["EUR"] == pytest.approx(900.0) and balances["ETH"] == pytest.approx(0.049875)
 
     r = await api.post("/api/orders", json={"market": "XRP-EUR", "side": "buy", "amount_quote": 10})
     assert r.status_code == 400
@@ -58,7 +61,8 @@ async def test_paper_order_flow(api):
     r = await api.get("/")
     assert r.status_code == 200 and "ETH-EUR" in r.text
     # Portfolio value = cash + coins at the current price, shown in Dutch notation.
-    assert "€ 1.000,00" in r.text and "Oefenmodus" in r.text
+    # The 0.25 EUR fee of the order above is gone for good, so 999,75 instead of 1.000,00.
+    assert "€ 999,75" in r.text and "Oefenmodus" in r.text
 
     r = await api.get("/static/app.css")
     assert r.status_code == 200 and "text/css" in r.headers["content-type"]

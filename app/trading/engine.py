@@ -95,6 +95,7 @@ def performance_summary(session: Session, mode: str, days: int = 30) -> dict[str
         "closed_positions": len(closed),
         "win_rate_pct": round(len(wins) / len(closed) * 100, 1) if closed else None,
         "total_pnl_eur": round(sum(p.pnl_eur or 0 for p in closed), 2),
+        "total_fees_eur": round(sum(p.fees_eur or 0 for p in closed), 2),
         "avg_pnl_pct": round(sum(p.pnl_pct or 0 for p in closed) / len(closed), 2)
         if closed
         else None,
@@ -132,6 +133,7 @@ class TradingEngine:
         limits: RiskLimits,
         claude_unavailable_mode: str = "hold",
         backtest_fee_pct: float = 0.25,
+        fee_pct: float = 0.25,
     ):
         self.client = client
         self.broker = broker
@@ -141,6 +143,7 @@ class TradingEngine:
         self.limits = limits
         self.claude_unavailable_mode = claude_unavailable_mode
         self.backtest_fee_pct = backtest_fee_pct
+        self.fee_pct = fee_pct  # per side; what a round trip must beat to break even is 2x
         self.last_run: datetime | None = None
         self.last_results: list[dict[str, Any]] = []
         self.last_error: str | None = None
@@ -277,13 +280,15 @@ class TradingEngine:
                         blocked = str(exc)
                     else:
                         fill = order.price or price
+                        spent = order.amount_quote or allowed  # EUR gone incl. fee
                         session.add(
                             Position(
                                 mode=self.mode,
                                 market=market,
                                 amount=order.amount or allowed / fill,
                                 entry_price=fill,
-                                entry_quote=allowed,
+                                entry_quote=spent,
+                                fees_eur=order.fee_quote or 0.0,
                                 stop_price=fill * (1 - strategy.stop_loss_pct / 100)
                                 if strategy.stop_loss_pct
                                 else None,
@@ -293,7 +298,7 @@ class TradingEngine:
                                 open_order_id=order.id,
                             )
                         )
-                        decision.amount_quote = allowed
+                        decision.amount_quote = spent
                         executed, order_id = True, order.id
         elif action == "sell":
             if position is None:
@@ -326,11 +331,23 @@ class TradingEngine:
                 "amount": position.amount,
                 "entry_price": position.entry_price,
                 "unrealized_pct": round((price / position.entry_price - 1) * 100, 2),
+                # What closing now would really yield after the exit fee, vs. EUR spent.
+                "unrealized_net_pct": round(
+                    (position.amount * price * (1 - self.fee_pct / 100) / position.entry_quote - 1)
+                    * 100,
+                    2,
+                ),
                 "opened_at": position.opened_at,
                 "stop_price": position.stop_price,
                 "take_profit_price": position.take_profit_price,
             },
             "limits": {"max_trade_eur": self.limits.max_trade_eur},
+            "costs": {
+                "fee_pct_per_side": self.fee_pct,
+                "round_trip_pct": round(2 * self.fee_pct, 4),
+                "note": "kopen en weer verkopen kost samen round_trip_pct; een trade moet meer "
+                "stijgen om netto iets op te leveren",
+            },
             "recent_performance": performance_summary(session, self.mode),
         }
         if self.decision_maker.available:
@@ -375,7 +392,8 @@ class TradingEngine:
         order = await self.broker.market_order(
             session, position.market, "sell", amount_quote, reason=reason
         )
-        fill_quote = order.amount_quote or amount_quote
+        fill_quote = order.amount_quote or amount_quote  # net EUR received after fee
+        position.fees_eur = (position.fees_eur or 0.0) + (order.fee_quote or 0.0)
         position.status = "closed"
         position.exit_price = order.price or price
         position.exit_quote = fill_quote

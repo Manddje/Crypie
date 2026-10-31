@@ -136,6 +136,18 @@ class BitvavoClient:
     async def balance(self) -> list[dict[str, Any]]:
         return await self._request("GET", "/balance", auth=True)
 
+    async def account(self) -> dict[str, Any]:
+        """Account info incl. fee tier: {"fees": {"taker": "0.0025", "maker": "0.0015"}}."""
+        return await self._request("GET", "/account", auth=True)
+
+    async def taker_fee_pct(self) -> float | None:
+        """Current taker fee in percent, or None when it cannot be read."""
+        try:
+            fees = (await self.account()).get("fees") or {}
+            return float(fees["taker"]) * 100
+        except (BitvavoError, KeyError, TypeError, ValueError):
+            return None
+
     async def place_order(
         self,
         market: str,

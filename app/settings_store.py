@@ -243,6 +243,17 @@ SPECS: tuple[Spec, ...] = (
         unit="uur",
     ),
     Spec(
+        "trading_fee_pct",
+        "limits",
+        "Handelskosten per order",
+        "Bitvavo taker-fee per kant die oefenorders betalen en waarmee resultaten netto worden "
+        "berekend. Met een live key leest de app je echte tarief bij het opstarten.",
+        kind="float",
+        min=0,
+        max=5,
+        unit="%",
+    ),
+    Spec(
         "backtest_fee_pct",
         "claude",
         "Handelskosten in backtests",
