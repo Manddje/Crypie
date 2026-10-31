@@ -129,7 +129,7 @@
   <section>
     <h2>Laatste orders</h2>
     <table>
-      <tr><th>Tijd</th><th>Modus</th><th>Markt</th><th>Kant</th><th class="num">Bedrag</th><th class="num">EUR</th><th class="num">Prijs</th><th>Status</th><th>Reden</th></tr>
+      <tr><th>Tijd</th><th>Modus</th><th>Markt</th><th>Kant</th><th class="num">Bedrag</th><th class="num">EUR</th><th class="num">Fee</th><th class="num">Prijs</th><th>Status</th><th>Reden</th></tr>
       {% for o in orders %}
       <tr>
         <td>{{ o.created_at.strftime("%d-%m %H:%M") }}</td>
@@ -138,12 +138,13 @@
         <td class="{{ o.side }}">{{ o.side }}</td>
         <td class="num">{{ "%.6f"|format(o.amount) if o.amount else "-" }}</td>
         <td class="num">{{ "%.2f"|format(o.amount_quote) if o.amount_quote else "-" }}</td>
+        <td class="num">{{ "%.2f"|format(o.fee_quote) if o.fee_quote else "-" }}</td>
         <td class="num">{{ "%.2f"|format(o.price) if o.price else "-" }}</td>
         <td>{{ o.status }}</td>
         <td>{{ o.reason or "" }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="9">Nog geen orders.</td></tr>
+      <tr><td colspan="10">Nog geen orders.</td></tr>
       {% endfor %}
     </table>
   </section>

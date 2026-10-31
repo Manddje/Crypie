@@ -55,6 +55,7 @@
       <div>Winstpercentage: {{ perf.win_rate_pct if perf.win_rate_pct is not none else "-" }}{% if perf.win_rate_pct is not none %}%{% endif %}</div>
       <div>Totaal resultaat: <span class="{{ 'pos' if perf.total_pnl_eur >= 0 else 'neg' }}">€ {{ perf.total_pnl_eur }}</span></div>
       <div>Gemiddeld per trade: {{ perf.avg_pnl_pct if perf.avg_pnl_pct is not none else "-" }}{% if perf.avg_pnl_pct is not none %}%{% endif %}</div>
+      <div>Betaalde kosten: € {{ perf.total_fees_eur }} <span class="muted">(fee {{ status.fee_pct }}% per kant; resultaten zijn netto)</span></div>
       <div>Vandaag gerealiseerd: € {{ status.realized_pnl_today }}</div>
     </div>
     <div class="card">
@@ -97,10 +98,10 @@
 
   <h2>Gesloten posities</h2>
   <table>
-    <tr><th>Markt</th><th>Geopend</th><th>Gesloten</th><th class="num">Instap</th><th class="num">Uitstap</th><th class="num">Resultaat</th><th>Reden</th></tr>
+    <tr><th>Markt</th><th>Geopend</th><th>Gesloten</th><th class="num">Instap</th><th class="num">Uitstap</th><th class="num">Kosten</th><th class="num">Netto resultaat</th><th>Reden</th></tr>
     {% for p in closed_positions %}
-    <tr><td>{{ p.market }}</td><td>{{ p.opened_at.strftime("%d-%m %H:%M") }}</td><td>{{ p.closed_at.strftime("%d-%m %H:%M") }}</td><td class="num">{{ "%.2f"|format(p.entry_price) }}</td><td class="num">{{ "%.2f"|format(p.exit_price) }}</td><td class="num {{ 'pos' if p.pnl_eur >= 0 else 'neg' }}">€ {{ "%.2f"|format(p.pnl_eur) }} ({{ "%.2f"|format(p.pnl_pct) }}%)</td><td>{{ p.close_reason }}</td></tr>
-    {% else %}<tr><td colspan="7">Nog geen gesloten posities.</td></tr>{% endfor %}
+    <tr><td>{{ p.market }}</td><td>{{ p.opened_at.strftime("%d-%m %H:%M") }}</td><td>{{ p.closed_at.strftime("%d-%m %H:%M") }}</td><td class="num">{{ "%.2f"|format(p.entry_price) }}</td><td class="num">{{ "%.2f"|format(p.exit_price) }}</td><td class="num">€ {{ "%.2f"|format(p.fees_eur or 0) }}</td><td class="num {{ 'pos' if p.pnl_eur >= 0 else 'neg' }}">€ {{ "%.2f"|format(p.pnl_eur) }} ({{ "%.2f"|format(p.pnl_pct) }}%)</td><td>{{ p.close_reason }}</td></tr>
+    {% else %}<tr><td colspan="8">Nog geen gesloten posities.</td></tr>{% endfor %}
   </table>
 
   <h2>Evaluaties door Claude</h2>

@@ -60,7 +60,7 @@ def build_broker(settings: Settings, client: BitvavoClient) -> Broker:
         if not settings.live_trading_ack:
             raise RuntimeError("TRADING_MODE=live requires LIVE_TRADING_ACK=true")
         return LiveBroker(client)
-    return PaperBroker(client, settings.paper_start_eur)
+    return PaperBroker(client, settings.paper_start_eur, settings.trading_fee_pct)
 
 
 @asynccontextmanager
@@ -72,6 +72,12 @@ async def lifespan(app: FastAPI):
     )
     app.state.settings = settings
     app.state.client = client
+    if client.authenticated:
+        # Use the account's real taker fee when Bitvavo tells us; otherwise the configured one.
+        real_fee = await client.taker_fee_pct()
+        if real_fee is not None and real_fee != settings.trading_fee_pct:
+            log.info("Bitvavo taker fee is %.4f%%, overriding TRADING_FEE_PCT", real_fee)
+            settings.trading_fee_pct = real_fee
     app.state.broker = build_broker(settings, client)
     app.state.budget = BudgetGuard(settings.claude_monthly_budget_usd)
     app.state.assistant = StrategyAssistant(
@@ -107,6 +113,7 @@ async def lifespan(app: FastAPI):
         ),
         settings.claude_unavailable_mode,
         settings.backtest_fee_pct,
+        settings.trading_fee_pct,
     )
     tasks: list[asyncio.Task] = []
     if settings.news_enabled and settings.news_fetch_interval_min > 0:
@@ -255,6 +262,7 @@ async def list_orders(session: Session = Depends(get_session)):
             "side": o.side,
             "amount": o.amount,
             "amount_quote": o.amount_quote,
+            "fee_quote": o.fee_quote,
             "price": o.price,
             "status": o.status,
             "reason": o.reason,
@@ -279,7 +287,15 @@ async def create_order(
         raise HTTPException(400, str(exc)) from exc
     except BitvavoError as exc:
         raise HTTPException(502, str(exc)) from exc
-    return {"id": o.id, "status": o.status, "price": o.price, "amount": o.amount, "mode": o.mode}
+    return {
+        "id": o.id,
+        "status": o.status,
+        "price": o.price,
+        "amount": o.amount,
+        "amount_quote": o.amount_quote,
+        "fee_quote": o.fee_quote,
+        "mode": o.mode,
+    }
 
 
 # -- Strategy ------------------------------------------------------------------------
@@ -584,6 +600,7 @@ def _trading_status(engine: TradingEngine, session: Session, settings: Settings)
         "enabled": settings.trading_enabled,
         "interval_min": settings.trade_interval_min,
         "limits": engine.limits.__dict__,
+        "fee_pct": engine.fee_pct,
         "claude_available": engine.decision_maker.available,
         "last_run": engine.last_run,
         "last_results": engine.last_results,

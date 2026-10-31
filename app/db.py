@@ -36,6 +36,7 @@ class Order(Base):
     status: Mapped[str] = mapped_column(String(16))
     exchange_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)  # why the bot traded
+    fee_quote: Mapped[float | None] = mapped_column(Float, nullable=True)  # EUR fee paid
 
 
 class Setting(Base):
@@ -122,6 +123,7 @@ class Position(Base):
     close_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
     open_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     close_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fees_eur: Mapped[float] = mapped_column(Float, default=0.0)  # entry + exit fees, EUR
 
 
 class Decision(Base):
@@ -190,6 +192,29 @@ def init_db() -> None:
         if os.path.dirname(path):
             os.makedirs(os.path.dirname(path), exist_ok=True)
     Base.metadata.create_all(engine)
+    add_missing_columns(engine)
+
+
+def add_missing_columns(bind) -> None:
+    """Tiny forward-only migration: add columns that newer models define on existing tables."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    with bind.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if not inspector.has_table(table.name):
+                continue
+            existing = {c["name"] for c in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in existing:
+                    continue
+                col_type = column.type.compile(dialect=bind.dialect)
+                default = ""
+                if column.default is not None and column.default.is_scalar:
+                    default = f" DEFAULT {column.default.arg!r}"
+                conn.execute(
+                    text(f"ALTER TABLE {table.name} ADD COLUMN {column.name} {col_type}{default}")
+                )
 
 
 def get_session() -> Iterator[Session]:
