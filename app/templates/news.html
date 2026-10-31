@@ -58,26 +58,38 @@
         <a href="/news?hours=72" {% if hours == 72 %}class="active"{% endif %}>3 dagen</a>
       </nav>
     </div>
-    <p class="card-desc">Berichten die volgens Claude niets met de koers te maken hebben, staan lichter weergegeven. Bronnen: {{ settings.news_rss_feeds|length }} RSS-feeds{% if settings.gdelt_enabled %}, GDELT (wereldnieuws){% endif %}{% if settings.cryptopanic_token %}, CryptoPanic{% endif %}.</p>
-    {% for it in items %}
-    <article class="news-item {{ 'dim' if it.assessed and not it.relevant else '' }}">
+    <p class="card-desc">Berichten over hetzelfde nieuwsfeit staan bij elkaar; het sentiment is dan het gemiddelde van die bronnen, de impact de hoogste. Berichten die volgens Claude niets met de koers te maken hebben, staan lichter weergegeven. Bronnen: {{ settings.news_rss_feeds|length }} RSS-feeds{% if settings.gdelt_enabled %}, GDELT (wereldnieuws){% endif %}{% if settings.cryptopanic_token %}, CryptoPanic{% endif %}.</p>
+    {% for g in groups %}
+    {% set it = g.lead %}
+    <article class="news-item {{ 'dim' if g.assessed and not g.relevant else '' }}">
       <div>
         <div class="meta">
           <span>{{ it.published_at|dt }}</span>
           <span>·</span>
           <span>{{ it.source_name }}</span>
-          {% if not it.assessed %}<span>·</span><span>nog niet beoordeeld</span>{% endif %}
+          {% if g.sources > 1 %}<span>·</span><span class="pill pill-blue">{{ g.sources }} bronnen</span>{% endif %}
+          {% if not g.assessed %}<span>·</span><span>nog niet beoordeeld</span>{% endif %}
         </div>
         <a class="title" href="{{ it.url }}" target="_blank" rel="noopener">{{ it.title }}</a>
         {% if it.summary_nl %}<div class="summary">{{ it.summary_nl }}</div>{% endif %}
+        {% if g.sources > 1 %}
+        <details class="news-others">
+          <summary>Ook gemeld door {{ g.others|map(attribute="source_name")|unique|join(", ") }}</summary>
+          <ul>
+            {% for o in g.others %}
+            <li><span class="muted nowrap">{{ o.published_at|dt }} · {{ o.source_name }}</span> <a href="{{ o.url }}" target="_blank" rel="noopener">{{ o.title }}</a>{% if o.sentiment is not none and o.relevant %} <span class="muted nowrap">({{ o.sentiment|num }})</span>{% endif %}</li>
+            {% endfor %}
+          </ul>
+        </details>
+        {% endif %}
       </div>
       <div class="side">
-        {% if it.coin_list() %}<span class="chips">{% for c in it.coin_list() %}<span class="chip">{{ "alle coins" if c == "ALL" else c }}</span>{% endfor %}</span>{% endif %}
-        {% if it.sentiment is not none %}
-        <span class="pill {{ 'pill-green' if it.sentiment > 0.1 else ('pill-red' if it.sentiment < -0.1 else '') }}">{{ "positief" if it.sentiment > 0.1 else ("negatief" if it.sentiment < -0.1 else "neutraal") }} {{ it.sentiment|num }}</span>
+        {% if g.coin_list() %}<span class="chips">{% for c in g.coin_list() %}<span class="chip">{{ "alle coins" if c == "ALL" else c }}</span>{% endfor %}</span>{% endif %}
+        {% if g.sentiment is not none %}
+        <span class="pill {{ 'pill-green' if g.sentiment > 0.1 else ('pill-red' if g.sentiment < -0.1 else '') }}">{{ "positief" if g.sentiment > 0.1 else ("negatief" if g.sentiment < -0.1 else "neutraal") }} {{ g.sentiment|num }}</span>
         {% endif %}
-        {% if it.impact is not none %}
-        <span class="small muted">impact {{ "groot" if it.impact == 3 else ("middel" if it.impact == 2 else "klein") }}{% if it.horizon %} · {{ it.horizon|nl }}{% endif %}</span>
+        {% if g.impact is not none %}
+        <span class="small muted">impact {{ "groot" if g.impact == 3 else ("middel" if g.impact == 2 else "klein") }}{% if it.horizon %} · {{ it.horizon|nl }}{% endif %}</span>
         {% endif %}
       </div>
     </article>

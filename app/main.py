@@ -30,6 +30,7 @@ from app.config import Settings, get_settings
 from app.db import Evaluation, SessionLocal, Setting, get_session, init_db
 from app.news.service import (
     NewsService,
+    group_items,
     load_market_mood,
     market_sentiment,
     recent_items,
@@ -718,7 +719,7 @@ async def news_page(
         {
             "settings": settings,
             "hours": hours,
-            "items": recent_items(session, hours, 150),
+            "groups": group_items(recent_items(session, hours, 150)),
             "sentiments": [market_sentiment(session, c, 48) for c in settings.coins],
             "market_mood": load_market_mood(session),
             "last_run": news.last_run,

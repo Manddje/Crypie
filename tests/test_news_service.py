@@ -10,6 +10,7 @@ from app.ai.news_analyst import Assessment, AssessmentBatch, NewsAnalyst, apply_
 from app.db import Base, NewsItem, make_engine
 from app.news.service import (
     NewsService,
+    group_items,
     market_sentiment,
     pending_items,
     recent_event_keys,
@@ -268,3 +269,22 @@ def test_requeue_only_relevant_recent_items_without_key(session):
     assert requeue_items_without_event_key(session) == 1
     assert [it.title for it in pending_items(session, 10)] == ["nokey"]
     assert requeue_items_without_event_key(session) == 0
+
+
+def test_group_items_folds_articles_per_news_fact(session):
+    a = _item(session, "hack-a", -0.9, 3, "BTC", hours_ago=2)
+    b = _item(session, "hack-b", -0.5, 2, "BTC,ALL", hours_ago=1)
+    a.event_key = b.event_key = "binance-hack"
+    b.source_name = "Other"
+    solo = _item(session, "etf", 0.8, 1, "BTC", hours_ago=3)
+    fresh = _item(session, "unassessed", None, None, None, hours_ago=0, relevant=None)
+    fresh.assessed = False
+    session.commit()
+    groups = group_items([fresh, b, a, solo])
+    assert [g.key for g in groups] == ["title:unassessed", "binance-hack", "title:etf"]
+    hack = groups[1]
+    assert hack.lead is a and hack.sources == 2 and hack.others == [b]
+    assert hack.sentiment == pytest.approx(-0.7) and hack.impact == 3
+    assert hack.coin_list() == ["BTC", "ALL"] and hack.relevant and hack.assessed
+    assert not groups[0].assessed and groups[0].sentiment is None and groups[0].impact is None
+    assert groups[2].sources == 1 and groups[2].others == []
