@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Account{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Account</h1>
+  <p class="subtitle">Je bent ingelogd als <strong>{{ user.username }}</strong>. Inloggen gebeurt met je wachtwoord plus een code uit je authenticator-app.</p>
+</div>
+<div class="stack">
+  {% if error %}{{ ui.notice("error", error) }}{% endif %}
+  {% if message %}{{ ui.notice("ok", message) }}{% endif %}
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-header"><h2>Tweestapsverificatie</h2>{{ ui.pill("Actief", "pill-green") if user.mfa_enrolled else ui.pill("Niet ingesteld", "pill-orange") }}</div>
+      <dl class="kv">
+        <dt>Authenticator gekoppeld</dt><dd>{{ user.totp_enrolled_at|dt(true) }}</dd>
+        <dt>Laatste login</dt><dd>{{ user.last_login_at|dt(true) }}</dd>
+        <dt>Herstelcodes over</dt><dd>{{ codes_left }} van 8</dd>
+      </dl>
+      {% if codes_left <= 2 %}<p class="form-help">Je hebt nog maar {{ codes_left }} herstelcode{{ "" if codes_left == 1 else "s" }}. Maak hieronder nieuwe aan.</p>{% endif %}
+    </section>
+    <section class="card">
+      <div class="card-header"><h2>Authenticator en herstelcodes</h2></div>
+      <p class="card-desc">Vul ter bevestiging je wachtwoord in.</p>
+      <form method="post" action="/account" class="auth-form">
+        <label>Wachtwoord
+          <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <div class="actions">
+          <button class="btn" name="action" value="recovery" type="submit">Nieuwe herstelcodes</button>
+          <button class="btn btn-danger" name="action" value="reenrol" type="submit">Authenticator opnieuw instellen</button>
+        </div>
+      </form>
+    </section>
+    <section class="card">
+      <div class="card-header"><h2>Wachtwoord wijzigen</h2></div>
+      <form method="post" action="/account" class="auth-form">
+        <input type="hidden" name="action" value="password">
+        <label>Huidig wachtwoord
+          <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <label>Nieuw wachtwoord
+          <input type="password" name="new_password" autocomplete="new-password" minlength="10" required>
+        </label>
+        <label>Nieuw wachtwoord nog een keer
+          <input type="password" name="new_password_repeat" autocomplete="new-password" minlength="10" required>
+        </label>
+        <div class="actions"><button class="btn btn-primary" type="submit">Wachtwoord wijzigen</button></div>
+      </form>
+      <p class="form-help">Wachtwoord kwijt? Draai op de server <span class="mono">python -m app.auth reset-password</span>.</p>
+    </section>
+  </div>
+</div>
+{% endblock %}

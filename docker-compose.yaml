@@ -44,6 +44,10 @@ services:
       CLAUDE_UNAVAILABLE_MODE: ${CLAUDE_UNAVAILABLE_MODE:-hold}
       EVALUATION_INTERVAL_HOURS: ${EVALUATION_INTERVAL_HOURS:-168}
       LIVE_TRADING_ACK: ${LIVE_TRADING_ACK:-false}
+      # Login (password + authenticator app); the account is created in the browser at /setup.
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      AUTH_SESSION_HOURS: ${AUTH_SESSION_HOURS:-24}
     # Only exposed inside the Docker network; Coolify's proxy routes the domain to this port.
     expose:
       - "8000"

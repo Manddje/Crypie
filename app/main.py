@@ -21,6 +21,9 @@ from app.ai.decision_maker import DecisionMaker
 from app.ai.evaluator import Evaluator
 from app.ai.news_analyst import NewsAnalyst
 from app.ai.strategy_assistant import StrategyAssistant
+from app.auth.routes import require_login
+from app.auth.routes import router as auth_router
+from app.auth.service import AuthService, load_or_create_session_secret
 from app.bitvavo.broker import PAPER_WALLET_KEY, Broker, LiveBroker, PaperBroker, recent_orders
 from app.bitvavo.client import BitvavoClient, BitvavoError
 from app.config import Settings, get_settings
@@ -65,6 +68,18 @@ def build_broker(settings: Settings, client: BitvavoClient) -> Broker:
             raise RuntimeError(f"live handelen is niet toegestaan: {blocker}")
         return LiveBroker(client)
     return PaperBroker(client, settings.paper_start_eur)
+
+
+def build_auth(settings: Settings) -> AuthService | None:
+    """Login is on unless AUTH_ENABLED=false; the account itself is created at /setup."""
+    if not settings.auth_enabled:
+        log.warning("AUTH_ENABLED=false: the dashboard is reachable without logging in")
+        return None
+    secret = settings.session_secret
+    if not secret:
+        with SessionLocal() as session:
+            secret = load_or_create_session_secret(session)
+    return AuthService(settings, secret)
 
 
 def apply_settings(app: FastAPI, new: Settings) -> None:
@@ -114,6 +129,8 @@ async def lifespan(app: FastAPI):
     init_db()
     app.state.env = env
     app.state.config_warning = None
+    # Login settings come from the environment only; they are not editable in the portal.
+    app.state.auth = build_auth(env)
     with SessionLocal() as session:
         settings = cfg.effective_settings(session, env)
     client = BitvavoClient(env.bitvavo_api_key, env.bitvavo_api_secret, env.bitvavo_rest_url)
@@ -270,6 +287,8 @@ async def evaluation_scheduler(app: FastAPI) -> None:
 
 app = FastAPI(title="Crypie", version="0.1.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+app.middleware("http")(require_login)
+app.include_router(auth_router)
 
 
 def get_client(request: Request) -> BitvavoClient:

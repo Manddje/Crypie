@@ -1,0 +1,34 @@
+{# Minimal layout for the login flow: no navigation, one centered card. #}
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}Crypie · Inloggen{% endblock %}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%235e5ce6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3Cpath d='M8 20l5-6 4 4 7-9' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("crypie-theme");
+        if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/app.css?v={{ asset_version }}">
+</head>
+<body class="auth-body">
+  <main class="auth-wrap">
+    <div class="auth-brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="brand-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0a84ff"/><stop offset="1" stop-color="#5e5ce6"/></linearGradient></defs><rect width="32" height="32" rx="8" fill="url(#brand-g)"/><path d="M8 20l5-6 4 4 7-9" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>Crypie</span>
+    </div>
+    <section class="card auth-card">
+      {% block content %}{% endblock %}
+    </section>
+    {% block below %}{% endblock %}
+  </main>
+</body>
+</html>

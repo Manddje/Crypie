@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     evaluation_interval_hours: int = 168
     backtest_fee_pct: float = 0.25
 
+    # Login (dashboard). The account is created in the browser at /setup and lives in the DB.
+    auth_enabled: bool = True
+    session_secret: str = ""  # optional; empty = generated once and kept in the database
+    auth_session_hours: int = 24
+
     @field_validator("markets", mode="before")
     @classmethod
     def _split_markets(cls, value: object) -> object:

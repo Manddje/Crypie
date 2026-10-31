@@ -10,7 +10,8 @@ combineert tot handelsbeslissingen. Draait in Docker en is bedoeld voor deployme
 | 1 | Docker-fundament, Bitvavo-koppeling, database, dashboard | klaar |
 | 2 | Configureerbare indicatoren, samen met Claude in te stellen, met backtests en budgetbewaking | klaar |
 | 3 | Nieuws inlezen (RSS, GDELT, CryptoPanic) en door Claude laten beoordelen | klaar |
-| 4 | Handelsmotor: paper trading met logboek, harde limieten en evaluatielus; live na expliciete bevestiging | in deze PR |
+| 4 | Handelsmotor: paper trading met logboek, harde limieten en evaluatielus; live na expliciete bevestiging | klaar |
+| 5 | Inloggen met wachtwoord en authenticator-app (MFA), herstelcodes, sessiecookie | in deze PR |
 
 ## Lokaal draaien
 
@@ -46,8 +47,9 @@ app als **Docker Compose**-resource vanuit deze repository.
    `TRADING_MODE=paper`. Begin met een Bitvavo-key met alleen **view**-rechten; **trade**-rechten
    pas bij live gaan. Zet in Bitvavo een IP-whitelist op het Coolify-serveradres.
 5. Koppel een domein aan de `app`-service op poort 8000 (de poort wordt niet op de host
-   gepubliceerd; alleen Coolify's proxy komt erbij). Zet het dashboard achter Coolify's
-   basic-auth of een eigen login voordat je naar live gaat.
+   gepubliceerd; alleen Coolify's proxy komt erbij).
+6. Open het domein: de eerste bezoeker komt op `/setup` en maakt daar het account aan. Doe dat
+   dus meteen na de eerste deploy; zie [Inloggen](#inloggen).
 
 ## Instellingen
 
@@ -131,6 +133,36 @@ markt uit `MARKETS` toegepast; het `market`-veld van de strategie is alleen de s
    Live (of zet `TRADING_MODE=live` in de omgeving). Zonder die bevestiging weigert de app live-modus en
    draait hij in oefenmodus. Begin met een laag maximum per order.
 
+## Inloggen
+
+Elke pagina en elk API-pad (behalve `/health` en `/static`) vraagt om een login in twee stappen:
+gebruikersnaam en wachtwoord, daarna een 6-cijferige code uit een authenticator-app
+(Google/Microsoft Authenticator, 1Password, Apple Wachtwoorden).
+
+Zolang er geen account is, stuurt de app elke bezoeker naar **`/setup`**: daar kies je een
+gebruikersnaam en wachtwoord (minstens 10 tekens), scan je een QR-code met je authenticator-app
+en bevestig je met een code. Je krijgt dan acht herstelcodes te zien die elk één keer werken als
+je telefoon kwijt is. Doe de setup dus direct na de eerste deploy, voordat iemand anders dat doet.
+
+Op de pagina **Account** wijzig je je wachtwoord, maak je nieuwe herstelcodes of koppel je een
+nieuwe authenticator (steeds met je huidige wachtwoord ter bevestiging). Buitengesloten? Draai in
+de container (Coolify: Terminal bij de app):
+
+```bash
+python -m app.auth reset-password   # nieuw wachtwoord
+python -m app.auth reset-mfa        # authenticator en herstelcodes wissen; opnieuw koppelen bij login
+python -m app.auth delete-account   # alles wissen; /setup is dan weer beschikbaar
+```
+
+Omgevingsvariabelen zijn optioneel: `AUTH_SESSION_HOURS` (standaard 24), `SESSION_SECRET` (leeg =
+eenmalig gegenereerd en in de database bewaard) en `AUTH_ENABLED=false` om de login lokaal uit te
+zetten.
+
+Technisch: wachtwoord (PBKDF2), TOTP-geheim en gehashte herstelcodes staan in de tabel
+`auth_users`; de sessie is een HMAC-gesigneerde cookie (`HttpOnly`, `SameSite=Lax`, `Secure`
+achter https). Na vijf mislukte pogingen per IP-adres volgt een oplopende wachttijd. Codes kunnen
+niet opnieuw gebruikt worden binnen hun tijdvenster.
+
 ## Claude-kosten
 
 Elke Claude-aanroep wordt met tokens en geschatte kosten opgeslagen in de tabel `claude_usage`.
@@ -146,6 +178,8 @@ Zet daarnaast in de Anthropic Console een uitgavenlimiet op de API-key als tweed
   live ticker en de virtuele portefeuille staat in de database.
 - `TRADING_MODE=live` weigert te starten zonder API-key en -secret.
 - Elke order, paper of live, komt in de tabel `orders` met de reden erbij.
+- Het dashboard en de API zitten achter een login met wachtwoord en authenticator-code; zie
+  [Inloggen](#inloggen).
 
 ## Structuur
 
@@ -153,7 +187,8 @@ Zet daarnaast in de Anthropic Console een uitgavenlimiet op de API-key als tweed
 app/
   main.py                   FastAPI: JSON-API (/api/...), dashboard (/) en strategiepagina (/strategy)
   config.py                 instellingen uit omgevingsvariabelen
-  db.py                     SQLAlchemy-modellen: orders, settings, claude_usage, news_items, positions, decisions, evaluations
+  db.py                     SQLAlchemy-modellen: orders, settings, claude_usage, news_items, positions, decisions, evaluations, auth_users
+  auth/                     login: wachtwoord (passwords.py), TOTP (totp.py), cookie (session.py), account (service.py), routes + middleware (routes.py), CLI (__main__.py)
   bitvavo/client.py         Bitvavo REST-client (publiek + gesigneerd)
   bitvavo/broker.py         PaperBroker / LiveBroker
   indicators/core.py        SMA, EMA, RSI, MACD, Bollinger (pure Python)

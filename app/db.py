@@ -171,6 +171,27 @@ class Evaluation(Base):
     applied: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class AuthUser(Base):
+    """The dashboard account: password hash plus the state of the second factor."""
+
+    __tablename__ = "auth_users"
+
+    username: Mapped[str] = mapped_column(String(64), primary_key=True)
+    password_hash: Mapped[str] = mapped_column(String(256))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    totp_enrolled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    totp_last_counter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recovery_codes: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list of hashes
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    @property
+    def mfa_enrolled(self) -> bool:
+        return bool(self.totp_secret)
+
+
 def make_engine(url: str | None = None):
     url = url or get_settings().database_url
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}

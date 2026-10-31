@@ -13,7 +13,7 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 # Bumped whenever app.css changes so browsers pick up the new file.
-ASSET_VERSION = "5"
+ASSET_VERSION = "6"
 
 # Internal identifiers -> what the user sees.
 LABELS_NL: dict[str, str] = {
