@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -29,10 +30,22 @@ Per bericht lever je:
 - horizon: "hours", "days" of "weeks": hoe lang het effect naar verwachting doorwerkt.
 - coins: welke van de opgegeven coins het raakt, of ["ALL"] als het de hele markt raakt.
 - summary_nl: één zin Nederlands die het nieuwsfeit en het verwachte koerseffect noemt.
+- event_key: korte sleutel voor het nieuwsfeit, kleine letters en koppeltekens, twee tot vier
+  woorden (bijvoorbeeld "binance-hack", "fed-renteverlaging", "btc-etf-instroom"). Berichten over
+  hetzelfde feit krijgen dezelfde sleutel, ook als de kop anders is of de bron een andere invalshoek
+  kiest (reacties, analyses en vervolgberichten over dat feit horen erbij). Staat het feit al in de
+  lijst met bestaande sleutels, gebruik dan precies die sleutel. Niet relevant: lege sleutel.
 
 Wees nuchter: de meeste berichten zijn ruis (impact 0 of 1). Herhalingen van hetzelfde feit
-krijgen dezelfde score. Baseer je alleen op de tekst, niet op eigen koersvoorspellingen.
+krijgen dezelfde score en dezelfde event_key; de bot telt elk feit één keer, hoeveel bronnen het
+ook overnemen. Baseer je alleen op de tekst, niet op eigen koersvoorspellingen.
 """
+
+
+def normalize_key(text: str) -> str:
+    """Lowercase, letters/digits only, words joined by '-', at most 64 characters."""
+    words = re.findall(r"[a-z0-9]+", (text or "").lower())
+    return "-".join(words)[:64].rstrip("-")
 
 
 class Assessment(BaseModel):
@@ -43,6 +56,7 @@ class Assessment(BaseModel):
     horizon: Literal["hours", "days", "weeks"] = "days"
     coins: list[str] = Field(default_factory=list)
     summary_nl: str = ""
+    event_key: str = ""
 
 
 class AssessmentBatch(BaseModel):
@@ -74,15 +88,25 @@ class NewsAnalyst:
         return json.dumps(rows, ensure_ascii=False, indent=1)
 
     async def assess(
-        self, session: Session, items: list[NewsItem], coins: list[str]
+        self,
+        session: Session,
+        items: list[NewsItem],
+        coins: list[str],
+        known_keys: list[str] | None = None,
     ) -> list[Assessment]:
         if self._client is None:
             raise RuntimeError("ANTHROPIC_API_KEY is not configured")
         if not items:
             return []
         self.budget.ensure_available(session)
+        known = (
+            f"Bestaande sleutels (event_key) van de laatste 48 uur: {', '.join(known_keys)}.\n"
+            if known_keys
+            else ""
+        )
         user = (
             f"Coins waarop we handelen: {', '.join(coins)}.\n"
+            f"{known}"
             f"Beoordeel elk van deze {len(items)} berichten:\n{self._render(items)}"
         )
         response = await self._client.messages.parse(
@@ -120,6 +144,7 @@ def apply_assessments(
         it.horizon = a.horizon
         it.coins = ",".join(sorted({c.upper() for c in a.coins})) if a.relevant else ""
         it.summary_nl = a.summary_nl
+        it.event_key = normalize_key(a.event_key) or None if a.relevant else None
         applied += 1
     session.commit()
     return applied

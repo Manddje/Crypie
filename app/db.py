@@ -96,6 +96,8 @@ class NewsItem(Base):
     horizon: Mapped[str | None] = mapped_column(String(16), nullable=True)  # hours|days|weeks
     coins: Mapped[str | None] = mapped_column(String(128), nullable=True)  # "BTC,ETH" or "ALL"
     summary_nl: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Same news fact in several outlets -> same key, so the sentiment counts it once.
+    event_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     def coin_list(self) -> list[str]:
         return [c for c in (self.coins or "").split(",") if c]

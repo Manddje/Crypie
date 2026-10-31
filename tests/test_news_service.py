@@ -12,7 +12,9 @@ from app.news.service import (
     NewsService,
     market_sentiment,
     pending_items,
+    recent_event_keys,
     recent_items,
+    requeue_items_without_event_key,
     store_items,
 )
 from app.news.sources import RawItem
@@ -134,22 +136,35 @@ async def test_analyst_assess_and_apply(session):
                 horizon="days",
                 coins=["btc", "ALL"],
                 summary_nl="Grote hack.",
+                event_key="Binance Hack!",
             ),
-            Assessment(id=ids["Cat video"], relevant=False, sentiment=0.5, impact=2, coins=["BTC"]),
+            Assessment(
+                id=ids["Cat video"],
+                relevant=False,
+                sentiment=0.5,
+                impact=2,
+                coins=["BTC"],
+                event_key="cat-video",
+            ),
         ]
     )
     analyst = make_analyst(batch)
-    results = await analyst.assess(session, items, ["BTC", "ETH"])
+    results = await analyst.assess(session, items, ["BTC", "ETH"], known_keys=["fed-rente"])
     assert len(results) == 2
     call = analyst._client.messages.calls[0]
     assert call["model"] == "claude-haiku-5-5"
     assert "Hack" in call["messages"][0]["content"]
+    assert (
+        "Bestaande sleutels (event_key) van de laatste 48 uur: fed-rente"
+        in (call["messages"][0]["content"])
+    )
     assert call["system"][0]["cache_control"] == {"type": "ephemeral"}
 
     assert apply_assessments(session, items, results, "claude-haiku-5-5") == 2
     hack = next(i for i in items if i.title == "Hack")
     cat = next(i for i in items if i.title == "Cat video")
     assert hack.assessed and hack.coins == "ALL,BTC" and hack.impact == 3
+    assert hack.event_key == "binance-hack" and cat.event_key is None
     assert cat.assessed and not cat.relevant and cat.impact == 0 and cat.sentiment == 0.0
     assert pending_items(session, 10) == []
 
@@ -164,7 +179,7 @@ class FakeFetcher:
 
 async def test_service_refresh_end_to_end(session):
     class EchoAnalyst(NewsAnalyst):
-        async def assess(self, session, items, coins):
+        async def assess(self, session, items, coins, known_keys=None):
             return [
                 Assessment(id=it.id, relevant=True, sentiment=0.5, impact=1, coins=["BTC"])
                 for it in items
@@ -196,3 +211,60 @@ async def test_service_stops_when_budget_exhausted(session):
     result = await service.refresh(session)
     assert result["assessed"] == 0 and "budget" in result["error"].lower()
     assert analyst._client.messages.calls == []
+
+
+def test_market_sentiment_counts_one_news_fact_once(session):
+    # Six outlets report the same hack; one outlet reports good ETF news of equal impact.
+    for i in range(6):
+        it = _item(session, f"hack-{i}", -1.0, 3, "BTC", hours_ago=1)
+        it.event_key = "binance-hack"
+    _item(session, "etf", 1.0, 3, "BTC", hours_ago=1).event_key = "btc-etf-instroom"
+    session.commit()
+    btc = market_sentiment(session, "BTC", 48, NOW)
+    assert btc.items == 2 and btc.articles == 7 and btc.high_impact == 2
+    assert btc.score == pytest.approx(0.0, abs=0.01)  # one bad fact, one good fact
+    assert btc.top[0].sources == 6 and btc.top[1].sources == 1
+    assert btc.as_dict()["top"][0]["sources"] == 6 and btc.as_dict()["articles"] == 7
+
+    # The event takes the highest impact and the mean sentiment of its articles.
+    _item(session, "mild", -0.2, 1, "SOL", hours_ago=1).event_key = "sol-outage"
+    _item(session, "severe", -0.8, 3, "SOL", hours_ago=1).event_key = "sol-outage"
+    session.commit()
+    sol = market_sentiment(session, "SOL", 48, NOW)
+    assert sol.items == 1 and sol.high_impact == 1 and sol.score == pytest.approx(-0.5)
+
+
+def test_items_without_key_fall_back_to_title(session):
+    _item(session, "Bitcoin ETF sees record inflows", 1.0, 2, "BTC", hours_ago=1)
+    it = _item(session, "bitcoin etf sees record inflows!", 1.0, 2, "BTC", hours_ago=2)
+    it.url = "https://y/other"
+    session.commit()
+    assert recent_event_keys(session, now=NOW) == []
+    btc = market_sentiment(session, "BTC", 48, NOW)
+    assert btc.items == 1 and btc.articles == 2
+
+
+def test_recent_event_keys_ordered_by_frequency(session):
+    for i in range(3):
+        _item(session, f"a{i}", -1.0, 3, "BTC", hours_ago=1).event_key = "binance-hack"
+    _item(session, "b", 1.0, 1, "BTC", hours_ago=1).event_key = "etf"
+    _item(session, "old", 1.0, 1, "BTC", hours_ago=60).event_key = "oud-feit"
+    session.commit()
+    assert recent_event_keys(session, now=NOW) == ["binance-hack", "etf"]
+
+
+def test_requeue_only_relevant_recent_items_without_key(session):
+    keep = _item(session, "keyed", -1.0, 3, "BTC", hours_ago=1)
+    keep.event_key = "x"
+    _item(session, "nokey", -1.0, 3, "BTC", hours_ago=1)
+    _item(session, "irrelevant", 0.0, 0, "", hours_ago=1, relevant=False)
+    old = _item(session, "old", -1.0, 3, "BTC", hours_ago=100)
+    old.published_at = datetime.now(UTC) - timedelta(hours=100)
+    session.commit()
+    # Fixed-clock items from _item are "now - 1h" relative to NOW; make them recent for real.
+    for it in session.query(NewsItem).filter(NewsItem.title.in_(["keyed", "nokey", "irrelevant"])):
+        it.published_at = datetime.now(UTC) - timedelta(hours=1)
+    session.commit()
+    assert requeue_items_without_event_key(session) == 1
+    assert [it.title for it in pending_items(session, 10)] == ["nokey"]
+    assert requeue_items_without_event_key(session) == 0

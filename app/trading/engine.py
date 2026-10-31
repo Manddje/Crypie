@@ -449,7 +449,8 @@ class TradingEngine:
                 "geen beoordeeld nieuws"
                 if sentiment.items == 0
                 else f"nieuws {sentiment.label()} ({sentiment.score:+.2f}, "
-                f"{sentiment.items} berichten, {sentiment.high_impact} van hoge impact)"
+                f"{sentiment.items} nieuwsfeiten uit {sentiment.articles} berichten, "
+                f"{sentiment.high_impact} van hoge impact)"
             )
             if position is not None:
                 why = "positie blijft open: geen verkoopsignaal en geen zwaar negatief nieuws"

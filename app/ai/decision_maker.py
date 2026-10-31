@@ -44,6 +44,9 @@ Spelregels:
   hoe hij t.o.v. het 30-daags gemiddelde ligt. Een lagere koers dan vorige week is op zich geen
   koopreden (de markt kan verder dalen); het telt pas mee als er ook een draai zichtbaar is of
   het nieuws positief is. Dan mag een flinke korting je wél iets meer vertrouwen geven.
+- news telt per nieuwsfeit, niet per bericht: news.items is het aantal feiten, news.articles het
+  aantal berichten erachter en news.top[].sources hoeveel bronnen een feit melden. Veel bronnen
+  maken een feit geloofwaardiger, niet erger; de score is daar al voor gecorrigeerd.
 - market_mood is de Fear & Greed-index (0 = extreme angst, 100 = extreme hebzucht) voor de
   hele markt. Angst maakt een dip aannemelijker als koopkans, maar alleen samen met een draai
   of positief coin-nieuws; het is geen reden op zich.
