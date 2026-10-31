@@ -23,7 +23,7 @@
         <div class="big-sub">
           {% if status.paused %}Er wordt niets gekocht. Open posities worden nog wel gesloten op stop-loss, take-profit of een verkoopsignaal.
           {% elif status.enabled %}Handelt op {{ settings.markets|join(" en ") }} · laatste cyclus {{ status.last_run|ago }}.
-          {% else %}TRADING_ENABLED staat uit; je kunt wel handmatig een cyclus draaien.{% endif %}
+          {% else %}Automatisch handelen staat uit (zie <a href="/settings#trading">Instellingen</a>); je kunt wel handmatig een cyclus draaien.{% endif %}
         </div>
       </div>
       <div class="hero-status" style="flex-direction: row; align-items: center; gap: 10px">
@@ -50,7 +50,7 @@
     </section>
 
     <section class="card">
-      <div class="card-header"><h3>Harde limieten</h3><span class="more muted small">altijd van kracht</span></div>
+      <div class="card-header"><h3>Harde limieten</h3><a class="more" href="/settings#limits">Aanpassen ›</a></div>
       <dl class="kv">
         <dt>Per order</dt><dd>max. {{ status.limits.max_trade_eur|eur(0) }}</dd>
         <dt>In crypto</dt><dd>max. {{ status.limits.max_exposure_pct|num(0) }}% van de portefeuille</dd>
@@ -58,7 +58,7 @@
         <dt>Trades per dag</dt><dd>max. {{ status.limits.max_trades_per_day }} <span class="muted">(vandaag {{ status.trades_today }})</span></dd>
         <dt>Na stop-loss</dt><dd>{{ status.limits.cooldown_min_after_stop }} min niet kopen</dd>
       </dl>
-      <p class="form-help">Deze grenzen zitten in de code. Claude kan ze niet omzeilen; aanpassen kan alleen via de instellingen van de server.</p>
+      <p class="form-help">Deze grenzen worden in code afgedwongen; Claude kan ze niet omzeilen. Jij past ze aan bij <a href="/settings#limits">Instellingen</a>.</p>
     </section>
 
     <section class="card">

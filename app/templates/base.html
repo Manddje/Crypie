@@ -30,6 +30,7 @@
         <a href="/trading" {% if path.startswith("/trading") %}class="active" aria-current="page"{% endif %}>Handelen</a>
         <a href="/strategy" {% if path.startswith("/strategy") %}class="active" aria-current="page"{% endif %}>Strategie</a>
         <a href="/news" {% if path.startswith("/news") %}class="active" aria-current="page"{% endif %}>Nieuws</a>
+        <a href="/settings" {% if path.startswith("/settings") %}class="active" aria-current="page"{% endif %}>Instellingen</a>
       </nav>
       <div class="nav-right">
         {% if settings.trading_mode == "live" %}
@@ -60,7 +61,7 @@
   </main>
 
   <footer class="site">
-    <span>Markten: {{ settings.markets|join(", ") }}</span>
+    <span>Markten: {{ settings.markets|join(", ") }} · <a href="/settings">instellingen</a></span>
     <span>Bitvavo-sleutel {{ "ingesteld" if settings.has_bitvavo_credentials else "niet ingesteld" }}</span>
     <span>Claude {{ "ingesteld" if settings.anthropic_api_key else "niet ingesteld" }}</span>
     {% block footer %}{% endblock %}
