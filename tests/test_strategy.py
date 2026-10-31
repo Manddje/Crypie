@@ -1,6 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
+from app.strategy.describe import explain_signal, signal_reason_nl
 from app.strategy.engine import backtest, compute_series, latest_snapshot, signal_at
 from app.strategy.model import DEFAULT_STRATEGY, Strategy
 
@@ -109,3 +110,80 @@ def test_latest_snapshot_reports_signal_and_values():
 def test_backtest_needs_candles():
     with pytest.raises(ValueError):
         backtest(crossover_strategy(), make_candles([1]))
+
+
+def test_soft_condition_does_not_block_the_live_signal_but_does_in_backtest():
+    closes = [10, 9, 8, 7, 6, 9, 12, 15, 18, 15, 12, 9, 6, 5]
+    candles = make_candles(closes)
+    strict = crossover_strategy()
+    # A trend filter nothing in this series satisfies: close above a very high constant.
+    soft = Strategy.model_validate(
+        {
+            **strict.model_dump(),
+            "buy": [
+                *(c.model_dump() for c in strict.buy),
+                {"left": "close", "op": ">", "right": 1000, "soft": True},
+            ],
+        }
+    )
+    series = compute_series(soft, candles)
+    live = [signal_at(soft, series, i) for i in range(len(closes))]
+    strict_signals = [signal_at(soft, series, i, soft_as_hard=True) for i in range(len(closes))]
+    assert "buy" in live and "buy" not in strict_signals
+    assert backtest(soft, candles, fee_pct=0.0).summary()["trades"] == 0
+
+    i = live.index("buy")
+    checks = explain_signal(soft, series, i)
+    assert [c.soft for c in checks["buy"]] == [False, True]
+    assert checks["buy"][1].ok is False and checks["buy"][1].text.endswith("(zacht filter)")
+    assert "1 zacht filter niet gehaald" in signal_reason_nl("buy", checks)
+
+    # Only soft conditions: they count as hard, otherwise every candle would be a buy.
+    all_soft = Strategy.model_validate(
+        {**soft.model_dump(), "buy": [{"left": "close", "op": ">", "right": 1000, "soft": True}]}
+    )
+    series = compute_series(all_soft, candles)
+    assert all(signal_at(all_soft, series, i) != "buy" for i in range(len(closes)))
+
+
+def test_rising_condition_compares_with_its_own_past_value():
+    closes = [10, 9, 8, 7, 6, 9, 12, 15, 18, 15, 12, 9, 6, 5]
+    candles = make_candles(closes)
+    s = Strategy.model_validate(
+        {
+            **crossover_strategy().model_dump(),
+            "buy": [{"left": "close", "op": "rising", "right": 2}],
+            "sell": [{"left": "close", "op": "falling", "right": 1}],
+        }
+    )
+    series = compute_series(s, candles)
+    signals = [signal_at(s, series, i) for i in range(len(closes))]
+    # close rising vs 2 candles ago first at index 5 (9 > 7); falling vs 1 ago at index 1.
+    assert signals[0] == "hold" and signals[1] == "sell" and signals[5] == "buy"
+    checks = explain_signal(s, series, 6)
+    assert checks["buy"][0].text == "koers stijgt t.o.v. 2 candles eerder"
+    assert (checks["buy"][0].left, checks["buy"][0].right, checks["buy"][0].ok) == (12, 6, True)
+    with pytest.raises(ValidationError):
+        Strategy.model_validate(
+            {**s.model_dump(), "buy": [{"left": "close", "op": "rising", "right": "ema50"}]}
+        )
+    with pytest.raises(ValidationError):
+        Strategy.model_validate(
+            {**s.model_dump(), "buy": [{"left": "close", "op": "rising", "right": 0}]}
+        )
+
+
+def test_drawdown_indicator_measures_discount_to_rolling_high():
+    from app.indicators.core import drawdown
+
+    assert drawdown([100, 110, 99, 88], 3) == [0.0, 0.0, 10.0, 20.0]
+    s = Strategy.model_validate(
+        {
+            **crossover_strategy().model_dump(),
+            "indicators": [{"type": "drawdown", "id": "dd3", "period": 3}],
+            "buy": [{"left": "dd3", "op": ">=", "right": 15}],
+            "sell": [{"left": "dd3", "op": "<", "right": 1}],
+        }
+    )
+    series = compute_series(s, make_candles([100, 110, 99, 88]))
+    assert signal_at(s, series, 3) == "buy" and signal_at(s, series, 1) == "sell"

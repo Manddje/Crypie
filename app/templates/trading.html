@@ -69,8 +69,20 @@
         <dt>Laatste</dt><dd>{{ status.last_run|dt if status.last_run else "nog niet gedraaid" }}</dd>
         <dt>Interval</dt><dd>{% if status.enabled and status.interval_min > 0 %}elke {{ status.interval_min }} minuten{% else %}alleen handmatig{% endif %}</dd>
         <dt>Claude</dt><dd>{{ "beschikbaar" if status.claude_available else "niet ingesteld" }}</dd>
+        <dt>Dipbewaking</dt><dd>{% if status.watch_interval_min > 0 %}elke {{ status.watch_interval_min }} min zodra een dip is gezien, max. {{ status.watch_max_min }} min{% else %}uit{% endif %}</dd>
       </dl>
-      <p class="form-help">Per cyclus kijkt de bot per markt eerst naar de strategie en het nieuws. Claude wordt alleen gevraagd als er iets te beslissen is: een koop- of verkoopsignaal, of zwaar nieuws.</p>
+      {% if status.watch %}
+      <ul class="list" style="margin-top: 12px">
+        {% for w in status.watch %}
+        <li>
+          <div><span class="pill pill-orange"><span class="dot"></span>Dip op {{ w.market }}</span> <span class="small muted">sinds {{ w.since|dt }} · laatste controle {{ w.last_check|ago }}</span></div>
+          <div class="small" style="margin-top: 4px">{{ w.dip }}</div>
+          <div class="small muted">Wacht op: {{ w.waiting_for }}. Zodra dat gebeurt gaat het naar Claude.</div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      <p class="form-help">Per cyclus kijkt de bot per markt eerst naar de strategie en het nieuws. Claude wordt alleen gevraagd als er iets te beslissen is: een koop- of verkoopsignaal, zwaar nieuws, of de draai na een bewaakte dip.</p>
     </section>
   </div>
 

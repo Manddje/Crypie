@@ -157,6 +157,7 @@ async def test_trading_endpoints(api):
     body = r.json()
     assert body["mode"] == "paper" and body["paused"] is False
     assert body["limits"]["max_trade_eur"] == 100.0 and body["claude_available"] is False
+    assert body["watch"] == [] and body["watch_interval_min"] == 5
 
     r = await api.post("/api/trading/pause", json={"paused": True})
     assert r.json() == {"paused": True}

@@ -19,7 +19,7 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 # Bumped whenever app.css changes so browsers pick up the new file.
-ASSET_VERSION = "7"
+ASSET_VERSION = "8"
 
 # Internal identifiers -> what the user sees.
 LABELS_NL: dict[str, str] = {
@@ -160,6 +160,8 @@ def indicator_nl(ind: IndicatorSpec) -> str:
         return f"MACD {ind.fast}/{ind.slow}/{ind.signal}"
     if ind.type == "bollinger":
         return f"Bollinger {ind.period} (σ {ind.std_dev:g})"
+    if ind.type == "drawdown":
+        return f"% onder hoogste koers van {ind.period} candles"
     return f"{ind.type.upper()} {ind.period}"
 
 

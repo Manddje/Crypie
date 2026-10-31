@@ -116,3 +116,17 @@ def bollinger(
         upper[i] = mean + std_dev * sd
         lower[i] = mean - std_dev * sd
     return upper, middle, lower
+
+
+def drawdown(values: Sequence[float], period: int) -> Series:
+    """Percent below the highest value of the last ``period`` values (0 = at the high).
+
+    A cheap "how far has it fallen from its recent high" measure: ``drawdown(closes, 168)``
+    on hourly candles is the discount to the 7-day high.
+    """
+    out: Series = []
+    for i, v in enumerate(values):
+        window = values[max(0, i - period + 1) : i + 1]
+        high = max(window)
+        out.append(round((1 - v / high) * 100, 6) if high else None)
+    return out

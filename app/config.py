@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     trading_enabled: bool = True
     trade_interval_min: int = 60
     decision_history_days: int = 7  # how far back /trading lists the cycles
+    watch_interval_min: int = 5  # dip watch: re-check an armed market this often (0 = off)
+    watch_max_min: int = 180  # dip watch: give up on a dip after this long without a turn
     live_trading_ack: bool = False  # must be true to start in live mode
     max_trade_eur: float = 100.0  # per order
     max_exposure_pct: float = 50.0  # of total portfolio value in coins

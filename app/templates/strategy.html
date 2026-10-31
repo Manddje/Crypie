@@ -93,6 +93,7 @@
       {{ ui.stat("Eindwaarde", backtest.final_eur|eur, "fee " ~ backtest.fee_pct|num ~ "% per order") }}
       {{ ui.stat("Signaal nu", backtest.latest.signal|nl, None, "pos" if backtest.latest.signal == "buy" else ("neg" if backtest.latest.signal == "sell" else "")) }}
     </div>
+    <p class="form-help" style="margin-top: 12px">De backtest rekent zonder Claude en telt zachte filters daarom als harde voorwaarden. Live ontstaat het signaal ook als een zacht filter niet geldt; Claude weegt dat dan mee met het nieuws en koopt kleiner.</p>
     <details class="advanced" style="margin-top: 18px">
       <summary>Indicatorwaarden van de laatste candle</summary>
       <div class="chips">{% for k, v in backtest.latest['values'].items() %}<span class="chip">{{ k }} = {{ v }}</span>{% endfor %}</div>
@@ -132,8 +133,8 @@
         </div>
       </form>
       <dl class="kv small" style="margin-top: 16px">
-        <dt>Indicatoren</dt><dd><code>sma</code>, <code>ema</code>, <code>rsi</code>, <code>macd</code> (series <code>id</code>, <code>id_signal</code>, <code>id_hist</code>), <code>bollinger</code> (<code>id_upper</code>, <code>id_middle</code>, <code>id_lower</code>)</dd>
-        <dt>Vergelijkingen</dt><dd><code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> <code>crosses_above</code> <code>crosses_below</code></dd>
+        <dt>Indicatoren</dt><dd><code>sma</code>, <code>ema</code>, <code>rsi</code>, <code>macd</code> (series <code>id</code>, <code>id_signal</code>, <code>id_hist</code>), <code>bollinger</code> (<code>id_upper</code>, <code>id_middle</code>, <code>id_lower</code>), <code>drawdown</code> (% onder de hoogste koers van <code>period</code> candles; 168 = 7 dagen op uurkaarsen)</dd>
+        <dt>Vergelijkingen</dt><dd><code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> <code>crosses_above</code> <code>crosses_below</code> <code>rising</code> <code>falling</code> <span class="muted">(bij rising/falling is <code>right</code> het aantal candles terug)</span>; <code>"soft": true</code> maakt een voorwaarde een zacht filter</dd>
         <dt>Koersreeksen</dt><dd><code>open</code>, <code>high</code>, <code>low</code>, <code>close</code>, <code>volume</code></dd>
         <dt>Regels</dt><dd>Alle koopcondities moeten tegelijk waar zijn; hetzelfde geldt voor de verkoopcondities. Stop-loss en take-profit zijn percentages en optioneel.</dd>
       </dl>

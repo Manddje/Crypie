@@ -420,7 +420,8 @@ async def test_rules_hold_explains_every_buy_condition(session):
     (result,) = await engine.run_cycle(session)
     assert result.action == "hold" and decider.contexts == []
     d = session.query(Decision).one()
-    assert d.reasoning.startswith("Geen koopsignaal, 1 van 1 koopvoorwaarden niet gehaald")
+    assert d.reasoning.startswith("Geen koopsignaal, 1 van 1 harde koopvoorwaarden niet gehaald")
+    assert "Claude" in d.reasoning
     assert "✗" in d.reasoning and "geen beoordeeld nieuws" in d.reasoning.lower()
     checks = d.check_list()
     assert [c["ok"] for c in checks["buy"]] == [False]
@@ -429,6 +430,103 @@ async def test_rules_hold_explains_every_buy_condition(session):
     assert latest_decisions(session, "paper", ["ETH-EUR", "BTC-EUR"]) == [d]
     assert recent_decisions(session, "paper", days=1) == [d]
     assert recent_decisions(session, "paper", days=0) == []
+
+
+async def test_failed_soft_filter_still_asks_claude_and_halves_the_buy(session):
+    decider = FakeDecider(
+        TradeDecision(action="buy", confidence=0.6, amount_quote=100, reasoning_nl="Dip.")
+    )
+    strategy = cross_strategy(
+        buy=[
+            {"left": "fast", "op": "crosses_above", "right": "slow"},
+            {"left": "close", "op": ">", "right": 1000, "soft": True},  # never holds here
+        ]
+    )
+    engine = make_engine_(
+        session, {"BTC-EUR": candles(BUY_SERIES)}, {"BTC-EUR": 12.0}, decider, strategy=strategy
+    )
+    (result,) = await engine.run_cycle(session)
+    assert result.signal == "buy" and result.executed and result.action == "buy"
+    ctx = decider.contexts[0]
+    assert ctx["soft_filters_failed"] == ["koers hoger dan 1.000 (zacht filter)"]
+    traj = ctx["recent_candles"]
+    assert traj["values"]["close"] == BUY_SERIES[-6:] and traj["close_falling"] is False
+    assert traj["close_change_24h_pct"] == 20.0  # 10 -> 12 over the whole short series
+    pc = traj["price_context"]  # FakeClient serves the same candles for "1d"
+    assert pc["below_30d_high_pct"] == 0.99 and pc["change_30d_pct"] == 20.0  # high = close*1.01
+    assert ctx["signal_checks"]["buy"][1]["soft"] is True
+    assert open_position(session, "paper", "BTC-EUR").entry_quote == 50.0
+    d = session.query(Decision).one()
+    assert d.reasoning == "Dip." and d.source == "claude"
+    assert d.check_list()["buy"][1]["ok"] is False
+
+
+def dip_strategy():
+    return cross_strategy(
+        indicators=[{"type": "sma", "id": "fast", "period": 2}],
+        buy=[
+            {"left": "close", "op": "<", "right": 8},  # the dip
+            {"left": "close", "op": "rising", "right": 1},  # the turn
+        ],
+        sell=[{"left": "close", "op": ">", "right": 100}],
+    )
+
+
+async def test_dip_watch_arms_on_the_dip_and_hands_the_turn_to_claude(session):
+    decider = FakeDecider(
+        TradeDecision(action="buy", confidence=0.7, amount_quote=100, reasoning_nl="Draai.")
+    )
+    falling = [10, 9, 8, 7, 6]
+    engine = make_engine_(
+        session, {"BTC-EUR": candles(falling)}, {"BTC-EUR": 6.0}, decider, strategy=dip_strategy()
+    )
+    (result,) = await engine.run_cycle(session)
+    assert result.action == "hold" and decider.contexts == []
+    assert "BTC-EUR" in engine.watch and "koers lager dan 8" in engine.watch["BTC-EUR"]["dip"]
+    assert engine.watch["BTC-EUR"]["waiting_for"] == "koers stijgt t.o.v. 1 candle eerder"
+    assert "dipbewaking actief" in session.query(Decision).one().reasoning
+
+    # Still falling: a quiet watch check, no journal entry, still armed.
+    engine.client.series["BTC-EUR"] = candles(falling + [5.5])
+    (check,) = await engine.run_watch(session)
+    assert check.source == "watch" and not check.executed
+    assert session.query(Decision).count() == 1 and "BTC-EUR" in engine.watch
+
+    # The turn: price ticks up -> Claude is asked right away and buys.
+    engine.client.series["BTC-EUR"] = candles(falling + [5.5, 6.2])
+    engine.client.prices["BTC-EUR"] = 6.2
+    (fired,) = await engine.run_watch(session)
+    assert fired.signal == "buy" and fired.executed and fired.source == "claude"
+    assert decider.contexts[0]["signal"] == "buy"
+    assert "BTC-EUR" not in engine.watch and "BTC-EUR" in engine.watch_cooldown
+    d = session.query(Decision).order_by(Decision.id.desc()).first()
+    assert d.signal == "buy" and d.executed and d.source == "claude"
+    assert open_position(session, "paper", "BTC-EUR") is not None
+
+
+async def test_dip_watch_gives_up_after_watch_max_min(session):
+    decider = FakeDecider()
+    engine = make_engine_(
+        session,
+        {"BTC-EUR": candles([10, 9, 8, 7, 6])},
+        {"BTC-EUR": 6.0},
+        decider,
+        strategy=dip_strategy(),
+    )
+    engine.watch_max_min = 30
+    await engine.run_cycle(session)
+    engine.watch["BTC-EUR"]["since"] = datetime.now(UTC) - timedelta(minutes=31)
+    assert await engine.run_watch(session)
+    assert "BTC-EUR" not in engine.watch and decider.contexts == []
+
+
+async def test_strategy_without_turn_condition_never_arms(session):
+    decider = FakeDecider()
+    engine = make_engine_(
+        session, {"BTC-EUR": candles([10, 9, 8, 7, 6])}, {"BTC-EUR": 6.0}, decider
+    )
+    await engine.run_cycle(session)
+    assert engine.watch == {} and await engine.run_watch(session) == []
 
 
 async def test_fallback_hold_when_claude_unavailable(session):

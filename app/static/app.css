@@ -619,4 +619,5 @@ footer.site {
 .checks .mark { display: inline-block; width: 16px; font-weight: 600; }
 .checks li.ok .mark { color: var(--green); }
 .checks li.nok .mark { color: var(--red); }
+.checks li.soft .mark { color: var(--orange, #e8912d); }
 .checks.compact { font-size: 12px; margin-top: 2px; }

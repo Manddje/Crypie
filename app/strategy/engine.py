@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from app.indicators.core import Series, bollinger, ema, macd, rsi, sma
-from app.strategy.model import Condition, Strategy
+from app.indicators.core import Series, bollinger, drawdown, ema, macd, rsi, sma
+from app.strategy.model import LOOKBACK_OPS, Condition, Strategy
 
 Candle = list[float]  # [timestamp_ms, open, high, low, close, volume]
 Signal = Literal["buy", "sell", "hold"]
@@ -34,6 +34,8 @@ def compute_series(strategy: Strategy, candles: list[Candle]) -> dict[str, Serie
         elif ind.type == "bollinger":
             up, mid, low = bollinger(closes, ind.period, ind.std_dev)
             out[f"{ind.id}_upper"], out[f"{ind.id}_middle"], out[f"{ind.id}_lower"] = up, mid, low
+        elif ind.type == "drawdown":
+            out[ind.id] = drawdown(closes, ind.period)
     return out
 
 
@@ -43,8 +45,19 @@ def _value(series: dict[str, Series], ref: str | float, i: int) -> float | None:
     return float(ref)
 
 
+def lookback_value(cond: Condition, series: dict[str, Series], i: int) -> float | None:
+    """For rising/falling: the value of ``left`` ``right`` candles earlier, else None."""
+    back = i - int(cond.right)
+    return series[cond.left][back] if back >= 0 else None
+
+
 def check_condition(cond: Condition, series: dict[str, Series], i: int) -> bool:
     left = _value(series, cond.left, i)
+    if cond.op in LOOKBACK_OPS:
+        earlier = lookback_value(cond, series, i)
+        if left is None or earlier is None:
+            return False
+        return left > earlier if cond.op == "rising" else left < earlier
     right = _value(series, cond.right, i)
     if left is None or right is None:
         return False
@@ -68,10 +81,25 @@ def check_condition(cond: Condition, series: dict[str, Series], i: int) -> bool:
     return prev_left >= prev_right and left < right
 
 
-def signal_at(strategy: Strategy, series: dict[str, Series], i: int) -> Signal:
-    if all(check_condition(c, series, i) for c in strategy.buy):
+def hard_conditions(conditions: list[Condition]) -> list[Condition]:
+    """The conditions that must hold for a signal; all of them when none is marked hard."""
+    hard = [c for c in conditions if not c.soft]
+    return hard or list(conditions)
+
+
+def signal_at(
+    strategy: Strategy, series: dict[str, Series], i: int, soft_as_hard: bool = False
+) -> Signal:
+    """Strategy signal on candle ``i``.
+
+    Live, soft conditions do not block the signal (Claude weighs them). A backtest has no
+    Claude, so it passes ``soft_as_hard=True`` and simulates the strict version.
+    """
+    buy = strategy.buy if soft_as_hard else hard_conditions(strategy.buy)
+    sell = strategy.sell if soft_as_hard else hard_conditions(strategy.sell)
+    if all(check_condition(c, series, i) for c in buy):
         return "buy"
-    if all(check_condition(c, series, i) for c in strategy.sell):
+    if all(check_condition(c, series, i) for c in sell):
         return "sell"
     return "hold"
 
@@ -148,6 +176,8 @@ def backtest(
 ) -> BacktestResult:
     """Long-only backtest. Signals on bar i are executed at the close of bar i.
 
+    Soft conditions count as hard here: without Claude the strict rules are simulated.
+
     Stop-loss and take-profit are checked against the bar's low/high and filled at the
     threshold price. Fees are charged on both entry and exit.
     """
@@ -176,7 +206,7 @@ def backtest(
                 target = open_trade.entry_price * (1 + strategy.take_profit_pct / 100)
                 if high >= target:
                     exit_price, reason = target, "take_profit"
-            if exit_price is None and signal_at(strategy, series, i) == "sell":
+            if exit_price is None and signal_at(strategy, series, i, soft_as_hard=True) == "sell":
                 exit_price, reason = close, "signal"
             if exit_price is not None:
                 eur += coin * exit_price * (1 - fee)
@@ -184,7 +214,7 @@ def backtest(
                 open_trade.exit_time, open_trade.exit_price = int(ts), exit_price
                 open_trade.reason = reason
                 open_trade = None
-        elif signal_at(strategy, series, i) == "buy":
+        elif signal_at(strategy, series, i, soft_as_hard=True) == "buy":
             spend = eur * strategy.position_size_pct / 100
             if spend > 0:
                 coin = spend * (1 - fee) / close
