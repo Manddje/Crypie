@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     # Trading (step 4). Hard limits are enforced in code, whatever Claude says.
     trading_enabled: bool = True
     trade_interval_min: int = 60
+    decision_history_days: int = 7  # how far back /trading lists the cycles
     live_trading_ack: bool = False  # must be true to start in live mode
     max_trade_eur: float = 100.0  # per order
     max_exposure_pct: float = 50.0  # of total portfolio value in coins

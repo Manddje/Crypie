@@ -38,6 +38,7 @@ from app.trading import risk
 from app.trading.engine import (
     TradingEngine,
     closed_positions,
+    latest_decisions,
     open_positions,
     performance_summary,
     recent_decisions,
@@ -851,7 +852,10 @@ async def trading_page(
             "status": _trading_status(engine, session, settings),
             "open_positions": open_positions(session, engine.mode),
             "closed_positions": closed_positions(session, engine.mode)[:20],
-            "decisions": recent_decisions(session, engine.mode, 30),
+            "decisions": recent_decisions(
+                session, engine.mode, limit=5000, days=settings.decision_history_days
+            ),
+            "last_cycle": latest_decisions(session, engine.mode, list(engine.markets)),
             "evaluations": [_evaluation_dict(e) for e in evaluations],
             "error": None,
         },

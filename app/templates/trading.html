@@ -64,25 +64,41 @@
     </section>
 
     <section class="card">
-      <div class="card-header"><h3>Laatste cyclus</h3><span class="more muted small">{{ status.last_run|dt }}</span></div>
-      {% if status.last_results %}
-      <ul class="list">
-        {% for r in status.last_results %}
-        <li>
-          <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
-            <strong>{{ r.market }}</strong>
-            <span class="pill {{ r.action|action_pill }}">{{ r.action|nl }}</span>
-            <span class="small muted">signaal {{ r.signal|nl|lower }} · {{ r.source|nl|lower }}{% if r.executed %} · uitgevoerd{% endif %}</span>
-          </div>
-          {% if r.reason %}<div class="small muted" style="margin-top: 4px">{{ r.reason }}</div>{% endif %}
-        </li>
-        {% endfor %}
-      </ul>
-      {% else %}
-      <p class="muted small">De bot heeft nog geen cyclus gedraaid. De eerste start kort na het opstarten.</p>
-      {% endif %}
+      <div class="card-header"><h3>Volgende cyclus</h3></div>
+      <dl class="kv">
+        <dt>Laatste</dt><dd>{{ status.last_run|dt if status.last_run else "nog niet gedraaid" }}</dd>
+        <dt>Interval</dt><dd>{% if status.enabled and status.interval_min > 0 %}elke {{ status.interval_min }} minuten{% else %}alleen handmatig{% endif %}</dd>
+        <dt>Claude</dt><dd>{{ "beschikbaar" if status.claude_available else "niet ingesteld" }}</dd>
+      </dl>
+      <p class="form-help">Per cyclus kijkt de bot per markt eerst naar de strategie en het nieuws. Claude wordt alleen gevraagd als er iets te beslissen is: een koop- of verkoopsignaal, of zwaar nieuws.</p>
     </section>
   </div>
+
+  <section class="card">
+    <div class="card-header"><h2>Laatste cyclus per markt</h2><span class="more muted small">{{ status.last_run|ago if status.last_run else "" }}</span></div>
+    {% if last_cycle %}
+    <div class="grid-2">
+      {% for d in last_cycle %}
+      <div class="cycle">
+        <div class="cycle-head">
+          <div><strong>{{ d.market }}</strong><span class="muted small"> · € {{ d.price|price }} · {{ d.created_at|dt }}</span></div>
+          <div class="nowrap"><span class="pill {{ d.action|action_pill }}">{{ d.action|nl }}</span>{% if d.executed %} <span class="pill pill-blue">uitgevoerd</span>{% endif %}</div>
+        </div>
+        {{ ui.checks(d) }}
+        <div class="small" style="margin-top: 8px">
+          <span class="muted">Nieuws:</span>
+          {% if d.news_label %}<span class="pill {{ d.news_label|sentiment_pill }}">{{ d.news_label }}</span>{% if d.news_score is not none and d.news_label != "geen nieuws" %} <span class="muted">score {{ d.news_score|num(2) }}</span>{% endif %}{% else %}<span class="muted">–</span>{% endif %}
+          · <span class="muted">Besloten door:</span> {{ d.source|nl }}{% if d.confidence is not none %} ({{ (d.confidence * 100)|num(0) }}% zeker){% endif %}
+        </div>
+        {% if d.reasoning %}<p class="small" style="margin: 8px 0 0">{{ d.reasoning }}</p>{% endif %}
+        {% if d.blocked_by %}<p class="small neg" style="margin: 4px 0 0">Niet uitgevoerd: {{ d.blocked_by }}</p>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    {{ ui.empty("Nog geen cyclus gedraaid", "De eerste cyclus start kort na het opstarten. Je kunt er ook nu een starten met de knop hierboven.") }}
+    {% endif %}
+  </section>
 
   <section class="card">
     <div class="card-header"><h2>Open posities</h2></div>
@@ -109,8 +125,8 @@
   </section>
 
   <section class="card">
-    <div class="card-header"><h2>Beslissingen</h2><span class="more muted small">laatste {{ decisions|length }}</span></div>
-    <p class="card-desc">Elke cyclus wordt vastgelegd: het signaal, het nieuws, wie besliste (Claude, de regels of automatisch) en hoe de koers daarna bewoog. Die uitkomsten krijgt Claude terug bij de volgende beslissing, zodat hij van zijn eigen keuzes leert.</p>
+    <div class="card-header"><h2>Alle cyclussen</h2><a class="more" href="/settings#trading">laatste {{ settings.decision_history_days }} dagen · {{ decisions|length }} beslissingen · aanpassen ›</a></div>
+    <p class="card-desc">Elke cyclus wordt per markt vastgelegd: het signaal met de indicatorwaarden achter elke voorwaarde, het nieuws, wie besliste (Claude, de regels of automatisch), waarom, en hoe de koers daarna bewoog. Die uitkomsten krijgt Claude terug bij de volgende beslissing, zodat hij van zijn eigen keuzes leert.</p>
     {% if decisions %}
     <div class="table-wrap">
     <table>
@@ -119,14 +135,14 @@
       <tr class="{{ 'dim' if d.blocked_by else '' }}">
         <td class="nowrap">{{ d.created_at|dt }}</td>
         <td class="nowrap"><strong>{{ d.market }}</strong><span class="sub">€ {{ d.price|price }}</span></td>
-        <td>{{ d.signal|nl }}</td>
+        <td style="min-width: 200px">{{ d.signal|nl }}{{ ui.checks(d, compact=true) }}</td>
         <td>{% if d.news_label %}<span class="pill {{ d.news_label|sentiment_pill }}">{{ d.news_label }}</span>{% endif %}</td>
         <td class="nowrap"><span class="pill {{ d.action|action_pill }}">{{ d.action|nl }}</span>{% if d.executed %} <span class="pill pill-blue">uitgevoerd</span>{% endif %}<span class="sub">{{ d.source|nl }}{% if d.confidence is not none %} · {{ (d.confidence * 100)|num(0) }}% zeker{% endif %}</span></td>
         <td class="num">{{ d.amount_quote|eur(0) if d.amount_quote else "" }}</td>
         {% for later in (d.price_1h, d.price_24h, d.price_72h) %}
         <td class="num {{ 'pos' if later and later >= d.price else ('neg' if later else '') }}">{{ ((later / d.price - 1) * 100)|pct if later else "" }}</td>
         {% endfor %}
-        <td class="small muted" style="min-width: 220px">{{ d.reasoning or "" }}{% if d.blocked_by %}<br><em>Niet uitgevoerd: {{ d.blocked_by }}</em>{% endif %}</td>
+        <td class="small muted" style="min-width: 260px">{{ d.reasoning or "" }}{% if d.blocked_by %}<br><em>Niet uitgevoerd: {{ d.blocked_by }}</em>{% endif %}</td>
       </tr>
       {% endfor %}
     </table>

@@ -43,3 +43,15 @@
 {% macro pill(text, cls="") -%}
 <span class="pill {{ cls }}">{{ text }}</span>
 {%- endmacro %}
+
+{% macro checks(decision, compact=false) -%}
+{% set c = decision.check_list() %}
+{% set rules = c.buy if decision.signal != "sell" else c.sell %}
+{% if rules %}
+<ul class="checks{{ ' compact' if compact else '' }}">
+  {% for r in rules %}
+  <li class="{{ 'ok' if r.ok else 'nok' }}"><span class="mark">{{ "✓" if r.ok else "✗" }}</span> {{ r.text }}{% if r.left is not none and r.right is not none %} <span class="muted">({{ r.left|compact }} t.o.v. {{ r.right|compact }})</span>{% endif %}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+{%- endmacro %}

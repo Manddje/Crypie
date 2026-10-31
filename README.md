@@ -115,6 +115,10 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    buy-signaal, of zonder signaal op sterk positief nieuws van hoge impact (**news entry**, dan maximaal de
    helft van `MAX_TRADE_EUR`); verkopen bij een sell-signaal of als news exit. Slecht nieuws is voor de bot
    nooit een reden om "de dip te kopen".
+   Elke cyclus komt per markt in het journaal: signaal, de uitkomst van iedere strategievoorwaarde met de
+   echte waarden (bijvoorbeeld "rsi14 lager dan 35 ✗ (52,2 t.o.v. 35)"), nieuws, besluit en toelichting.
+   Pagina `/trading` toont de laatste cyclus per markt en alle cycli van de laatste
+   `DECISION_HISTORY_DAYS` dagen (standaard 7, instelbaar in het portaal).
 4. **Harde limieten** (`app/trading/risk.py`), in code afgedwongen: `MAX_TRADE_EUR`, `MAX_EXPOSURE_PCT`,
    `DAILY_LOSS_LIMIT_PCT`, `MAX_TRADES_PER_DAY`, `COOLDOWN_MIN_AFTER_STOP`, plus een kill switch
    (pauzeren op `/trading`). Zonder Claude (budget op, geen key): `CLAUDE_UNAVAILABLE_MODE` = `hold` of `indicators`.

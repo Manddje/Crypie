@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from datetime import UTC, datetime
 
@@ -140,6 +141,7 @@ class Decision(Base):
     price: Mapped[float] = mapped_column(Float)
     signal: Mapped[str] = mapped_column(String(8))  # strategy signal
     indicators: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
+    checks: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON: strategy conditions
     news_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     news_label: Mapped[str | None] = mapped_column(String(32), nullable=True)
     has_position: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -156,6 +158,16 @@ class Decision(Base):
     price_1h: Mapped[float | None] = mapped_column(Float, nullable=True)
     price_24h: Mapped[float | None] = mapped_column(Float, nullable=True)
     price_72h: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    def check_list(self) -> dict[str, list[dict]]:
+        """Parsed ``checks`` JSON: {"buy": [...], "sell": [...]} with text/left/right/ok."""
+        if not self.checks:
+            return {"buy": [], "sell": []}
+        data = json.loads(self.checks)
+        return {"buy": data.get("buy", []), "sell": data.get("sell", [])}
+
+    def indicator_values(self) -> dict[str, float]:
+        return json.loads(self.indicators) if self.indicators else {}
 
 
 class Evaluation(Base):

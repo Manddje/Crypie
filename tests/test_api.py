@@ -186,6 +186,10 @@ async def test_trading_endpoints(api):
 
     r = await api.get("/trading")
     assert r.status_code == 200 and "Harde limieten" in r.text
+    assert "Laatste cyclus per markt" in r.text and "Alle cyclussen" in r.text
+    # Flat candles push RSI to 100: a sell signal without a position, explained per condition.
+    assert "Verkoopsignaal: rsi14 hoger dan 70 ✓" in r.text and "niets te verkopen" in r.text
+    assert "laatste 7 dagen" in r.text
 
 
 @respx.mock
