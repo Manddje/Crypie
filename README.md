@@ -159,7 +159,7 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    verlies zijn altijd netto na kosten, ook live (Bitvavo meldt de betaalde fee per order terug), en
    Claude krijgt de kosten mee in zijn afweging.
 6. **Logboek**: elke beslissing komt in `decisions` met alle input en later de koers 1, 24 en 72 uur erna.
-   Posities staan in `positions`. Deze uitkomsten gaan terug naar Claude bij de volgende beslissing: zo
+   Posities staan in `positions` en vormen het trade-journaal op `/journal`. Deze uitkomsten gaan terug naar Claude bij de volgende beslissing: zo
    "leert" de bot zonder dat het model verandert.
 7. **Evaluatie**: elke `EVALUATION_INTERVAL_HOURS` (standaard wekelijks) schrijft `CLAUDE_MODEL_EVALUATION`
    (Fable 5.1) een rapport over de resultaten en doet eventueel een strategievoorstel, inclusief backtest.
@@ -167,6 +167,24 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
 
 De actieve strategie bepaalt de regels (indicatoren, condities, stop-loss, take-profit) en wordt op elke
 markt uit `MARKETS` toegepast; het `market`-veld van de strategie is alleen de standaard voor backtests.
+
+### Tradingplan en trade-journaal
+
+- **`/plan` (Tradingplan)** toont op één pagina het plan dat de bot volgt: markten en modus, de harde
+  limieten, de instap- en uitstapregels van de actieve strategie (hard en zacht), dipbewaking, de
+  nieuwstriggers, de beslisvolgorde en de rol van Claude. Dat deel wordt uit de instellingen en de
+  strategie gelezen, dus het klopt altijd met wat de bot echt doet. Daarboven staan vier vrije velden
+  van jou: **doel en horizon**, **eigen regels**, **wat de bot niet doet** en **lessen**. Ze worden in de
+  `settings`-tabel bewaard (`trading_plan`) en gaan als `trading_plan` mee in elke Claude-beslissing en
+  elke evaluatie. Eigen regels kunnen Claude terughoudender maken, nooit de spelregels of de harde
+  limieten omzeilen. API: `GET/PUT /api/plan`.
+- **`/journal` (Journaal)** toont elke positie van de bot (open en gesloten) als journaalregel: instap
+  en uitstap met koers, hoeveelheid, inleg, kosten en netto resultaat, de voorwaarden en de toelichting
+  van Claude bij de instap en bij de uitstap, en een eigen **notitie met labels** per trade. Filters op
+  markt, status, winst/verlies, sluitreden, periode, label en vrije tekst; totalen (netto resultaat,
+  winstkans, winst/verlies-factor, kosten, gemiddelde looptijd, per markt). Notities staan op de positie
+  zelf (`positions.note`, `positions.tags`) en gaan als `owner_notes` mee naar de evaluatie. Handmatige
+  orders zonder positie staan apart onderaan. API: `GET /api/journal`, `PUT /api/journal/{id}/note`.
 
 ### Live gaan
 
@@ -228,7 +246,7 @@ Zet daarnaast in de Anthropic Console een uitgavenlimiet op de API-key als tweed
 
 ```
 app/
-  main.py                   FastAPI: JSON-API (/api/...), dashboard (/) en strategiepagina (/strategy)
+  main.py                   FastAPI: JSON-API (/api/...), dashboard (/), /trading, /journal, /plan, /strategy, /news, /settings
   config.py                 instellingen uit omgevingsvariabelen
   db.py                     SQLAlchemy-modellen: orders, settings, claude_usage, news_items, positions, decisions, evaluations, auth_users
   auth/                     login: wachtwoord (passwords.py), TOTP (totp.py), cookie (session.py), account (service.py), routes + middleware (routes.py), CLI (__main__.py)
@@ -245,6 +263,8 @@ app/
   ai/budget.py              kosten per aanroep, maandbudget
   trading/engine.py         handelscyclus, posities, logboek, uitkomsten, evaluatie
   trading/risk.py           harde limieten en kill switch
+  trading/plan.py           tradingplan: doel, eigen regels en lessen van de eigenaar (/plan), context voor Claude
+  trading/journal.py        trade-journaal: posities + beslissingen + eigen notities (/journal)
   news/sources.py           RSS-, GDELT-, cryptocurrency.cv-, Google News- en CryptoPanic-fetchers
   news/service.py           opslaan, ontdubbelen, beoordelen, marktsentiment per coin
 tests/                      pytest (respx mockt Bitvavo, Claude wordt gemockt)

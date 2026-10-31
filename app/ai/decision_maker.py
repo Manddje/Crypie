@@ -65,6 +65,10 @@ Spelregels:
   dalen koers en oscillatoren (zoals RSI) nog steeds en staat de koers vlak bij het 24-uurs
   dieptepunt, dan is "hold" de keuze en wacht je een cyclus op een draai. Alleen sterk positief
   nieuws van hoge impact rechtvaardigt eerder instappen, en dan met een kleiner bedrag.
+- trading_plan is het tradingplan van de eigenaar: doel, eigen regels, wat de bot niet doet en
+  lessen uit het journaal. Volg die regels alsof ze onderdeel van deze spelregels zijn. Ze
+  kunnen je terughoudender maken (kleiner bedrag of "hold"), maar nooit iets toestaan wat
+  hierboven of door de harde limieten verboden is. Ontbreekt trading_plan (null), negeer het.
 - Bij twijfel: "hold". Niet handelen kost niets, een slechte trade wel.
 - reasoning_nl: twee tot vier zinnen Nederlands met de doorslaggevende argumenten.
 """

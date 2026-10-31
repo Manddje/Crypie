@@ -19,7 +19,7 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 # Bumped whenever app.css changes so browsers pick up the new file.
-ASSET_VERSION = "9"
+ASSET_VERSION = "10"
 
 # Internal identifiers -> what the user sees.
 LABELS_NL: dict[str, str] = {
@@ -44,6 +44,11 @@ LABELS_NL: dict[str, str] = {
     "signal": "Verkoopsignaal",
     "news_exit": "Nieuws",
     "reset": "Reset oefenportefeuille",
+    "win": "Winst",
+    "loss": "Verlies",
+    "flat": "Break-even",
+    "error": "Fout",
+    "watch": "Dipbewaking",
     "hours": "uren",
     "days": "dagen",
     "weeks": "weken",
