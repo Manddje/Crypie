@@ -29,7 +29,7 @@ def crossover_strategy(**overrides):
 
 
 def test_default_strategy_is_valid():
-    assert DEFAULT_STRATEGY.series_names() >= {"rsi14", "ema50", "close"}
+    assert DEFAULT_STRATEGY.series_names() >= {"rsi14", "ema200", "close"}
 
 
 def test_unknown_series_reference_rejected():

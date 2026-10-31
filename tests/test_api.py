@@ -89,7 +89,7 @@ def _candles(n=120, start=30000.0):
 @respx.mock
 async def test_strategy_roundtrip_and_backtest(api):
     r = await api.get("/api/strategy")
-    assert r.status_code == 200 and r.json()["name"] == "RSI mean reversion"
+    assert r.status_code == 200 and r.json()["name"] == "RSI dip in opwaartse trend"
 
     new = r.json() | {"name": "Mijn test", "market": "ETH-EUR"}
     r = await api.put("/api/strategy", json=new)

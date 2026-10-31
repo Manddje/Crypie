@@ -353,6 +353,61 @@ async def test_news_exit_when_high_impact_negative_news(session):
     assert session.query(Position).one().close_reason == "news_exit"
 
 
+def positive_news(sentiment=0.9):
+    return NewsItem(
+        source="rss",
+        source_name="x",
+        url="u2",
+        title="Spot ETF approved",
+        published_at=datetime.now(UTC) - timedelta(hours=1),
+        assessed=True,
+        relevant=True,
+        sentiment=sentiment,
+        impact=3,
+        horizon="days",
+        coins="BTC",
+    )
+
+
+async def test_strong_positive_news_lets_claude_buy_a_smaller_position(session):
+    decider = FakeDecider(
+        TradeDecision(action="buy", confidence=0.8, amount_quote=100, reasoning_nl="ETF.")
+    )
+    engine = make_engine_(session, {"BTC-EUR": candles(FLAT_SERIES)}, {"BTC-EUR": 10.0}, decider)
+    session.add(positive_news())
+    session.commit()
+    (result,) = await engine.run_cycle(session)
+    assert result.signal == "hold" and result.executed and result.action == "buy"
+    assert decider.contexts[0]["news_entry_allowed"] is True
+    # News alone never gets the full trade budget: half of max_trade_eur.
+    assert open_position(session, "paper", "BTC-EUR").entry_quote == 50.0
+
+
+async def test_mild_positive_news_without_signal_skips_claude(session):
+    decider = FakeDecider(
+        TradeDecision(action="buy", confidence=0.8, amount_quote=100, reasoning_nl="x")
+    )
+    engine = make_engine_(session, {"BTC-EUR": candles(FLAT_SERIES)}, {"BTC-EUR": 10.0}, decider)
+    session.add(positive_news(sentiment=0.3))
+    session.commit()
+    (result,) = await engine.run_cycle(session)
+    assert result.action == "hold" and result.source == "rules"
+    assert decider.contexts == []
+
+
+async def test_claude_buy_without_signal_or_news_is_blocked(session):
+    decider = FakeDecider(
+        TradeDecision(action="buy", confidence=0.8, amount_quote=100, reasoning_nl="x")
+    )
+    engine = make_engine_(session, {"BTC-EUR": candles(SELL_SERIES)}, {"BTC-EUR": 12.0}, decider)
+    session.add(Position(mode="paper", market="BTC-EUR", amount=5, entry_price=10, entry_quote=50))
+    await engine.broker.market_order(session, "BTC-EUR", "buy", 50, reason="setup")
+    session.commit()
+    (result,) = await engine.run_cycle(session)
+    assert result.action == "buy" and not result.executed
+    assert "open positie" in result.reason
+
+
 async def test_fallback_hold_when_claude_unavailable(session):
     decider = FakeDecider(available=False)
     engine = make_engine_(session, {"BTC-EUR": candles(BUY_SERIES)}, {"BTC-EUR": 12.0}, decider)
