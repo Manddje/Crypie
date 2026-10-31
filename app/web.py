@@ -131,6 +131,13 @@ def dt(value: datetime | None, with_year: bool = False) -> str:
     return f"{value.day} {MONTHS_NL[value.month - 1]}{year} {value:%H:%M}"
 
 
+def isodt(value: str | datetime | None) -> str:
+    """ISO string or datetime -> '31 okt 14:05' (UTC)."""
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    return dt(value)
+
+
 def ts(value: int | None) -> str:
     """Epoch seconds -> '31 okt 14:05'."""
     if value is None:
@@ -198,6 +205,7 @@ templates.env.filters.update(
         "price": price,
         "amount": amount,
         "dt": dt,
+        "isodt": isodt,
         "ts": ts,
         "ago": ago,
         "indicator_nl": indicator_nl,

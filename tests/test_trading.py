@@ -18,6 +18,7 @@ from app.trading.engine import (
     performance_summary,
     recent_decisions,
 )
+from app.trading.events import MarketEvent
 from app.trading.risk import RiskLimits
 from app.trading.trend import save_trend
 
@@ -672,3 +673,62 @@ async def test_long_term_trend_reaches_claude_when_enabled(session):
     engine.trend_context = False
     await engine.run_cycle(session)
     assert decider.contexts[1]["long_term_trend"] is None
+
+
+async def test_risk_off_window_blocks_buys_without_asking_claude(session):
+    decider = FakeDecider(
+        TradeDecision(action="buy", confidence=0.9, amount_quote=100, reasoning_nl="Kopen.")
+    )
+    engine = make_engine_(session, {"BTC-EUR": candles(BUY_SERIES)}, {"BTC-EUR": 12.0}, decider)
+    engine.calendar = [MarketEvent(datetime.now(UTC) + timedelta(minutes=30), "FOMC-rentebesluit")]
+    (result,) = await engine.run_cycle(session)
+    assert result.signal == "buy" and result.action == "hold" and result.source == "rules"
+    assert "Risk-off: FOMC-rentebesluit" in result.reason and decider.contexts == []
+    (d,) = session.query(Decision).all()
+    assert d.blocked_by == "risk-off" and open_position(session, "paper", "BTC-EUR") is None
+
+    # Switched off: the same cycle buys.
+    engine.risk_off_enabled = False
+    (result,) = await engine.run_cycle(session)
+    assert result.action == "buy" and result.executed
+
+
+async def test_news_shock_pauses_buying_but_not_selling(session):
+    decider = FakeDecider(
+        TradeDecision(action="buy", confidence=0.9, amount_quote=100, reasoning_nl="Kopen.")
+    )
+    engine = make_engine_(session, {"BTC-EUR": candles(BUY_SERIES)}, {"BTC-EUR": 12.0}, decider)
+    session.add(
+        NewsItem(
+            source="rss",
+            source_name="Src",
+            url="https://x/hack",
+            title="Exchange hacked",
+            summary_nl="Grote beurs gehackt.",
+            published_at=datetime.now(UTC) - timedelta(hours=1),
+            assessed=True,
+            relevant=True,
+            sentiment=-0.9,
+            impact=3,
+            coins="ALL",
+        )
+    )
+    session.commit()
+    (result,) = await engine.run_cycle(session)
+    assert result.action == "hold" and "nieuwsschok (Grote beurs gehackt.)" in result.reason
+    assert decider.contexts == []
+
+    # With an open position the shock does not block Claude: selling must stay possible.
+    engine.shock_pause_hours = 0
+    (result,) = await engine.run_cycle(session)
+    assert result.action == "buy" and result.executed
+    engine.shock_pause_hours = 6
+    decider.decision = TradeDecision(
+        action="sell", confidence=0.9, amount_quote=0, reasoning_nl="Eruit."
+    )
+    engine2 = make_engine_(session, {"BTC-EUR": candles(SELL_SERIES)}, {"BTC-EUR": 12.0}, decider)
+    engine2.shock_pause_hours = 6
+    (result,) = await engine2.run_cycle(session)
+    assert result.action == "sell" and result.executed
+    # Claude saw the shock in its context while deciding about the open position.
+    assert decider.contexts[-1]["market_events"]["risk_off"]["kind"] == "shock"

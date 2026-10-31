@@ -136,6 +136,13 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    RSI boven 50 is de lange trend "opwaarts", eronder "neerwaarts". Claude krijgt dit als `long_term_trend`
    met de instructie om in een neerwaartse lange trend terughoudender te zijn met dipaankopen; het is geen signaal.
    Markten met te weinig historie (jonge coins) krijgen "onbekend". /trading toont de tabel.
+   **Risk-off** (`RISK_OFF_ENABLED`, standaard aan): rond de momenten in de agenda (`EVENT_CALENDAR`, standaard de
+   FOMC-rentebesluiten en Amerikaanse CPI-cijfers t/m 2027, regels als `2026-12-09 19:00 Omschrijving` in UTC)
+   koopt de bot niet van `RISK_OFF_BEFORE_MIN` (60) minuten ervoor tot `RISK_OFF_AFTER_MIN` (120) minuten erna.
+   Na een nieuwsfeit met impact 3 en sentiment ≤ -0,5 (hack, beurs in problemen) pauzeert kopen
+   `SHOCK_PAUSE_HOURS` (6) uur voor de geraakte coins. Verkopen, stop-loss en take-profit blijven werken; de
+   dipbewaking wordt niet gewapend. Claude ziet dit als `market_events` (actieve risk-off en de komende 72 uur);
+   /trading toont de agenda en een actieve risk-off. Alles instelbaar in het portaal.
    Een voorwaarde met `"soft": true` is een **zacht filter**: het signaal ontstaat ook als het niet geldt,
    Claude ziet dat in `signal_checks` en `soft_filters_failed` en koopt dan hoogstens de helft van
    `MAX_TRADE_EUR`. De standaardstrategie gebruikt dat voor de EMA200-trendfilter, zodat een RSI-dip in een
