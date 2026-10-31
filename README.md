@@ -128,6 +128,11 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    24-uurs verandering en afstand tot het dieptepunt) met de instructie niet in een nog dalende koers te kopen.
    Claude krijgt in `recent_candles.price_context` ook de korting t.o.v. het 7- en 30-daags hoog en de
    afstand tot het 30-daags gemiddelde, met de kanttekening dat lager niet de bodem is.
+   **Lange-termijntrend** (`TREND_CONTEXT_ENABLED`, standaard aan): per markt haalt de bot eens per dag week- en
+   maandcandles op en berekent het 200-weeks gemiddelde en de maand-RSI (PlanB-stijl). Boven het gemiddelde met
+   RSI boven 50 is de lange trend "opwaarts", eronder "neerwaarts". Claude krijgt dit als `long_term_trend`
+   met de instructie om in een neerwaartse lange trend terughoudender te zijn met dipaankopen; het is geen signaal.
+   Markten met te weinig historie (jonge coins) krijgen "onbekend". /trading toont de tabel.
    Een voorwaarde met `"soft": true` is een **zacht filter**: het signaal ontstaat ook als het niet geldt,
    Claude ziet dat in `signal_checks` en `soft_filters_failed` en koopt dan hoogstens de helft van
    `MAX_TRADE_EUR`. De standaardstrategie gebruikt dat voor de EMA200-trendfilter, zodat een RSI-dip in een

@@ -19,6 +19,7 @@ from app.trading.engine import (
     recent_decisions,
 )
 from app.trading.risk import RiskLimits
+from app.trading.trend import save_trend
 
 LIMITS = RiskLimits(
     max_trade_eur=100,
@@ -657,3 +658,17 @@ async def test_run_evaluation_stores_report_and_backtests_proposal(session):
     bt = json.loads(ev.proposal_backtest)
     assert "return_pct" in bt["proposed"] and "return_pct" in bt["current"]
     assert evaluator.contexts[0]["strategy"]["name"] == "SMA cross"
+
+
+async def test_long_term_trend_reaches_claude_when_enabled(session):
+    save_trend(session, {"market": "BTC-EUR", "regime": "down", "regime_nl": "neerwaarts"})
+    decider = FakeDecider(
+        TradeDecision(action="hold", confidence=0.5, amount_quote=0, reasoning_nl="Wacht.")
+    )
+    engine = make_engine_(session, {"BTC-EUR": candles(BUY_SERIES)}, {"BTC-EUR": 12.0}, decider)
+    await engine.run_cycle(session)
+    assert decider.contexts[0]["long_term_trend"]["regime"] == "down"
+
+    engine.trend_context = False
+    await engine.run_cycle(session)
+    assert decider.contexts[1]["long_term_trend"] is None

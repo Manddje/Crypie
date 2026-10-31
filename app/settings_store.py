@@ -130,6 +130,15 @@ SPECS: tuple[Spec, ...] = (
         unit="minuten",
     ),
     Spec(
+        "trend_context_enabled",
+        "trading",
+        "Lange-termijntrend (PlanB)",
+        "Per coin het 200-weeks gemiddelde en de maand-RSI uit Bitvavo, dagelijks ververst. "
+        "Claude krijgt het als context (opwaartse of neerwaartse lange trend); het is geen "
+        "signaal.",
+        kind="bool",
+    ),
+    Spec(
         "decision_history_days",
         "trading",
         "Beslissingen tonen van de laatste",

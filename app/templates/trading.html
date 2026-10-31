@@ -86,6 +86,27 @@
     </section>
   </div>
 
+  {% if status.trends %}
+  <section class="card">
+    <div class="card-header"><h2>Lange-termijntrend</h2><span class="more muted small">PlanB-stijl · dagelijks ververst</span></div>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Markt</th><th class="num">200-weeks gemiddelde</th><th class="num">Koers t.o.v.</th><th class="num">Maand-RSI</th><th>Lange trend</th></tr>
+      {% for t in status.trends %}
+      <tr>
+        <td><strong>{{ t.market }}</strong></td>
+        <td class="num">{% if t.wma200 is not none %}€ {{ t.wma200|price }}{% else %}<span class="muted">te weinig historie ({{ t.weeks }} weken)</span>{% endif %}</td>
+        <td class="num {{ 'pos' if t.above_wma200 else ('neg' if t.above_wma200 is not none else '') }}">{% if t.vs_wma200_pct is not none %}{{ "+" if t.vs_wma200_pct >= 0 else "" }}{{ t.vs_wma200_pct|num(1) }}%{% else %}–{% endif %}</td>
+        <td class="num {{ 'pos' if t.monthly_rsi_above_50 else ('neg' if t.monthly_rsi_above_50 is not none else '') }}">{% if t.monthly_rsi is not none %}{{ t.monthly_rsi|num(0) }}{% else %}<span class="muted">te weinig maanden ({{ t.months }})</span>{% endif %}</td>
+        <td><span class="pill {{ 'pill-green' if t.regime == 'up' else ('pill-red' if t.regime == 'down' else '') }}">{{ t.regime_nl }}</span></td>
+      </tr>
+      {% endfor %}
+    </table>
+    </div>
+    <p class="form-help">Geen koop- of verkoopsignaal, maar het weerbericht voor de bot: boven het 200-weeks gemiddelde met een maand-RSI boven 50 worden dips historisch vaker opgekocht; eronder is Claude terughoudender met het bedrag. Uit te zetten bij <a href="/settings#trading">Instellingen</a>.</p>
+  </section>
+  {% endif %}
+
   <section class="card">
     <div class="card-header"><h2>Laatste cyclus per markt</h2><span class="more muted small">{{ status.last_run|ago if status.last_run else "" }}</span></div>
     {% if last_cycle %}

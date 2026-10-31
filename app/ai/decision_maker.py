@@ -47,6 +47,12 @@ Spelregels:
 - market_mood is de Fear & Greed-index (0 = extreme angst, 100 = extreme hebzucht) voor de
   hele markt. Angst maakt een dip aannemelijker als koopkans, maar alleen samen met een draai
   of positief coin-nieuws; het is geen reden op zich.
+- long_term_trend is de lange-termijnrichting in PlanB-stijl: koers t.o.v. het 200-weeks
+  gemiddelde en de maand-RSI (boven 50 = opwaarts). In een opwaartse lange trend worden dips
+  historisch vaker opgekocht: dan mag je een koopsignaal normaal volgen. Is de lange trend
+  neerwaarts (onder het 200-weeks gemiddelde én maand-RSI onder 50), dan lopen dipaankopen
+  vaker door naar beneden: wees terughoudender en kies een kleiner bedrag. Het is context, geen
+  signaal; ontbreekt het (null of onbekend), dan negeer je het.
 - Koop niet in een vallend mes. recent_candles toont de laatste candles (oudste eerst):
   dalen koers en oscillatoren (zoals RSI) nog steeds en staat de koers vlak bij het 24-uurs
   dieptepunt, dan is "hold" de keuze en wacht je een cyclus op een draai. Alleen sterk positief
