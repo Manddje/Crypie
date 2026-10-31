@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from typing import Annotated, Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+from app.trading.events import default_calendar_lines
 
 
 class Settings(BaseSettings):
@@ -60,6 +63,12 @@ class Settings(BaseSettings):
     watch_interval_min: int = 5  # dip watch: re-check an armed market this often (0 = off)
     watch_max_min: int = 180  # dip watch: give up on a dip after this long without a turn
     trend_context_enabled: bool = True  # PlanB-style 200-week MA + monthly RSI as Claude context
+    # Risk-off: no new buys around scheduled macro moments and after a news shock.
+    risk_off_enabled: bool = True
+    risk_off_before_min: int = 60
+    risk_off_after_min: int = 120
+    shock_pause_hours: int = 6  # after highest-impact, strongly negative news; 0 = off
+    event_calendar: Annotated[list[str], NoDecode] = default_calendar_lines()
     live_trading_ack: bool = False  # must be true to start in live mode
     max_trade_eur: float = 100.0  # per order
     max_exposure_pct: float = 50.0  # of total portfolio value in coins
@@ -86,6 +95,14 @@ class Settings(BaseSettings):
             parsed = [m.strip().upper() for m in value.split(",") if m.strip()]
             # An empty env value (e.g. Coolify passing MARKETS="") means "use the default".
             return parsed or cls.model_fields["markets"].default
+        return value
+
+    @field_validator("event_calendar", mode="before")
+    @classmethod
+    def _split_calendar(cls, value: object) -> object:
+        if isinstance(value, str):
+            parsed = [line.strip() for line in re.split(r"[\r\n;]+", value) if line.strip()]
+            return parsed or cls.model_fields["event_calendar"].default
         return value
 
     @field_validator("news_rss_feeds", mode="before")

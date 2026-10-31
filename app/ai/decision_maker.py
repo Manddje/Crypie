@@ -50,6 +50,11 @@ Spelregels:
 - market_mood is de Fear & Greed-index (0 = extreme angst, 100 = extreme hebzucht) voor de
   hele markt. Angst maakt een dip aannemelijker als koopkans, maar alleen samen met een draai
   of positief coin-nieuws; het is geen reden op zich.
+- market_events: risk_off is gevuld als er nu niet gekocht mag worden (venster rond een
+  agendamoment zoals een FOMC-besluit of CPI-cijfer, of een schok-pauze na zwaar negatief
+  nieuws); de code blokkeert kopen dan sowieso. upcoming toont de agendamomenten van de komende
+  72 uur. Vlak voor zo'n moment is een nieuwe positie onverstandig, en met een open positie en
+  tegenzittend nieuws mag je eerder voor "sell" kiezen dan het moment uit te zitten.
 - long_term_trend is de lange-termijnrichting in PlanB-stijl: koers t.o.v. het 200-weeks
   gemiddelde en de maand-RSI (boven 50 = opwaarts). In een opwaartse lange trend worden dips
   historisch vaker opgekocht: dan mag je een koopsignaal normaal volgen. Is de lange trend

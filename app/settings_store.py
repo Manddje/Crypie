@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.ai.budget import PRICES
 from app.config import Settings, get_settings
 from app.db import Setting
+from app.trading.events import validate_calendar_lines
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class Spec:
     group: str
     label: str
     help: str = ""
-    kind: str = "str"  # bool | int | float | str | choice | model | markets | lines
+    kind: str = "str"  # bool | int | float | str | choice | model | markets | lines | events
     choices: tuple[tuple[str, str], ...] = ()
     min: float | None = None
     max: float | None = None
@@ -137,6 +138,53 @@ SPECS: tuple[Spec, ...] = (
         "Claude krijgt het als context (opwaartse of neerwaartse lange trend); het is geen "
         "signaal.",
         kind="bool",
+    ),
+    Spec(
+        "risk_off_enabled",
+        "trading",
+        "Risk-off rond events",
+        "Geen nieuwe aankopen rond de momenten in de agenda hieronder en na een nieuwsschok. "
+        "Verkopen en de stop-loss blijven werken.",
+        kind="bool",
+    ),
+    Spec(
+        "risk_off_before_min",
+        "trading",
+        "Risk-off: vooraf",
+        "Hoe lang vóór een agendamoment de bot stopt met kopen.",
+        kind="int",
+        min=0,
+        max=720,
+        unit="minuten",
+    ),
+    Spec(
+        "risk_off_after_min",
+        "trading",
+        "Risk-off: achteraf",
+        "Hoe lang ná een agendamoment de bot nog niet koopt.",
+        kind="int",
+        min=0,
+        max=1440,
+        unit="minuten",
+    ),
+    Spec(
+        "shock_pause_hours",
+        "trading",
+        "Schok-pauze",
+        "Na een nieuwsfeit met grote impact en sterk negatief sentiment (hack, beurs in problemen) "
+        "koopt de bot zoveel uur niet in de coins die het raakt. 0 = uit.",
+        kind="int",
+        min=0,
+        max=72,
+        unit="uur",
+    ),
+    Spec(
+        "event_calendar",
+        "trading",
+        "Agenda",
+        "Eén moment per regel als '2026-12-09 19:00 Omschrijving', tijd in UTC zoals overal in "
+        "de app. Standaard: FOMC-rentebesluiten en Amerikaanse CPI-cijfers t/m 2027.",
+        kind="events",
     ),
     Spec(
         "decision_history_days",
@@ -579,6 +627,8 @@ def parse_value(spec: Spec, raw: Any) -> Any:
         return _parse_markets(raw)
     if spec.kind == "lines":
         return _parse_lines(raw)
+    if spec.kind == "events":
+        return validate_calendar_lines(raw)
     value = str(raw).strip()
     if not value:
         raise ValueError("mag niet leeg zijn")
@@ -638,7 +688,7 @@ def as_text(spec: Spec, value: Any) -> str:
     """How a value is shown in a form field."""
     if spec.kind == "markets":
         return ", ".join(value)
-    if spec.kind == "lines":
+    if spec.kind in ("lines", "events"):
         return "\n".join(value)
     if spec.kind == "bool":
         return "aan" if value else "uit"

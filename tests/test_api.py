@@ -196,6 +196,7 @@ async def test_trading_endpoints(api):
     r = await api.get("/trading")
     assert r.status_code == 200 and "Harde limieten" in r.text
     assert "Lange-termijntrend" not in r.text  # nothing computed yet
+    assert "Agenda en risk-off" in r.text and "Geen agendamoment actief" in r.text
 
     from app.db import SessionLocal
     from app.trading.trend import save_trend

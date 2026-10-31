@@ -86,6 +86,28 @@
     </section>
   </div>
 
+  <section class="card">
+    <div class="card-header"><h2>Agenda en risk-off</h2><a class="more" href="/settings#trading">Aanpassen ›</a></div>
+    {% set ev = status.events %}
+    {% if not ev.enabled %}
+    <p class="small muted">Risk-off staat uit: de bot koopt ook rond agendamomenten en na nieuwsschokken.</p>
+    {% elif ev.active_event %}
+    <p class="small"><span class="pill pill-orange"><span class="dot"></span>Risk-off actief</span> {{ ev.active_event.label }} om {{ ev.active_event.at|isodt }}; geen nieuwe aankopen tot {{ ev.active_event.until|isodt }}.</p>
+    {% else %}
+    <p class="small muted">Geen agendamoment actief. Rond elk moment hieronder koopt de bot niet van {{ ev.before_min }} min ervoor tot {{ ev.after_min }} min erna.{% if ev.shock_pause_hours %} Na een nieuwsschok (grote impact, sterk negatief) pauzeert kopen {{ ev.shock_pause_hours }} uur voor de geraakte coins.{% endif %}</p>
+    {% endif %}
+    {% for market, ro in ev.shocks.items() %}
+    <p class="small"><span class="pill pill-red"><span class="dot"></span>Schok-pauze {{ market }}</span> {{ ro.label }}; geen nieuwe aankopen tot {{ ro.until|isodt }}.</p>
+    {% endfor %}
+    {% if ev.upcoming %}
+    <dl class="kv" style="margin-top: 10px">
+      {% for e in ev.upcoming %}<dt class="nowrap">{{ e.at|isodt }}</dt><dd>{{ e.label }}</dd>{% endfor %}
+    </dl>
+    {% else %}
+    <p class="small muted">Geen komende momenten in de agenda.</p>
+    {% endif %}
+  </section>
+
   {% if status.trends %}
   <section class="card">
     <div class="card-header"><h2>Lange-termijntrend</h2><span class="more muted small">PlanB-stijl · dagelijks ververst</span></div>
