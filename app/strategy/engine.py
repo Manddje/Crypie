@@ -5,7 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from app.indicators.core import Series, bollinger, drawdown, ema, macd, rsi, sma
+from app.indicators.core import (
+    Series,
+    bollinger,
+    drawdown,
+    ema,
+    ema_support,
+    fibonacci,
+    macd,
+    rsi,
+    sma,
+)
 from app.strategy.model import LOOKBACK_OPS, Condition, Strategy
 
 Candle = list[float]  # [timestamp_ms, open, high, low, close, volume]
@@ -36,6 +46,14 @@ def compute_series(strategy: Strategy, candles: list[Candle]) -> dict[str, Serie
             out[f"{ind.id}_upper"], out[f"{ind.id}_middle"], out[f"{ind.id}_lower"] = up, mid, low
         elif ind.type == "drawdown":
             out[ind.id] = drawdown(closes, ind.period)
+        elif ind.type == "fibonacci":
+            fib = fibonacci(out["open"], out["high"], out["low"], closes, ind.period)
+            for sfx, values in fib.items():
+                out[f"{ind.id}_{sfx}" if sfx else ind.id] = values
+        elif ind.type == "ema_support":
+            sup = ema_support(out["high"], out["low"], closes, ind.period, ind.tolerance_pct)
+            for sfx, values in sup.items():
+                out[f"{ind.id}_{sfx}" if sfx else ind.id] = values
     return out
 
 

@@ -130,3 +130,97 @@ def drawdown(values: Sequence[float], period: int) -> Series:
         high = max(window)
         out.append(round((1 - v / high) * 100, 6) if high else None)
     return out
+
+
+FIB_LEVELS = (0.382, 0.5, 0.618)
+
+
+def fibonacci(
+    opens: Sequence[float],
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    period: int,
+) -> dict[str, Series]:
+    """Fibonacci retracement of the latest swing in a rolling window of ``period`` candles.
+
+    The swing runs from the lowest low to the highest high of the window (or the other way
+    round); whichever extreme came last marks the end of the swing. Returned series:
+
+    - ``""``: how far the price has retraced the swing, in percent of the swing (0 = still at
+      the swing's end, 38.2 / 50 / 61.8 = at the classic levels, 100 = back at its start).
+    - ``"up"``: 1 when the swing is upward (the high came after the low, the price is pulling
+      back towards support), 0 when it is downward (the price bounces towards resistance).
+    - ``"high"`` / ``"low"``: the swing high and low.
+    - ``"382"`` / ``"500"`` / ``"618"``: the price at each level (support in an upward swing,
+      resistance in a downward one).
+    - ``"near"``: distance from the close to the nearest level, in percent of the price.
+
+    Candles before the window is full hold ``None``.
+    """
+    if period < 2:
+        raise ValueError("period must be >= 2")
+    n = len(closes)
+    keys = ("", "up", "high", "low", "382", "500", "618", "near")
+    out: dict[str, Series] = {k: [None] * n for k in keys}
+    for i in range(period - 1, n):
+        start = i - period + 1
+        hi_idx = start
+        lo_idx = start
+        for j in range(start, i + 1):
+            if highs[j] >= highs[hi_idx]:
+                hi_idx = j
+            if lows[j] <= lows[lo_idx]:
+                lo_idx = j
+        high, low = highs[hi_idx], lows[lo_idx]
+        span = high - low
+        if span <= 0:
+            continue
+        if hi_idx == lo_idx:
+            up = closes[hi_idx] >= opens[hi_idx]
+        else:
+            up = hi_idx > lo_idx
+        close = min(max(closes[i], low), high)
+        if up:
+            retrace = (high - close) / span * 100
+            levels = [high - k * span for k in FIB_LEVELS]
+        else:
+            retrace = (close - low) / span * 100
+            levels = [low + k * span for k in FIB_LEVELS]
+        out[""][i] = round(retrace, 4)
+        out["up"][i] = 1.0 if up else 0.0
+        out["high"][i] = high
+        out["low"][i] = low
+        out["382"][i], out["500"][i], out["618"][i] = (round(v, 8) for v in levels)
+        out["near"][i] = round(min(abs(closes[i] / lv - 1) for lv in levels) * 100, 4)
+    return out
+
+
+def ema_support(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    period: int,
+    tolerance_pct: float = 1.0,
+) -> dict[str, Series]:
+    """An EMA as dynamic support: where the price sits relative to it and whether it held.
+
+    - ``""``: distance of the close to the EMA in percent (positive = above the EMA).
+    - ``"ema"``: the EMA itself.
+    - ``"bounce"``: 1 when this candle tested the EMA as support and it held: the low came
+      within ``tolerance_pct`` of the EMA (or dipped under it) while the close stayed above
+      the EMA or at most ``tolerance_pct`` under it. Otherwise 0.
+    """
+    line = ema(closes, period)
+    n = len(closes)
+    out: dict[str, Series] = {k: [None] * n for k in ("", "ema", "bounce")}
+    tol = tolerance_pct / 100
+    for i, e in enumerate(line):
+        if e is None or e <= 0:
+            continue
+        out[""][i] = round((closes[i] / e - 1) * 100, 4)
+        out["ema"][i] = e
+        tested = lows[i] <= e * (1 + tol)
+        held = closes[i] >= e * (1 - tol)
+        out["bounce"][i] = 1.0 if tested and held else 0.0
+    return out

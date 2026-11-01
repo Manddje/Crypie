@@ -18,7 +18,7 @@ from app.bitvavo.broker import Broker
 from app.bitvavo.client import BitvavoClient
 from app.db import Decision, Evaluation, Position
 from app.news.service import load_market_mood, market_sentiment
-from app.strategy.describe import ConditionCheck, explain_signal, signal_reason_nl
+from app.strategy.describe import ConditionCheck, explain_signal, levels_summary, signal_reason_nl
 from app.strategy.engine import backtest, compute_series, signal_at
 from app.strategy.model import LOOKBACK_OPS, Strategy
 from app.strategy.store import load_strategy
@@ -673,6 +673,7 @@ class TradingEngine:
                 c.text for c in (checks or {}).get("buy", []) if c.soft and not c.ok
             ],
             "indicators": indicators,
+            "support_levels": levels_summary(strategy, indicators),
             "recent_candles": trajectory or {},
             "news": sentiment.as_dict(),
             "market_mood": load_market_mood(session),  # Fear & Greed index, market-wide

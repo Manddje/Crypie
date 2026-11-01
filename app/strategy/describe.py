@@ -141,3 +141,80 @@ def signal_reason_nl(signal: str, checks: dict[str, list[ConditionCheck]]) -> st
         f"Geen koopsignaal, {len(failed)} van {len(hard)} harde koopvoorwaarden niet gehaald: "
         f"{describe(checks['buy'])}."
     )
+
+
+def levels_summary(strategy: Strategy, values: dict[str, float | None]) -> list[dict]:
+    """Support and resistance from the strategy's fibonacci / ema_support indicators.
+
+    ``values`` is a flat ``{series: value}`` map (the latest candle, or a journal entry's
+    stored indicators). One entry per indicator with its numbers and a Dutch sentence; used as
+    Claude's ``support_levels`` context and on the /trading page.
+    """
+    out: list[dict] = []
+    for ind in strategy.indicators:
+        if ind.type == "fibonacci":
+            retrace = values.get(ind.id)
+            up = values.get(f"{ind.id}_up")
+            if retrace is None or up is None:
+                continue
+            upward = up > 0
+            lv = {k: values.get(f"{ind.id}_{k}") for k in ("382", "500", "618", "high", "low")}
+            near = values.get(f"{ind.id}_near")
+            if upward:
+                swing = "opwaartse swing"
+                levels_nl = "steunniveaus"
+            else:
+                swing = "neerwaartse swing"
+                levels_nl = "weerstandsniveaus"
+            text = (
+                f"Fibonacci ({ind.period} candles): {swing} van {format_value(lv['low'])} naar "
+                f"{format_value(lv['high'])}, koers heeft {format_value(retrace)}% teruggelopen; "
+                f"{levels_nl} 38,2% {format_value(lv['382'])}, 50% {format_value(lv['500'])}, "
+                f"61,8% {format_value(lv['618'])}"
+            )
+            if near is not None:
+                text += f"; dichtstbijzijnde niveau op {format_value(near)}%"
+            if upward and 38.2 <= retrace <= 61.8:
+                text += " (in de golden pocket, klassieke koopzone)"
+            elif upward and retrace > 78.6:
+                text += " (bijna hele stijging teruggegeven: steun houdt niet)"
+            out.append(
+                {
+                    "type": "fibonacci",
+                    "id": ind.id,
+                    "period": ind.period,
+                    "upward_swing": upward,
+                    "retracement_pct": retrace,
+                    "swing_high": lv["high"],
+                    "swing_low": lv["low"],
+                    "levels": {"38.2": lv["382"], "50": lv["500"], "61.8": lv["618"]},
+                    "nearest_level_distance_pct": near,
+                    "in_golden_pocket": bool(upward and 38.2 <= retrace <= 61.8),
+                    "text_nl": text,
+                }
+            )
+        elif ind.type == "ema_support":
+            dist = values.get(ind.id)
+            ema_value = values.get(f"{ind.id}_ema")
+            bounce = values.get(f"{ind.id}_bounce")
+            if dist is None or ema_value is None:
+                continue
+            where = f"{format_value(abs(dist))}% {'boven' if dist >= 0 else 'onder'}"
+            text = f"EMA{ind.period} ({format_value(ema_value)}): koers {where}"
+            if bounce:
+                text += f"; steun getest binnen {ind.tolerance_pct:g}% en gehouden"
+            elif dist < -ind.tolerance_pct:
+                text += "; koers onder de EMA, steun gebroken"
+            out.append(
+                {
+                    "type": "ema_support",
+                    "id": ind.id,
+                    "period": ind.period,
+                    "ema": ema_value,
+                    "distance_pct": dist,
+                    "bounce": bool(bounce),
+                    "tolerance_pct": ind.tolerance_pct,
+                    "text_nl": text,
+                }
+            )
+    return out
