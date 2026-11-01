@@ -57,6 +57,15 @@ from app.trading.engine import (
     recent_decisions,
 )
 from app.trading.events import parse_calendar
+from app.trading.history import (
+    PERIODS,
+    candle_dicts,
+    market_actions,
+    period_spec,
+    period_start,
+    portfolio_history,
+    trade_actions,
+)
 from app.trading.journal import (
     EXIT_NL,
     JournalFilter,
@@ -444,6 +453,74 @@ async def candles(
         return await client.candles(market.upper(), interval, limit)
     except BitvavoError as exc:
         raise HTTPException(502, str(exc)) from exc
+
+
+@app.get("/api/chart/{market}")
+async def chart_market(
+    market: str,
+    request: Request,
+    period: str = "7d",
+    client: BitvavoClient = Depends(get_client),
+    session: Session = Depends(get_session),
+):
+    """Candles of one market plus the bot's actions in that window, for the overview chart."""
+    settings: Settings = request.app.state.settings
+    market = market.upper()
+    if market not in settings.markets:
+        raise HTTPException(404, f"Markt {market} wordt niet gevolgd")
+    key, interval, limit = period_spec(period)
+    try:
+        rows = await client.candles(market, interval, limit)
+    except BitvavoError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    candles_ = candle_dicts(rows)
+    since = (
+        datetime.fromtimestamp(candles_[0]["time"], UTC)
+        if candles_
+        else period_start(interval, limit)
+    )
+    mode = request.app.state.engine.mode
+    return {
+        "market": market,
+        "period": key,
+        "interval": interval,
+        "candles": candles_,
+        "actions": market_actions(session, mode, market, since, interval),
+    }
+
+
+@app.get("/api/portfolio/history")
+async def portfolio_history_api(
+    request: Request,
+    period: str = "7d",
+    client: BitvavoClient = Depends(get_client),
+    broker: Broker = Depends(get_broker),
+    session: Session = Depends(get_session),
+):
+    """Portfolio value per candle, rebuilt from today's balance and the order history."""
+    settings: Settings = request.app.state.settings
+    key, interval, limit = period_spec(period)
+    try:
+        results = await asyncio.gather(
+            *(client.candles(m, interval, limit) for m in settings.markets)
+        )
+        balances = await broker.balances(session)
+    except BitvavoError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    candles_by_market = {
+        m: candle_dicts(rows) for m, rows in zip(settings.markets, results, strict=True)
+    }
+    starts = [rows[0]["time"] for rows in candles_by_market.values() if rows]
+    since = datetime.fromtimestamp(min(starts), UTC) if starts else period_start(interval, limit)
+    mode = request.app.state.engine.mode
+    return {
+        "period": key,
+        "interval": interval,
+        "mode": mode,
+        "start_eur": settings.paper_start_eur if mode == "paper" else None,
+        "points": portfolio_history(session, mode, balances, candles_by_market, since),
+        "actions": trade_actions(session, mode, since, interval),
+    }
 
 
 @app.get("/api/balance")
@@ -1435,6 +1512,7 @@ async def _dashboard_context(
         "paused": risk.is_paused(session),
         "last_run": request.app.state.engine.last_run,
         "config_warning": request.app.state.config_warning,
+        "chart_periods": list(PERIODS),
     }
 
 

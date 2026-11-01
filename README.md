@@ -198,6 +198,20 @@ markt uit `MARKETS` toegepast; het `market`-veld van de strategie is alleen de s
   zelf (`positions.note`, `positions.tags`) en gaan als `owner_notes` mee naar de evaluatie. Handmatige
   orders zonder positie staan apart onderaan. API: `GET /api/journal`, `PUT /api/journal/{id}/note`.
 
+### Grafieken op het overzicht
+
+- **Koers en acties**: candles van Bitvavo per markt (1 dag / 7 / 30 / 90 dagen) met daarop elke koop
+  (groene pijl), elke verkoop met de reden (stop-loss, trailing stop, take-profit, signaal, nieuws),
+  de Claude-adviezen die niet tot een order leidden (blauwe stip) en de kopen die een regel blokkeerde
+  (oranje vierkant). Routinematige "afwachten"-cycli van de regels staan er niet op. Onder de grafiek
+  dezelfde acties als lijst. API: `GET /api/chart/{markt}?period=7d`.
+- **Portefeuillewaarde**: euro plus crypto tegen de slotkoers van elke candle. Er is geen
+  geschiedenis-tabel: de waarde wordt vanuit het huidige saldo teruggerekend door de orders één voor
+  één terug te draaien. Stortingen of opnames op een live-account zijn geen orders en zien er daarom
+  uit als een sprong aan het begin van de periode. API: `GET /api/portfolio/history?period=7d`.
+- Tekenwerk door [Lightweight Charts](https://github.com/tradingview/lightweight-charts) (Apache 2.0),
+  meegeleverd in `app/static/vendor/`; er wordt niets van een CDN geladen.
+
 ### Live gaan
 
 1. Draai minimaal enkele weken in `TRADING_MODE=paper` en bekijk de evaluaties.
@@ -277,6 +291,7 @@ app/
   trading/risk.py           harde limieten en kill switch
   trading/plan.py           tradingplan: doel, eigen regels en lessen van de eigenaar (/plan), context voor Claude
   trading/journal.py        trade-journaal: posities + beslissingen + eigen notities (/journal)
+  trading/history.py        data voor de grafieken op het overzicht: acties per markt, portefeuillewaarde terugrekenen
   news/sources.py           RSS-, GDELT-, cryptocurrency.cv-, Google News- en CryptoPanic-fetchers
   news/service.py           opslaan, ontdubbelen, beoordelen, marktsentiment per coin
 tests/                      pytest (respx mockt Bitvavo, Claude wordt gemockt)
