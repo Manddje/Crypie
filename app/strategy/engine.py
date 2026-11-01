@@ -178,8 +178,9 @@ def backtest(
 
     Soft conditions count as hard here: without Claude the strict rules are simulated.
 
-    Stop-loss and take-profit are checked against the bar's low/high and filled at the
-    threshold price. Fees are charged on both entry and exit.
+    Stop-loss, trailing stop and take-profit are checked against the bar's low/high and filled
+    at the threshold price; the trailing stop follows the highest high of earlier bars. Fees
+    are charged on both entry and exit.
     """
     if len(candles) < 2:
         raise ValueError("need at least 2 candles")
@@ -189,6 +190,7 @@ def backtest(
     coin = 0.0
     trades: list[Trade] = []
     open_trade: Trade | None = None
+    peak_price = 0.0  # highest price since entry, for the trailing stop
     peak = start_eur
     max_dd = 0.0
 
@@ -198,10 +200,16 @@ def backtest(
         if open_trade is not None:
             exit_price = None
             reason = ""
-            if strategy.stop_loss_pct is not None:
-                stop = open_trade.entry_price * (1 - strategy.stop_loss_pct / 100)
-                if low <= stop:
-                    exit_price, reason = stop, "stop_loss"
+            stop = strategy.initial_stop(open_trade.entry_price)
+            # peak_price holds the highs of earlier bars only
+            trail = strategy.trailing_stop(peak_price, open_trade.entry_price)
+            if trail is not None and (stop is None or trail > stop):
+                stop, trailed = trail, True
+            else:
+                trailed = False
+            if stop is not None and low <= stop:
+                exit_price, reason = stop, "trailing_stop" if trailed else "stop_loss"
+            peak_price = max(peak_price, high)
             if exit_price is None and strategy.take_profit_pct is not None:
                 target = open_trade.entry_price * (1 + strategy.take_profit_pct / 100)
                 if high >= target:
@@ -221,6 +229,7 @@ def backtest(
                 eur -= spend
                 open_trade = Trade(entry_time=int(ts), entry_price=close, amount=coin)
                 trades.append(open_trade)
+                peak_price = close
 
         equity = eur + coin * close
         peak = max(peak, equity)

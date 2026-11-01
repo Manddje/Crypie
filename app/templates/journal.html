@@ -164,7 +164,7 @@
             {% if e.exit_decision and e.exit_decision.source %}<dt>Besloten door</dt><dd>{{ e.exit_decision.source|nl }}</dd>{% endif %}
             {% if e.exit_decision and e.exit_decision.news_label %}<dt>Nieuws</dt><dd><span class="pill {{ e.exit_decision.news_label|sentiment_pill }}">{{ e.exit_decision.news_label }}</span></dd>{% endif %}
           </dl>
-          {% if e.exit_reasoning and p.close_reason not in ("stop_loss", "take_profit", "reset") %}<p class="why"><span class="muted">Claude destijds:</span> {{ e.exit_reasoning }}</p>{% endif %}
+          {% if e.exit_reasoning and p.close_reason not in ("stop_loss", "trailing_stop", "take_profit", "reset") %}<p class="why"><span class="muted">Claude destijds:</span> {{ e.exit_reasoning }}</p>{% endif %}
           {% endif %}
         </div>
       </div>

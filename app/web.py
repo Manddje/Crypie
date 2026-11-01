@@ -40,6 +40,7 @@ LABELS_NL: dict[str, str] = {
     "open": "Open",
     "closed": "Gesloten",
     "stop_loss": "Stop-loss",
+    "trailing_stop": "Trailing stop",
     "take_profit": "Take-profit",
     "signal": "Verkoopsignaal",
     "news_exit": "Nieuws",

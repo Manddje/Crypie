@@ -187,3 +187,38 @@ def test_drawdown_indicator_measures_discount_to_rolling_high():
     )
     series = compute_series(s, make_candles([100, 110, 99, 88]))
     assert signal_at(s, series, 3) == "buy" and signal_at(s, series, 1) == "sell"
+
+
+def test_trailing_stop_follows_the_high_and_reports_its_own_reason():
+    # Entry on the crossover at 12, rally to 20, then a dip to 18.4 (8% off the high).
+    closes = [10, 9, 8, 7, 6, 9, 12, 15, 18, 20, 19.5, 18.4, 18, 18]
+    s = crossover_strategy(stop_loss_pct=10, trailing_stop_pct=5)
+    result = backtest(s, make_candles(closes), fee_pct=0)
+    trade = result.closed_trades[0]
+    assert trade.reason == "trailing_stop"
+    # The peak is the high of the 20-candle (20 * 1.01); the stop sits 5% under it.
+    assert trade.exit_price == pytest.approx(20 * 1.01 * 0.95)
+    assert trade.exit_price > trade.entry_price  # a profit, where the plain stop-loss gave none
+
+
+def test_trailing_stop_waits_for_the_start_threshold():
+    closes = [10, 9, 8, 7, 6, 9, 12, 12.2, 11.7, 11.6, 11.6, 11.6]
+    # Without a start threshold a 3% trail from the 12.2 high (12.32) fires at 11.95.
+    s = crossover_strategy(stop_loss_pct=10, trailing_stop_pct=3)
+    assert backtest(s, make_candles(closes), fee_pct=0).closed_trades[0].reason == "trailing_stop"
+    # With trailing only after +5% the small rally never arms it: no trailing exit, the trade
+    # ends on the later crossover signal instead.
+    s = crossover_strategy(stop_loss_pct=10, trailing_stop_pct=3, trailing_start_pct=5)
+    result = backtest(s, make_candles(closes), fee_pct=0)
+    assert [t.reason for t in result.trades] == ["signal"]
+
+
+def test_initial_and_trailing_stop_helpers():
+    s = crossover_strategy(stop_loss_pct=10, trailing_stop_pct=3)
+    assert s.initial_stop(100) == pytest.approx(97)  # the tighter of the two, trailing is live
+    s = crossover_strategy(stop_loss_pct=10, trailing_stop_pct=3, trailing_start_pct=2)
+    assert s.initial_stop(100) == pytest.approx(90)  # trailing not armed yet
+    assert s.trailing_stop(101, 100) is None and s.trailing_stop(102, 100) == pytest.approx(98.94)
+    assert crossover_strategy().initial_stop(100) is None
+    assert DEFAULT_STRATEGY.trailing_stop_pct == 3 and DEFAULT_STRATEGY.trailing_start_pct == 2
+    assert [c.op for c in DEFAULT_STRATEGY.sell] == [">", "falling"]

@@ -128,6 +128,7 @@
       <div class="chips" style="margin-top: 12px">
         {% for ind in strategy.indicators %}<span class="chip">{{ ind|indicator_nl }}</span>{% endfor %}
         {% if strategy.stop_loss_pct %}<span class="chip">stop-loss {{ strategy.stop_loss_pct|num(0) }}%</span>{% endif %}
+        {% if strategy.trailing_stop_pct %}<span class="chip">trailing stop {{ strategy.trailing_stop_pct|num(0) }}%</span>{% endif %}
         {% if strategy.take_profit_pct %}<span class="chip">take-profit {{ strategy.take_profit_pct|num(0) }}%</span>{% endif %}
       </div>
     </section>

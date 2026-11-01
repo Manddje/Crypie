@@ -118,6 +118,13 @@ async def test_strategy_roundtrip_and_backtest(api):
     r = await api.get("/api/claude/usage")
     assert r.json()["limit_usd"] == 100.0 and r.json()["spent_usd"] == 0
 
+    r = await api.post(
+        "/strategy", data={"action": "reset", "strategy_json": ""}, follow_redirects=True
+    )
+    assert r.status_code == 200 and "hersteld en actief" in r.text
+    assert "trailing stop" in r.text.lower()
+    assert (await api.get("/api/strategy")).json()["name"] == "RSI dip in opwaartse trend"
+
 
 @respx.mock
 async def test_news_endpoints(api):
@@ -230,8 +237,9 @@ async def test_trading_endpoints(api):
     r = await api.get("/trading")
     assert "Lange-termijntrend" in r.text and "opwaarts" in r.text and "+33,3%" in r.text
     assert "Laatste cyclus per markt" in r.text and "Alle cyclussen" in r.text
-    # Flat candles push RSI to 100: a sell signal without a position, explained per condition.
-    assert "Verkoopsignaal: rsi14 hoger dan 70 ✓" in r.text and "niets te verkopen" in r.text
+    # Flat candles push RSI to 100 but it does not fall, so no sell signal: hold, explained per
+    # condition.
+    assert "Geen koopsignaal" in r.text and "rsi14 lager dan 35 ✗" in r.text
     assert "laatste 7 dagen" in r.text
 
 
