@@ -40,6 +40,7 @@ from app.news.service import (
 )
 from app.news.sources import NewsFetcher
 from app.settings_store import SettingsError
+from app.strategy.describe import levels_summary
 from app.strategy.engine import backtest, latest_snapshot
 from app.strategy.model import DEFAULT_STRATEGY, Strategy
 from app.strategy.store import load_strategy, save_strategy
@@ -966,6 +967,8 @@ async def trading_page(
 ):
     settings: Settings = request.app.state.settings
     evaluations = session.scalars(select(Evaluation).order_by(Evaluation.id.desc()).limit(5)).all()
+    strategy = load_strategy(session)
+    last_cycle = latest_decisions(session, engine.mode, list(engine.markets))
     return templates.TemplateResponse(
         request,
         "trading.html",
@@ -977,7 +980,8 @@ async def trading_page(
             "decisions": recent_decisions(
                 session, engine.mode, limit=5000, days=settings.decision_history_days
             ),
-            "last_cycle": latest_decisions(session, engine.mode, list(engine.markets)),
+            "last_cycle": last_cycle,
+            "levels": {d.id: levels_summary(strategy, d.indicator_values()) for d in last_cycle},
             "evaluations": [_evaluation_dict(e) for e in evaluations],
             "error": None,
         },

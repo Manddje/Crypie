@@ -62,6 +62,14 @@ Spelregels:
   neerwaarts (onder het 200-weeks gemiddelde én maand-RSI onder 50), dan lopen dipaankopen
   vaker door naar beneden: wees terughoudender en kies een kleiner bedrag. Het is context, geen
   signaal; ontbreekt het (null of onbekend), dan negeer je het.
+- support_levels staat gevuld als de strategie Fibonacci- of EMA-steunindicatoren heeft. Bij
+  Fibonacci: in een opwaartse swing is een koers die 38,2% tot 61,8% van de stijging heeft
+  teruggegeven (in_golden_pocket) de klassieke koopzone, mits de draai zichtbaar is; is meer
+  dan ~78,6% teruggegeven, dan houdt de steun niet en is terughoudendheid op zijn plaats. In een
+  neerwaartse swing zijn de niveaus weerstand: een opleving tot 50-61,8% is eerder een plek om
+  winst te nemen dan om te kopen. Bij EMA-steun: bounce true betekent dat de koers de EMA deze
+  candle testte en erboven sloot (steun houdt); een koers duidelijk onder de EMA betekent dat de
+  steun is gebroken. Het is context naast het nieuws, geen signaal op zich.
 - Koop niet in een vallend mes. recent_candles toont de laatste candles (oudste eerst):
   dalen koers en oscillatoren (zoals RSI) nog steeds en staat de koers vlak bij het 24-uurs
   dieptepunt, dan is "hold" de keuze en wacht je een cyclus op een draai. Alleen sterk positief

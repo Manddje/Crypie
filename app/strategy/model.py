@@ -88,10 +88,49 @@ class DrawdownSpec(BaseModel):
     period: int = Field(default=168, ge=2, le=2000)
 
 
+class FibonacciSpec(BaseModel):
+    """Fibonacci retracement of the latest swing within ``period`` candles.
+
+    Exposes ``<id>`` (percent of the swing retraced: 38.2 / 50 / 61.8 are the classic levels,
+    100 = back at the swing's start), ``<id>_up`` (1 = upward swing, the price pulls back to
+    support; 0 = downward swing, the price bounces to resistance), ``<id>_high`` and
+    ``<id>_low`` (the swing), ``<id>_382``, ``<id>_500`` and ``<id>_618`` (level prices) and
+    ``<id>_near`` (percent distance to the nearest level).
+    """
+
+    type: Literal["fibonacci"]
+    id: IdStr
+    period: int = Field(default=168, ge=3, le=2000)
+
+
+class EmaSupportSpec(BaseModel):
+    """An EMA as dynamic support.
+
+    Exposes ``<id>`` (percent the close is above the EMA; negative = below), ``<id>_ema`` (the
+    EMA) and ``<id>_bounce`` (1 when this candle's low came within ``tolerance_pct`` of the
+    EMA and the close held above it, i.e. the support was tested and held).
+    """
+
+    type: Literal["ema_support"]
+    id: IdStr
+    period: int = Field(default=50, ge=2, le=500)
+    tolerance_pct: float = Field(default=1.0, gt=0, le=20)
+
+
 IndicatorSpec = Annotated[
-    SmaSpec | EmaSpec | RsiSpec | MacdSpec | BollingerSpec | DrawdownSpec,
+    SmaSpec
+    | EmaSpec
+    | RsiSpec
+    | MacdSpec
+    | BollingerSpec
+    | DrawdownSpec
+    | FibonacciSpec
+    | EmaSupportSpec,
     Field(discriminator="type"),
 ]
+
+FIB_SUFFIXES = ("up", "high", "low", "382", "500", "618", "near")
+EMA_SUPPORT_SUFFIXES = ("ema", "bounce")
 
 PRICE_FIELDS = ("open", "high", "low", "close", "volume")
 
@@ -169,6 +208,10 @@ class Strategy(BaseModel):
                 names.update({ind.id, f"{ind.id}_signal", f"{ind.id}_hist"})
             elif ind.type == "bollinger":
                 names.update({f"{ind.id}_upper", f"{ind.id}_middle", f"{ind.id}_lower"})
+            elif ind.type == "fibonacci":
+                names.update({ind.id, *(f"{ind.id}_{sfx}" for sfx in FIB_SUFFIXES)})
+            elif ind.type == "ema_support":
+                names.update({ind.id, *(f"{ind.id}_{sfx}" for sfx in EMA_SUPPORT_SUFFIXES)})
             else:
                 names.add(ind.id)
         return names

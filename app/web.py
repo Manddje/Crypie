@@ -177,6 +177,10 @@ def indicator_nl(ind: IndicatorSpec) -> str:
         return f"Bollinger {ind.period} (σ {ind.std_dev:g})"
     if ind.type == "drawdown":
         return f"% onder hoogste koers van {ind.period} candles"
+    if ind.type == "fibonacci":
+        return f"Fibonacci-retracement van de swing in {ind.period} candles"
+    if ind.type == "ema_support":
+        return f"EMA {ind.period} als steun (±{ind.tolerance_pct:g}%)"
     return f"{ind.type.upper()} {ind.period}"
 
 

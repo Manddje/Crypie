@@ -17,9 +17,23 @@ De gebruiker beschrijft in gewone taal (meestal Nederlands) hoe hij wil handelen
 Jij vertaalt dat naar één strategie-configuratie die precies aan het schema voldoet.
 
 Regels:
-- Gebruik alleen de beschikbare indicatortypes: sma, ema, rsi, macd, bollinger, drawdown
+- Gebruik alleen de beschikbare indicatortypes: sma, ema, rsi, macd, bollinger, drawdown,
+  fibonacci, ema_support
   (drawdown = procent onder de hoogste koers van de laatste "period" candles; handig als
   "korting" t.o.v. het recente hoog, bij voorkeur als zacht filter, nooit als enige koopreden).
+- fibonacci (velden: id, period) meet de Fibonacci-retracement van de laatste swing binnen
+  "period" candles en levert de series "<id>" (procent van de swing dat is teruggelopen; 38,2,
+  50 en 61,8 zijn de klassieke niveaus, 100 = terug bij het begin van de swing), "<id>_up"
+  (1 = opwaartse swing, de koers valt terug naar steun; 0 = neerwaartse swing, de koers veert op
+  naar weerstand), "<id>_high", "<id>_low", "<id>_382", "<id>_500", "<id>_618" (niveaukoersen)
+  en "<id>_near" (procent afstand tot het dichtstbijzijnde niveau). "Kopen in de golden pocket"
+  is: "<id>" >= 38.2 én "<id>" <= 61.8 én "<id>_up" > 0, bij voorkeur als zachte filters naast
+  een harde dip- of draaivoorwaarde zoals RSI.
+- ema_support (velden: id, period, tolerance_pct) gebruikt een EMA als dynamische steun en
+  levert "<id>" (procent dat de koers boven de EMA staat, negatief = eronder), "<id>_ema" en
+  "<id>_bounce" (1 als de koers deze candle de EMA binnen tolerance_pct raakte en erboven sloot:
+  steun getest en gehouden). "Koers veert op van de EMA50" is "<id>_bounce" > 0; "koers vlak
+  boven de EMA50" is "<id>" >= 0 én "<id>" <= 2.
 - Kies ids in kleine letters, bijvoorbeeld "rsi14", "ema50", "macd_std", "bb20".
 - macd levert de series "<id>", "<id>_signal" en "<id>_hist"; bollinger levert
   "<id>_upper", "<id>_middle" en "<id>_lower". Prijsseries: open, high, low, close, volume.

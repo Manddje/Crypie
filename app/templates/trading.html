@@ -140,6 +140,9 @@
           <div class="nowrap"><span class="pill {{ d.action|action_pill }}">{{ d.action|nl }}</span>{% if d.executed %} <span class="pill pill-blue">uitgevoerd</span>{% endif %}</div>
         </div>
         {{ ui.checks(d) }}
+        {% for lv in levels.get(d.id, []) %}
+        <div class="small muted" style="margin-top: 6px"><span class="pill {{ 'pill-green' if (lv.in_golden_pocket or lv.bounce) else '' }}">{{ "Fibonacci" if lv.type == "fibonacci" else "EMA-steun" }}</span> {{ lv.text_nl }}</div>
+        {% endfor %}
         <div class="small" style="margin-top: 8px">
           <span class="muted">Nieuws:</span>
           {% if d.news_label %}<span class="pill {{ d.news_label|sentiment_pill }}">{{ d.news_label }}</span>{% if d.news_score is not none and d.news_label != "geen nieuws" %} <span class="muted">score {{ d.news_score|num(2) }}</span>{% endif %}{% else %}<span class="muted">–</span>{% endif %}

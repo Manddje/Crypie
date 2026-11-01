@@ -222,3 +222,125 @@ def test_initial_and_trailing_stop_helpers():
     assert crossover_strategy().initial_stop(100) is None
     assert DEFAULT_STRATEGY.trailing_stop_pct == 3 and DEFAULT_STRATEGY.trailing_start_pct == 2
     assert [c.op for c in DEFAULT_STRATEGY.sell] == [">", "falling"]
+
+
+def _ohlc(rows):
+    """Candles from (open, high, low, close) tuples, hourly."""
+    return [
+        [1_700_000_000_000 + i * 3_600_000, o, h, lo, c, 1.0]
+        for i, (o, h, lo, c) in enumerate(rows)
+    ]
+
+
+def test_fibonacci_levels_of_an_upward_swing():
+    from app.indicators.core import fibonacci
+
+    # Low 100, rally to high 200, then a pullback that closes at 150 (a 50% retracement).
+    rows = [(100, 101, 100, 100), (120, 160, 110, 150), (150, 200, 150, 190), (190, 192, 149, 150)]
+    fib = fibonacci(*[[r[k] for r in rows] for k in range(4)], period=4)
+    assert fib["up"][3] == 1.0 and fib["high"][3] == 200 and fib["low"][3] == 100
+    assert fib[""][3] == pytest.approx(50)
+    assert fib["382"][3] == pytest.approx(161.8)
+    assert fib["500"][3] == pytest.approx(150)
+    assert fib["618"][3] == pytest.approx(138.2)
+    assert fib["near"][3] == pytest.approx(0)
+    assert fib[""][:3] == [None, None, None]  # window not full yet
+
+
+def test_fibonacci_downward_swing_measures_the_bounce_from_the_low():
+    from app.indicators.core import fibonacci
+
+    # High 200 first, then a slide to 100 and a bounce that closes at 138.2 (38.2% back up).
+    rows = [
+        (200, 200, 190, 195),
+        (190, 190, 150, 155),
+        (150, 155, 100, 105),
+        (105, 140, 104, 138.2),
+    ]
+    fib = fibonacci(*[[r[k] for r in rows] for k in range(4)], period=4)
+    assert fib["up"][3] == 0.0
+    assert fib[""][3] == pytest.approx(38.2)
+    assert fib["382"][3] == pytest.approx(138.2)  # resistance, measured up from the low
+    assert fib["618"][3] == pytest.approx(161.8)
+
+
+def test_fibonacci_strategy_filters_the_golden_pocket():
+    rows = [(100, 101, 100, 100), (120, 160, 110, 150), (150, 200, 150, 190), (190, 192, 149, 150)]
+    s = Strategy.model_validate(
+        {
+            **crossover_strategy().model_dump(),
+            "indicators": [{"type": "fibonacci", "id": "fib", "period": 4}],
+            "buy": [
+                {"left": "fib", "op": ">=", "right": 38.2},
+                {"left": "fib", "op": "<=", "right": 61.8},
+                {"left": "fib_up", "op": ">", "right": 0},
+            ],
+            "sell": [{"left": "fib", "op": "<", "right": 5}],
+        }
+    )
+    assert {"fib", "fib_up", "fib_382", "fib_500", "fib_618", "fib_near"} <= s.series_names()
+    series = compute_series(s, _ohlc(rows))
+    assert signal_at(s, series, 3) == "buy"
+    checks = explain_signal(s, series, 3)
+    assert all(c.ok for c in checks["buy"])
+
+
+def test_ema_support_reports_distance_and_a_held_test():
+    from app.indicators.core import ema_support
+
+    closes = [100.0] * 10
+    highs = [101.0] * 10
+    lows = [99.5] * 10
+    lows[-1] = 99.2  # wick down through the EMA (~100.25), close back above it at 100.5
+    closes[-1] = 100.5
+    sup = ema_support(highs, lows, closes, period=3, tolerance_pct=1.0)
+    assert sup["ema"][-1] == pytest.approx(100.25)
+    assert sup[""][-1] == pytest.approx(100.5 / 100.25 * 100 - 100, abs=0.01)
+    assert sup["bounce"][-1] == 1.0
+    # A candle that closes far below the EMA did not hold the support.
+    closes2 = [100.0] * 9 + [95.0]
+    sup2 = ema_support(highs, [99.5] * 9 + [94.0], closes2, period=3, tolerance_pct=1.0)
+    assert sup2["bounce"][-1] == 0.0 and sup2[""][-1] < -2
+
+
+def test_ema_support_strategy_series_and_signal():
+    s = Strategy.model_validate(
+        {
+            **crossover_strategy().model_dump(),
+            "indicators": [{"type": "ema_support", "id": "e3", "period": 3, "tolerance_pct": 1}],
+            "buy": [{"left": "e3_bounce", "op": ">", "right": 0}],
+            "sell": [{"left": "e3", "op": "<", "right": -2}],
+        }
+    )
+    assert {"e3", "e3_ema", "e3_bounce"} <= s.series_names()
+    rows = [(100, 101, 99.5, 100)] * 5 + [(100, 101, 99.2, 100.5)] + [(100, 100, 94, 95)]
+    series = compute_series(s, _ohlc(rows))
+    assert signal_at(s, series, 5) == "buy"
+    assert signal_at(s, series, 6) == "sell"
+
+
+def test_levels_summary_describes_fibonacci_and_ema_support_in_dutch():
+    from app.strategy.describe import levels_summary
+
+    s = Strategy.model_validate(
+        {
+            **crossover_strategy().model_dump(),
+            "indicators": [
+                {"type": "fibonacci", "id": "fib", "period": 4},
+                {"type": "ema_support", "id": "e3", "period": 3},
+            ],
+            "buy": [{"left": "fib", "op": ">=", "right": 38.2}],
+            "sell": [{"left": "e3", "op": "<", "right": -3}],
+        }
+    )
+    rows = [(100, 101, 100, 100), (120, 160, 110, 150), (150, 200, 150, 190), (190, 192, 149, 150)]
+    series = compute_series(s, _ohlc(rows))
+    values = {k: v[3] for k, v in series.items()}
+    levels = levels_summary(s, values)
+    assert [lv["type"] for lv in levels] == ["fibonacci", "ema_support"]
+    fib = levels[0]
+    assert fib["in_golden_pocket"] is True and fib["upward_swing"] is True
+    assert "golden pocket" in fib["text_nl"] and "steunniveaus" in fib["text_nl"]
+    assert "EMA3" in levels[1]["text_nl"]
+    # Missing series (strategy changed since the journal entry) are skipped, not an error.
+    assert levels_summary(s, {"fib": 50.0}) == []
