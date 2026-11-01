@@ -54,6 +54,50 @@
     </div>
   </section>
 
+  <section class="card chart-card" id="price-chart-card" data-markets='{{ settings.markets|tojson }}'>
+    <div class="card-header">
+      <h2>Koers en acties</h2>
+      <div class="chart-controls">
+        <div class="segmented" data-role="market" aria-label="Markt">
+          {% for m in settings.markets %}<button type="button" data-market="{{ m }}" {% if loop.first %}class="active"{% endif %}>{{ m.split("-")[0] }}</button>{% endfor %}
+        </div>
+        <div class="segmented" data-role="period" aria-label="Periode">
+          {% for p in chart_periods %}<button type="button" data-period="{{ p }}" {% if p == "7d" %}class="active"{% endif %}>{{ p[:-1] }} {{ "dag" if p == "1d" else "dagen" }}</button>{% endfor %}
+        </div>
+      </div>
+    </div>
+    <p class="card-desc">De koers van Bitvavo met daarop wat de bot deed: elke koop en verkoop, en de momenten waarop Claude om advies is gevraagd. Beweeg over de grafiek voor details.</p>
+    <div class="chart-legend" aria-hidden="true">
+      <span class="key"><span class="swatch up"></span>Koop</span>
+      <span class="key"><span class="swatch down"></span>Verkoop, stop-loss of take-profit</span>
+      <span class="key"><span class="swatch circle"></span>Claude-advies zonder order</span>
+      <span class="key"><span class="swatch square"></span>Geblokkeerd door een regel</span>
+      <label class="key toggle"><input type="checkbox" id="price-chart-advice" checked> Adviezen tonen</label>
+    </div>
+    <div class="chart-wrap">
+      <div class="chart tall" id="price-chart" role="img" aria-label="Koersgrafiek met acties van de bot"></div>
+      <div class="chart-tooltip" id="price-chart-tooltip" hidden></div>
+    </div>
+    <p class="chart-status small muted" id="price-chart-status">Grafiek wordt geladen…</p>
+    <details class="advanced chart-table">
+      <summary>Acties in deze periode als lijst</summary>
+      <div id="price-chart-actions"></div>
+    </details>
+  </section>
+
+  <section class="card chart-card" id="portfolio-chart-card">
+    <div class="card-header">
+      <h2>Portefeuillewaarde</h2>
+      <span class="more muted small" id="portfolio-chart-range">laatste 7 dagen</span>
+    </div>
+    <p class="card-desc">Euro plus crypto tegen de koers van dat moment, teruggerekend uit het huidige saldo en de orders{% if settings.trading_mode == "paper" %}. De stippellijn is het startbedrag van {{ settings.paper_start_eur|eur(0) }}{% endif %}.</p>
+    <div class="chart-wrap">
+      <div class="chart short" id="portfolio-chart" role="img" aria-label="Waarde van de portefeuille over tijd"></div>
+      <div class="chart-tooltip" id="portfolio-chart-tooltip" hidden></div>
+    </div>
+    <p class="chart-status small muted" id="portfolio-chart-status">Grafiek wordt geladen…</p>
+  </section>
+
   <div class="grid-2">
     <section class="card">
       <div class="card-header"><h2>Koersen</h2><span class="more muted small">Bitvavo, nu</span></div>
@@ -205,3 +249,7 @@
 </div>
 {% endblock %}
 {% block footer %}{% if rate_limit is not none %}<span>Bitvavo-limiet resterend: {{ rate_limit }}</span>{% endif %}{% endblock %}
+{% block scripts %}
+<script src="/static/vendor/lightweight-charts.standalone.production.js?v=5.2.1"></script>
+<script src="/static/chart.js?v={{ asset_version }}"></script>
+{% endblock %}
