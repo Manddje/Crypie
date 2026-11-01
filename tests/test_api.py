@@ -128,18 +128,29 @@ async def test_strategy_roundtrip_and_backtest(api):
 
 @respx.mock
 async def test_news_endpoints(api):
+    from datetime import UTC, datetime, timedelta
+    from email.utils import format_datetime
     from pathlib import Path
 
     from app.news.sources import NewsFetcher
 
-    fixture = Path(__file__).parent / "fixtures" / "feed.xml"
+    # The fixture carries a fixed publication date; the API filters on "last 24 hours" and the
+    # store drops anything older than NEWS_MAX_AGE_HOURS, so stamp the hack item with a fresh
+    # date on every run instead of letting the test expire with the calendar.
+    fresh = format_datetime(datetime.now(UTC) - timedelta(hours=1))
+    feed = (
+        (Path(__file__).parent / "fixtures" / "feed.xml")
+        .read_text()
+        .replace("Sat, 31 Oct 2026 09:58:50 +0000", fresh)
+        .encode()
+    )
     # Test settings use the default feeds; stub them all with one fixture.
     for url in app.state.settings.news_rss_feeds:
-        respx.get(url).mock(return_value=Response(200, content=fixture.read_bytes()))
+        respx.get(url).mock(return_value=Response(200, content=feed))
     respx.get(NewsFetcher.GDELT_URL).mock(return_value=Response(429))
     respx.get(url__startswith="https://cryptocurrency.cv/").mock(return_value=Response(503))
     respx.get(url__startswith="https://news.google.com/").mock(
-        return_value=Response(200, content=fixture.read_bytes())
+        return_value=Response(200, content=feed)
     )
     respx.get(NewsFetcher.FEAR_GREED_URL).mock(
         return_value=Response(200, json={"data": [{"value": "30", "value_classification": "Fear"}]})
