@@ -29,33 +29,56 @@ from __future__ import annotations
 import re
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 INTERVALS = ("1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d")
 Operator = Literal["<", "<=", ">", ">=", "crosses_above", "crosses_below", "rising", "falling"]
 LOOKBACK_OPS = ("rising", "falling")  # right = number of candles to look back
 IdStr = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")]
+# A threshold must be a real, finite number: NaN or infinity cannot be stored as JSON (it
+# becomes null) and makes every comparison meaningless.
+Threshold = Annotated[float, Field(allow_inf_nan=False, ge=-1e12, le=1e12)]
+
+# Bitvavo returns at most 1440 candles per request, and that is also the longest backtest.
+# The warm-up (candles before every indicator and look-back has a value) must leave room in
+# that window, both live and in the backtest.
+MAX_CANDLES = 1440
+MAX_WARMUP = 1000
+LIVE_CANDLES = 300  # candles the live cycle fetches at least
+MAX_PERIOD = MAX_WARMUP
+DESCRIPTION_MAX = 4000
 
 
-class SmaSpec(BaseModel):
+class _Spec(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    def warmup(self) -> int:
+        """Candles needed before this indicator has its first value."""
+        return int(getattr(self, "period", 0))
+
+
+class SmaSpec(_Spec):
     type: Literal["sma"]
     id: IdStr
-    period: int = Field(ge=2, le=500)
+    period: int = Field(ge=2, le=MAX_PERIOD)
 
 
-class EmaSpec(BaseModel):
+class EmaSpec(_Spec):
     type: Literal["ema"]
     id: IdStr
-    period: int = Field(ge=2, le=500)
+    period: int = Field(ge=2, le=MAX_PERIOD)
 
 
-class RsiSpec(BaseModel):
+class RsiSpec(_Spec):
     type: Literal["rsi"]
     id: IdStr
     period: int = Field(default=14, ge=2, le=200)
 
+    def warmup(self) -> int:
+        return self.period + 1
 
-class MacdSpec(BaseModel):
+
+class MacdSpec(_Spec):
     """Exposes three series: ``<id>``, ``<id>_signal`` and ``<id>_hist``."""
 
     type: Literal["macd"]
@@ -70,25 +93,28 @@ class MacdSpec(BaseModel):
             raise ValueError("macd fast period must be smaller than slow period")
         return self
 
+    def warmup(self) -> int:
+        return self.slow + self.signal
 
-class BollingerSpec(BaseModel):
+
+class BollingerSpec(_Spec):
     """Exposes three series: ``<id>_upper``, ``<id>_middle`` and ``<id>_lower``."""
 
     type: Literal["bollinger"]
     id: IdStr
-    period: int = Field(default=20, ge=2, le=500)
+    period: int = Field(default=20, ge=2, le=MAX_PERIOD)
     std_dev: float = Field(default=2.0, gt=0, le=5)
 
 
-class DrawdownSpec(BaseModel):
+class DrawdownSpec(_Spec):
     """Percent below the highest close of the last ``period`` candles (168 = 7 days on 1h)."""
 
     type: Literal["drawdown"]
     id: IdStr
-    period: int = Field(default=168, ge=2, le=2000)
+    period: int = Field(default=168, ge=2, le=MAX_PERIOD)
 
 
-class FibonacciSpec(BaseModel):
+class FibonacciSpec(_Spec):
     """Fibonacci retracement of the latest swing within ``period`` candles.
 
     Exposes ``<id>`` (percent of the swing retraced: 38.2 / 50 / 61.8 are the classic levels,
@@ -100,10 +126,10 @@ class FibonacciSpec(BaseModel):
 
     type: Literal["fibonacci"]
     id: IdStr
-    period: int = Field(default=168, ge=3, le=2000)
+    period: int = Field(default=168, ge=3, le=MAX_PERIOD)
 
 
-class EmaSupportSpec(BaseModel):
+class EmaSupportSpec(_Spec):
     """An EMA as dynamic support.
 
     Exposes ``<id>`` (percent the close is above the EMA; negative = below), ``<id>_ema`` (the
@@ -113,7 +139,7 @@ class EmaSupportSpec(BaseModel):
 
     type: Literal["ema_support"]
     id: IdStr
-    period: int = Field(default=50, ge=2, le=500)
+    period: int = Field(default=50, ge=2, le=MAX_PERIOD)
     tolerance_pct: float = Field(default=1.0, gt=0, le=20)
 
 
@@ -146,9 +172,11 @@ class Condition(BaseModel):
     per side must be hard; if all are soft they are treated as hard.
     """
 
+    model_config = ConfigDict(allow_inf_nan=False)
+
     left: str
     op: Operator
-    right: str | float
+    right: str | Threshold
     soft: bool = False
 
     @model_validator(mode="after")
@@ -156,8 +184,16 @@ class Condition(BaseModel):
         if self.op in LOOKBACK_OPS:
             if isinstance(self.right, str) or self.right < 1 or self.right != int(self.right):
                 raise ValueError(f"{self.op} needs a whole number of candles (1 or more) as right")
+            if self.right > MAX_WARMUP:
+                raise ValueError(f"{self.op} can look back at most {MAX_WARMUP} candles")
             self.right = float(int(self.right))
         return self
+
+    def lookback(self) -> int:
+        """Earlier candles this condition compares with (on top of the indicators' warm-up)."""
+        if self.op in LOOKBACK_OPS:
+            return int(self.right)
+        return 1 if self.op in ("crosses_above", "crosses_below") else 0
 
     @field_validator("left")
     @classmethod
@@ -168,8 +204,10 @@ class Condition(BaseModel):
 
 
 class Strategy(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
     name: str = Field(min_length=1, max_length=80)
-    description: str = ""
+    description: str = Field(default="", max_length=DESCRIPTION_MAX)
     market: str = Field(pattern=r"^[A-Z0-9]{2,10}-EUR$")
     interval: Literal[INTERVALS] = "1h"  # type: ignore[valid-type]
     indicators: list[IndicatorSpec] = Field(min_length=1, max_length=10)
@@ -201,6 +239,17 @@ class Strategy(BaseModel):
             return None
         return high_price * (1 - self.trailing_stop_pct / 100)
 
+    def warmup(self) -> int:
+        """Candles before every indicator and look-back of this strategy has a value."""
+        indicators = max((ind.warmup() for ind in self.indicators), default=0)
+        lookback = max((c.lookback() for c in self.buy + self.sell), default=0)
+        return indicators + lookback
+
+    def candles_needed(self) -> int:
+        """How many candles the live cycle fetches: enough for the warm-up plus some history,
+        within what Bitvavo returns in one request."""
+        return min(MAX_CANDLES, max(LIVE_CANDLES, self.warmup() + 50))
+
     def series_names(self) -> set[str]:
         names = set(PRICE_FIELDS)
         for ind in self.indicators:
@@ -229,7 +278,137 @@ class Strategy(BaseModel):
                     raise ValueError(
                         f"unknown series {side!r}; available: {', '.join(sorted(names))}"
                     )
+        if self.warmup() > MAX_WARMUP:
+            raise ValueError(
+                f"indicators and look-backs need {self.warmup()} candles of warm-up; at most "
+                f"{MAX_WARMUP} fit in the {MAX_CANDLES} candles Bitvavo returns"
+            )
         return self
+
+
+# -- checks before a strategy becomes active ---------------------------------------------
+#
+# These are not model validators on purpose: a strategy stored before they existed must keep
+# loading (the trading cycle depends on it). They run where a strategy is saved or applied:
+# the API, the strategy form and applying an evaluation's proposal.
+
+INF = float("inf")
+# Range every value of a series is known to stay in: (low, low_exclusive, high, high_exclusive).
+_PRICE_RANGE = (0.0, True, INF, False)  # prices are always above zero
+_PCT_RANGE = (0.0, False, 100.0, False)
+_FLAG_RANGE = (0.0, False, 1.0, False)
+_SERIES_RANGES: dict[str, tuple[float, bool, float, bool]] = {
+    "open": _PRICE_RANGE,
+    "high": _PRICE_RANGE,
+    "low": _PRICE_RANGE,
+    "close": _PRICE_RANGE,
+    "volume": (0.0, False, INF, False),
+}
+# Pairs (a, b) with a >= b on every candle.
+_PRICE_ORDER = {
+    ("high", "low"),
+    ("high", "open"),
+    ("high", "close"),
+    ("open", "low"),
+    ("close", "low"),
+}
+
+
+def _series_info(
+    strategy: Strategy,
+) -> tuple[dict[str, tuple[float, bool, float, bool]], set[tuple[str, str]]]:
+    ranges = dict(_SERIES_RANGES)
+    order: set[tuple[str, str]] = set(_PRICE_ORDER)
+    for ind in strategy.indicators:
+        i = ind.id
+        if ind.type in ("sma", "ema"):
+            ranges[i] = _PRICE_RANGE
+        elif ind.type in ("rsi", "drawdown"):
+            ranges[i] = _PCT_RANGE
+        elif ind.type == "bollinger":
+            ranges[f"{i}_middle"] = _PRICE_RANGE
+            order |= {(f"{i}_upper", f"{i}_middle"), (f"{i}_middle", f"{i}_lower")}
+            order.add((f"{i}_upper", f"{i}_lower"))
+        elif ind.type == "fibonacci":
+            ranges[i] = _PCT_RANGE
+            ranges[f"{i}_up"] = _FLAG_RANGE
+            ranges[f"{i}_near"] = (0.0, False, INF, False)
+            for lv in ("high", "low", "382", "500", "618"):
+                ranges[f"{i}_{lv}"] = _PRICE_RANGE
+            for lv in ("382", "500", "618"):
+                order |= {(f"{i}_high", f"{i}_{lv}"), (f"{i}_{lv}", f"{i}_low")}
+            order.add((f"{i}_high", f"{i}_low"))
+        elif ind.type == "ema_support":
+            ranges[i] = (-100.0, True, INF, False)
+            ranges[f"{i}_ema"] = _PRICE_RANGE
+            ranges[f"{i}_bounce"] = _FLAG_RANGE
+    return ranges, order
+
+
+def _always_true(op: str, rng: tuple[float, bool, float, bool], x: float) -> bool:
+    """Whether ``value op x`` holds for every value in the range."""
+    lo, lo_open, hi, hi_open = rng
+    if op == ">":
+        return x < lo or (x == lo and lo_open)
+    if op == ">=":
+        return x <= lo
+    if op == "<":
+        return x > hi or (x == hi and hi_open)
+    if op == "<=":
+        return x >= hi
+    return False
+
+
+def trivial_condition(strategy: Strategy, cond: Condition) -> bool:
+    """A comparison that holds on (practically) every candle, so it filters nothing:
+    ``close > 0``, ``volume >= 0``, ``rsi14 <= 100``, ``high >= low``, ``x >= x``."""
+    if cond.op in LOOKBACK_OPS:
+        return False
+    if isinstance(cond.right, str) and cond.right == cond.left:
+        return True  # a series compared with itself never says anything
+    if cond.op not in ("<", "<=", ">", ">="):
+        return False  # a cross needs movement
+    ranges, order = _series_info(strategy)
+    if isinstance(cond.right, str):
+        if cond.op in (">", ">="):
+            return (cond.left, cond.right) in order
+        return (cond.right, cond.left) in order
+    rng = ranges.get(cond.left)
+    return rng is not None and _always_true(cond.op, rng, float(cond.right))
+
+
+def use_problems(strategy: Strategy) -> list[str]:
+    """Why this strategy may not become the active one (Dutch), or an empty list.
+
+    - It must keep a protective exit: a stop-loss or a trailing stop, so a position never
+      stays open without a stop price.
+    - Its hard buy conditions must filter something. A condition like ``close > 0`` is
+      always true: the backtest (which counts the soft filters as hard) can look harmless
+      while live the buy signal fires every cycle.
+    """
+    problems: list[str] = []
+    if not strategy.stop_loss_pct and not strategy.trailing_stop_pct:
+        problems.append(
+            "de strategie heeft geen stop-loss of trailing stop; zonder bescherming blijft een "
+            "positie open hoe ver de koers ook daalt (stel stop_loss_pct of trailing_stop_pct in)"
+        )
+    hard = [c for c in strategy.buy if not c.soft] or list(strategy.buy)
+    for cond in hard:
+        if trivial_condition(strategy, cond):
+            right = cond.right if isinstance(cond.right, str) else f"{cond.right:g}"
+            problems.append(
+                f"de harde koopvoorwaarde '{cond.left} {cond.op} {right}' is altijd waar en "
+                "filtert dus niets; live zou de bot dan elke cyclus een koopsignaal krijgen"
+            )
+    return problems
+
+
+def check_for_use(strategy: Strategy) -> Strategy:
+    """Raise ValueError (Dutch) when the strategy may not become active; else return it."""
+    problems = use_problems(strategy)
+    if problems:
+        raise ValueError("Strategie niet toegepast: " + "; ".join(problems) + ".")
+    return strategy
 
 
 DEFAULT_STRATEGY = Strategy(
