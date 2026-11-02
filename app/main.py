@@ -8,13 +8,14 @@ import logging
 import re
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Annotated, Literal
+from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Path, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, BeforeValidator, Field, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.datastructures import MutableHeaders
@@ -47,17 +48,23 @@ from app.bitvavo.client import BitvavoClient, BitvavoError, InvalidMarketError
 from app.config import Settings, get_settings
 from app.db import Evaluation, Position, SessionLocal, Setting, get_session, init_db
 from app.news.service import (
+    FEAR_GREED_NL,
     NEWS_RETENTION_DAYS,
+    SENTIMENT_WINDOW_H,
     NewsService,
     annotate_groups,
     clamp_future_items,
     clear_market_mood,
+    count_items,
     count_status,
+    event_key_for,
+    fact_anchor,
     group_items,
     load_market_mood,
     market_sentiment,
     recent_items,
     requeue_items_without_event_key,
+    text_lang,
 )
 from app.news.sources import NewsFetcher
 from app.notify import Notifier, notify_configured
@@ -100,12 +107,16 @@ from app.trading.history import (
     trade_actions,
 )
 from app.trading.journal import (
+    BY_NL as JOURNAL_SOURCES_NL,
+)
+from app.trading.journal import (
     EXIT_NL,
     JournalFilter,
     all_tags,
     journal_entries,
     journal_entry,
     journal_totals,
+    mode_counts,
     save_note,
     unlinked_orders,
 )
@@ -1193,32 +1204,134 @@ async def news_sentiment(
     }
 
 
+# The news page groups every article of the chosen period (no silent cap): 30 news facts per
+# page, counted over the whole period. Only a period with more articles than this is cut, and
+# the page then says so.
+NEWS_PAGE_SIZE = 30
+NEWS_PAGE_MAX_ITEMS = 5000
+NEWS_PERIODS = ((6, "6 uur"), (24, "24 uur"), (48, "48 uur"), (72, "3 dagen"))
+NEWS_DEFAULT_HOURS = SENTIMENT_WINDOW_H  # the window the sentiment and 'telt mee' use
+
+
+def _news_url(hours: int, telt: str = "", page: int = 1, anchor: str = "") -> str:
+    params = {"hours": hours}
+    if telt:
+        params["telt"] = telt
+    if page > 1:
+        params["page"] = page
+    return f"/news?{urlencode(params)}" + (f"#{anchor}" if anchor else "")
+
+
+def _news_groups(session: Session, settings: Settings, hours: int) -> tuple[list, int, bool]:
+    """Every news fact of the last ``hours`` with its status, the number of articles in that
+    window, and whether the window had more articles than the page groups."""
+    items = recent_items(session, hours, NEWS_PAGE_MAX_ITEMS)
+    total = count_items(session, hours)
+    groups = annotate_groups(group_items(items), settings.coins)
+    return groups, total, total > len(items)
+
+
+def _news_refresh_flash(result: dict) -> tuple[str, str]:
+    """One message after 'Nu verversen': what came in and what Claude did with it."""
+    n = int(result.get("inserted") or 0)
+    new = (
+        "geen nieuwe berichten"
+        if n == 0
+        else ("1 nieuw bericht" if n == 1 else f"{n} nieuwe berichten")
+    )
+    if result.get("error"):
+        return "warn", f"Nieuws ververst: {new}. Niet alles lukte; zie de melding op de pagina."
+    if not result.get("assessing"):
+        return "info", f"Nieuws ververst: {new} (niet beoordeeld: geen Claude-sleutel)."
+    assessed = int(result.get("assessed") or 0)
+    text = f"Nieuws ververst: {new}, {assessed} beoordeeld door Claude"
+    pending = int(result.get("pending") or 0)
+    if pending:
+        text += f"; nog {pending} te beoordelen bij de volgende ronde"
+    return "ok", text + "."
+
+
 @app.get("/news", response_class=HTMLResponse)
 async def news_page(
     request: Request,
-    hours: int = Query(24, ge=1, le=NEWS_HOURS_MAX),
+    hours: int = Query(NEWS_DEFAULT_HOURS, ge=1, le=NEWS_HOURS_MAX),
     # "ja" = only facts that weigh in the sentiment, "nee" = only the rest
     telt: str = Query("", max_length=8),
+    page: int = Query(1, ge=1, le=10_000),
     news: NewsService = Depends(get_news),
     session: Session = Depends(get_session),
 ):
     settings: Settings = request.app.state.settings
     counted = {"ja": True, "nee": False}.get(telt)
-    groups = annotate_groups(group_items(recent_items(session, hours, 150)), settings.coins)
+    telt = telt if counted is not None else ""
+    groups, n_articles, truncated = _news_groups(session, settings, hours)
+    n_counted = sum(1 for g in groups if g.status.counts)
+    shown = [g for g in groups if counted is None or g.status.counts == counted]
+    pages = max(1, -(-len(shown) // NEWS_PAGE_SIZE))
+    page = min(page, pages)
+    first = (page - 1) * NEWS_PAGE_SIZE
+    page_groups = shown[first : first + NEWS_PAGE_SIZE]
+
+    # The coin cards link their top facts to the fact in the list of facts that count (48 hours,
+    # the sentiment's own window), on the page where it stands.
+    if hours == SENTIMENT_WINDOW_H and counted is True:
+        counting = shown
+    else:
+        counting = [
+            g
+            for g in (
+                groups
+                if hours == SENTIMENT_WINDOW_H
+                else _news_groups(session, settings, SENTIMENT_WINDOW_H)[0]
+            )
+            if g.status.counts
+        ]
+    where = {g.key: i for i, g in enumerate(counting)}
+    sentiments = [market_sentiment(session, c, SENTIMENT_WINDOW_H) for c in settings.coins]
+    for s in sentiments:
+        for t in s.top:
+            key = event_key_for(t)
+            index = where.get(key)
+            t.list_url = (  # type: ignore[attr-defined]
+                _news_url(SENTIMENT_WINDOW_H, "ja", index // NEWS_PAGE_SIZE + 1, fact_anchor(key))
+                if index is not None
+                else None
+            )
+            t.lang = text_lang(t.title)  # type: ignore[attr-defined]
     return templates.TemplateResponse(
         request,
         "news.html",
         {
             "settings": settings,
             "hours": hours,
-            "telt": telt if counted is not None else "",
-            "groups": [g for g in groups if counted is None or g.status.counts == counted],
-            "n_counted": sum(1 for g in groups if g.status.counts),
+            "periods": NEWS_PERIODS,
+            "telt": telt,
+            "groups": page_groups,
             "n_total": len(groups),
-            "sentiments": [market_sentiment(session, c, 48) for c in settings.coins],
+            "n_counted": n_counted,
+            "n_shown": len(shown),
+            "n_articles": n_articles,
+            "truncated": truncated,
+            "max_items": NEWS_PAGE_MAX_ITEMS,
+            "page": page,
+            "pages": pages,
+            "first": first + 1 if page_groups else 0,
+            "last": first + len(page_groups),
+            "newer_url": _news_url(hours, telt, page - 1, "berichten") if page > 1 else None,
+            "older_url": _news_url(hours, telt, page + 1, "berichten") if page < pages else None,
+            "filter_urls": {
+                "": _news_url(hours, "", 1, "berichten"),
+                "ja": _news_url(hours, "ja", 1, "berichten"),
+                "nee": _news_url(hours, "nee", 1, "berichten"),
+            },
+            "period_urls": {h: _news_url(h, telt, 1, "berichten") for h, _ in NEWS_PERIODS},
+            "sentiments": sentiments,
+            "sentiment_hours": SENTIMENT_WINDOW_H,
             "market_mood": load_market_mood(session) if settings.fear_greed_enabled else None,
+            "fear_greed_nl": FEAR_GREED_NL,
             "last_run": news.last_run,
             "last_error": news.last_error,
+            "assessing": news.analyst.available,
             "analyst_available": news.analyst.available,
         },
     )
@@ -1226,10 +1339,15 @@ async def news_page(
 
 @app.post("/news/refresh")
 async def news_refresh_form(
-    news: NewsService = Depends(get_news), session: Session = Depends(get_session)
+    hours: int = Form(NEWS_DEFAULT_HOURS, ge=1, le=NEWS_HOURS_MAX),
+    telt: str = Form("", max_length=8),
+    news: NewsService = Depends(get_news),
+    session: Session = Depends(get_session),
 ):
-    await news.refresh(session)
-    return RedirectResponse("/news", status_code=303)
+    result = await news.refresh(session)
+    kind, text = _news_refresh_flash(result)
+    back = _news_url(hours, telt if telt in ("ja", "nee") else "", 1, "berichten")
+    return flash.redirect_with_flash(back, kind, text)
 
 
 # -- Trading --------------------------------------------------------------------------
@@ -1694,6 +1812,11 @@ async def plan_save(
 
 # -- Trade journal --------------------------------------------------------------------
 
+JOURNAL_STATUS_NL = {"open": "open", "closed": "gesloten"}
+JOURNAL_RESULT_NL = {"win": "winst", "loss": "verlies"}
+JOURNAL_BY_NL = {"bot": "de bot", "manual": "jij, handmatig"}
+JOURNAL_DAYS = (7, 30, 90, 365)
+
 
 def _journal_filter(
     market: str | None,
@@ -1703,29 +1826,105 @@ def _journal_filter(
     tag: str | None,
     days: int | None,
     q: str | None,
-) -> JournalFilter:
-    return JournalFilter(
-        market=(market or "").upper() or None,
-        status=status if status in ("open", "closed") else None,
-        result=result if result in ("win", "loss") else None,
-        reason=reason if reason in EXIT_NL else None,
+    by: str | None = None,
+) -> tuple[JournalFilter, list[str]]:
+    """The filter, plus a Dutch line per value that was not understood and is ignored (a link
+    with ?reason=xyz must not silently show the unfiltered list as if it were filtered)."""
+    ignored: list[str] = []
+
+    def pick(value: str | None, allowed, label: str) -> str | None:
+        value = (value or "").strip()
+        if not value:
+            return None
+        if value in allowed:
+            return value
+        ignored.append(f"{label} '{value}'")
+        return None
+
+    flt = JournalFilter(
+        market=(market or "").strip().upper() or None,
+        status=pick(status, JOURNAL_STATUS_NL, "status"),
+        result=pick(result, JOURNAL_RESULT_NL, "resultaat"),
+        reason=pick(reason, EXIT_NL, "hoe gesloten"),
         tag=(tag or "").strip() or None,
         days=days if days and days > 0 else None,
         query=(q or "").strip() or None,
+        opened_by=pick(by, JOURNAL_BY_NL, "geopend door"),
     )
+    return flt, ignored
+
+
+def _blank_to_none(value: object) -> object:
+    """An empty form field ('days=') means 'no filter', not an invalid number."""
+    return None if isinstance(value, str) and not value.strip() else value
 
 
 # Journal filters: free text is short, days stay within what timedelta and the database
-# handle.
+# handle. An empty 'days' (the 'alles' option of older pages) is no filter.
+JournalDays = Annotated[
+    Annotated[int, Field(ge=0, le=3650)] | None, BeforeValidator(_blank_to_none), Query()
+]
 JOURNAL_FILTERS = {
     "market": Query(None, max_length=16),
     "status": Query(None, max_length=16),
     "result": Query(None, max_length=16),
     "reason": Query(None, max_length=32),
     "tag": Query(None, max_length=64),
-    "days": Query(None, ge=0, le=3650),
     "q": Query(None, max_length=200),
+    "by": Query(None, max_length=16),
+    "mode": Query(None, max_length=8),
 }
+
+
+def _journal_mode(engine: TradingEngine, mode: str | None) -> str:
+    return mode if mode in ("paper", "live") else engine.mode
+
+
+def _journal_params(flt: JournalFilter, mode: str, engine_mode: str) -> dict[str, str]:
+    """The query parameters of a journal view, in a fixed order (the same URL every time)."""
+    params = {
+        "mode": mode if mode != engine_mode else "",
+        "market": flt.market or "",
+        "status": flt.status or "",
+        "result": flt.result or "",
+        "reason": flt.reason or "",
+        "by": flt.opened_by or "",
+        "days": str(flt.days) if flt.days else "",
+        "tag": flt.tag or "",
+        "q": flt.query or "",
+    }
+    return {k: v for k, v in params.items() if v}
+
+
+def _journal_url(params: dict[str, str], **changes: str) -> str:
+    merged = {k: v for k, v in {**params, **changes}.items() if v}
+    return "/journal" + (f"?{urlencode(merged)}" if merged else "")
+
+
+def _journal_chips(flt: JournalFilter, params: dict[str, str]) -> list[dict[str, str]]:
+    """The active filters as removable labels ('Markt: ETH-EUR ×' -> the view without it)."""
+    chips = []
+
+    def add(key: str, text: str) -> None:
+        chips.append({"text": text, "href": _journal_url(params, **{key: ""})})
+
+    if flt.market:
+        add("market", f"Markt: {flt.market}")
+    if flt.status:
+        add("status", f"Status: {JOURNAL_STATUS_NL[flt.status]}")
+    if flt.result:
+        add("result", f"Resultaat: {JOURNAL_RESULT_NL[flt.result]}")
+    if flt.reason:
+        add("reason", f"Hoe gesloten: {EXIT_NL[flt.reason]}")
+    if flt.opened_by:
+        add("by", f"Geopend door: {JOURNAL_BY_NL[flt.opened_by]}")
+    if flt.days:
+        add("days", f"Periode: laatste {flt.days} dagen")
+    if flt.tag:
+        add("tag", f"Label: {flt.tag}")
+    if flt.query:
+        add("q", f"Zoekterm: '{flt.query}'")
+    return chips
 
 
 @app.get("/api/journal")
@@ -1735,16 +1934,20 @@ async def api_journal(
     result: str | None = JOURNAL_FILTERS["result"],
     reason: str | None = JOURNAL_FILTERS["reason"],
     tag: str | None = JOURNAL_FILTERS["tag"],
-    days: int | None = JOURNAL_FILTERS["days"],
+    days: JournalDays = None,
     q: str | None = JOURNAL_FILTERS["q"],
+    by: str | None = JOURNAL_FILTERS["by"],
+    mode: str | None = JOURNAL_FILTERS["mode"],
     limit: int = Query(200, ge=1, le=1000),
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
-    flt = _journal_filter(market, status, result, reason, tag, days, q)
-    entries = journal_entries(session, engine.mode, flt, limit)
+    flt, ignored = _journal_filter(market, status, result, reason, tag, days, q, by)
+    shown = _journal_mode(engine, mode)
+    entries = journal_entries(session, shown, flt, limit)
     return {
-        "mode": engine.mode,
+        "mode": shown,
+        "ignored_filters": ignored,
         "totals": journal_totals(entries),
         "entries": [e.as_dict() for e in entries],
     }
@@ -1780,31 +1983,56 @@ async def journal_page(
     result: str | None = JOURNAL_FILTERS["result"],
     reason: str | None = JOURNAL_FILTERS["reason"],
     tag: str | None = JOURNAL_FILTERS["tag"],
-    days: int | None = JOURNAL_FILTERS["days"],
+    days: JournalDays = None,
     q: str | None = JOURNAL_FILTERS["q"],
+    by: str | None = JOURNAL_FILTERS["by"],
+    mode: str | None = JOURNAL_FILTERS["mode"],
     saved: int | None = Query(None, ge=0, le=DB_ID_MAX),
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
     settings: Settings = request.app.state.settings
-    flt = _journal_filter(market, status, result, reason, tag, days, q)
-    entries = journal_entries(session, engine.mode, flt)
+    flt, ignored = _journal_filter(market, status, result, reason, tag, days, q, by)
+    if mode and mode not in ("paper", "live"):
+        ignored.append(f"modus '{mode}'")
+    shown = _journal_mode(engine, mode)
+    entries = journal_entries(session, shown, flt)
+    params = _journal_params(flt, shown, engine.mode)
+    counts = mode_counts(session)
+    other = "live" if shown == "paper" else "paper"
     return templates.TemplateResponse(
         request,
         "journal.html",
         {
             "settings": settings,
-            "mode": engine.mode,
+            "mode": shown,  # the mode whose trades are shown
+            "engine_mode": engine.mode,  # the mode the bot trades in now
+            "mode_counts": counts,
+            # Offer the other mode only when it has trades (or is the one being shown).
+            "mode_links": [
+                {
+                    "mode": m,
+                    "count": counts[m],
+                    "href": _journal_url(params, mode=m if m != engine.mode else ""),
+                }
+                for m in ("paper", "live")
+            ]
+            if counts[other] or shown != engine.mode
+            else [],
             "filter": flt,
+            "filter_count": len(_journal_chips(flt, params)),
+            "chips": _journal_chips(flt, params),
+            "ignored": ignored,
             "entries": entries,
             "totals": journal_totals(entries),
-            "tags": all_tags(session, engine.mode),
+            "tags": all_tags(session, shown),
             "exit_reasons": EXIT_NL,
-            "other_orders": unlinked_orders(session, engine.mode) if not flt.active else [],
+            "by_nl": JOURNAL_SOURCES_NL,
+            "days_options": JOURNAL_DAYS,
+            "other_orders": unlinked_orders(session, shown) if not flt.active else [],
             "saved": saved,
-            # Where the note form returns to: this page with its filters, minus "saved".
-            "back_url": request.url.remove_query_params("saved").path
-            + (f"?{request.url.remove_query_params('saved').query}" if request.url.query else ""),
+            # Where the note form returns to: this view with its filters, minus "saved".
+            "back_url": _journal_url(params),
         },
     )
 

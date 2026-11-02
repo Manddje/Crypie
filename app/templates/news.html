@@ -1,93 +1,123 @@
 {% extends "base.html" %}
 {% import "_macros.html" as ui %}
 {% block title %}Crypie · Nieuws{% endblock %}
+{# '+0,60' / '-0,32' / '0,00': a sentiment score with its sign. #}
+{% macro signed(x) %}{{ "+" if x > 0.005 else "" }}{{ x|num }}{% endmacro %}
+{# Width class for a score bar: 0-50 % of the bar in steps of 5. #}
+{% macro bar_width(pct) %}w-{{ ((pct / 5)|round|int * 5) if pct < 50 else 50 }}{% endmacro %}
+{% macro external(url, text, lang=none, cls="") -%}
+<a{% if cls %} class="{{ cls }}"{% endif %} href="{{ url }}" target="_blank" rel="noopener noreferrer"{% if lang and lang != "nl" %} lang="{{ lang }}"{% endif %}>{{ text }}<span class="visually-hidden"> (opent in nieuw tabblad)</span>{{ ui.icon("external", "ext-icon") }}</a>
+{%- endmacro %}
 {% block content %}
 <div class="page-header">
   <h1>Nieuws</h1>
-  <p class="subtitle">Crypie leest {% if settings.news_enabled and settings.news_fetch_interval_min > 0 %}elke {{ settings.news_fetch_interval_min }} minuten{% else %}op verzoek{% endif %} de cryptomedia en het wereldnieuws. Claude beoordeelt per bericht of het de koers raakt, hoe sterk en hoe lang. De bot weegt dit mee bij elke beslissing.</p>
+  <p class="subtitle">Wat de cryptomedia en het wereldnieuws melden, en welk nieuws de bot meeweegt.</p>
   <div class="actions">
-    <form class="inline" method="post" action="/news/refresh"><button class="btn btn-tint" type="submit">Nu verversen</button></form>
-    <span class="small muted">Laatst opgehaald: {{ last_run|ago }}</span>
+    <form class="inline" method="post" action="/news/refresh">
+      <input type="hidden" name="hours" value="{{ hours }}">
+      {% if telt %}<input type="hidden" name="telt" value="{{ telt }}">{% endif %}
+      <button class="btn btn-tint" type="submit" data-busy="Nieuws ophalen… (kan ~20 s duren)">Nu verversen</button>
+    </form>
+    <span class="small muted">Laatst opgehaald: {{ last_run|ago }} · {% if settings.news_enabled and settings.news_fetch_interval_min > 0 %}automatisch elke {{ settings.news_fetch_interval_min }} minuten{% else %}alleen als je ververst{% endif %}</span>
   </div>
+  <details class="page-help">
+    <summary>Hoe telt nieuws mee?</summary>
+    <p>Claude beoordeelt per bericht of het de koers raakt, hoe sterk (impact klein, middel of groot) en hoe lang (uren, dagen of weken). De bot weegt dat mee bij elke beslissing.</p>
+    <p>Het sentiment rekent altijd met de laatste {{ sentiment_hours }} uur, wat je hieronder ook kiest. Berichten over hetzelfde nieuwsfeit staan bij elkaar: het sentiment is dan het gemiddelde van die bronnen (één stem per bron), de impact de hoogste. Meldt maar één bron een feit, dan telt het hooguit als impact middel, en marktbreed nieuws telt pas mee als een tweede bron het meldt.</p>
+    <p>Bij elk nieuwsfeit staat of het nu meetelt voor jouw coins en zo niet, waarom: niet beoordeeld, niet koersrelevant, ouder dan {{ sentiment_hours }} uur, over andere coins, of impact 0.</p>
+    <p>Bronnen: {{ settings.news_rss_feeds|length }} RSS-feeds{% if settings.gdelt_enabled %}, GDELT (wereldnieuws){% endif %}{% if settings.cryptopanic_token %}, CryptoPanic{% endif %}{% if settings.fear_greed_enabled %}, en de Fear &amp; Greed-index van alternative.me{% endif %}.</p>
+  </details>
 </div>
 
 <div class="stack">
-  {% if last_error %}{{ ui.notice("error", "De laatste keer ophalen ging mis: " ~ last_error) }}{% endif %}
-  {% if not analyst_available %}{{ ui.notice("info", "De Claude-sleutel (ANTHROPIC_API_KEY) ontbreekt. Nieuws wordt wel opgehaald, maar niet beoordeeld op sentiment en impact.") }}{% endif %}
+  {% if last_error %}{{ ui.notice("warn", "Bij de laatste ophaalronde ging iets mis: " ~ last_error ~ ". De volgende ronde probeert het opnieuw.", live=false) }}{% endif %}
+  {% if not assessing %}
+  {% call ui.notice("info", "Nieuwsbeoordeling staat uit: er is geen Claude-sleutel. Berichten worden wel opgehaald, maar niet beoordeeld, dus nieuws telt niet mee in de beslissingen.", live=false) %}
+  <span class="small muted"> Stel <span class="mono">ANTHROPIC_API_KEY</span> in de serveromgeving in om het aan te zetten.</span>
+  {% endcall %}
+  {% endif %}
 
-  <div class="grid">
-    {% if market_mood %}
-    <section class="card">
-      <div class="card-header">
-        <h3>Hele markt</h3>
-        <span class="pill {{ 'pill-red' if market_mood.value < 40 else ('pill-green' if market_mood.value > 60 else '') }}">{{ market_mood.label }}</span>
-      </div>
-      <div class="score-bar" aria-hidden="true">
-        {% if market_mood.value > 50 %}<div class="fill pos" style="width: {{ ((market_mood.value - 50)|abs)|round(1) }}%"></div>
-        {% elif market_mood.value < 50 %}<div class="fill neg" style="width: {{ ((50 - market_mood.value)|abs)|round(1) }}%"></div>{% endif %}
-      </div>
-      <p class="small muted">Fear &amp; Greed-index {{ market_mood.value }} op een schaal van 0 (extreme angst) tot 100 (extreme hebzucht) · bron alternative.me · Claude krijgt dit als context bij elke beslissing.</p>
-    </section>
-    {% endif %}
-    {% for s in sentiments %}
-    <section class="card">
-      <div class="card-header">
-        <h3>{{ s.coin }}</h3>
-        <span class="pill {{ s.label()|sentiment_pill }}">{{ s.label() }}</span>
-      </div>
-      <div class="score-bar" aria-hidden="true">
-        {% if s.score > 0 %}<div class="fill pos" style="width: {{ ([s.score, 1]|min * 50)|round(1) }}%"></div>
-        {% elif s.score < 0 %}<div class="fill neg" style="width: {{ ([-s.score, 1]|min * 50)|round(1) }}%"></div>{% endif %}
-      </div>
-      <p class="small muted">Score {{ s.score|num }} op een schaal van -1 tot +1 · {{ s.items }} nieuwsfeit{{ "en" if s.items != 1 }} uit {{ s.articles }} bericht{{ "en" if s.articles != 1 }}{% if s.high_impact %}, waarvan {{ s.high_impact }} met grote impact{% endif %} · laatste 48 uur</p>
-      {% if s.top %}
-      <ul class="list small" style="margin-top: 12px">
-        {% for t in s.top[:3] %}<li>{% if t.safe_url %}<a href="{{ t.safe_url }}" target="_blank" rel="noopener noreferrer" style="color: inherit">{{ t.summary_nl or t.title }}</a>{% else %}{{ t.summary_nl or t.title }}{% endif %}{% if t.sources is defined and t.sources > 1 %} <span class="muted nowrap">· {{ t.sources }} bronnen</span>{% endif %}</li>{% endfor %}
-      </ul>
+  <section class="news-sentiment" aria-labelledby="sentiment-title">
+    <div class="news-section-head">
+      <h2 id="sentiment-title">Sentiment</h2>
+      <span class="card-meta">laatste {{ sentiment_hours }} uur · zo weegt de bot het nieuws</span>
+    </div>
+    <div class="grid">
+      {% if market_mood %}
+      <section class="card news-coin" aria-labelledby="mood-title">
+        <div class="card-header">
+          <h3 class="card-title" id="mood-title">Hele markt</h3>
+          <span class="pill {{ 'pill-red' if market_mood.value < 40 else ('pill-green' if market_mood.value > 60 else '') }}">{{ fear_greed_nl.get(market_mood.label, market_mood.label) }}</span>
+        </div>
+        <div class="score-bar" aria-hidden="true">
+          {% if market_mood.value > 50 %}<div class="fill pos {{ bar_width(market_mood.value - 50) }}"></div>
+          {% elif market_mood.value < 50 %}<div class="fill neg {{ bar_width(50 - market_mood.value) }}"></div>{% endif %}
+        </div>
+        <p class="small muted">Fear &amp; Greed-index {{ market_mood.value }} van 100 (0 = extreme angst, 100 = extreme hebzucht), bron alternative.me. Claude krijgt dit mee bij elke beslissing.</p>
+      </section>
       {% endif %}
-    </section>
-    {% endfor %}
-  </div>
+      {% for s in sentiments %}
+      <section class="card news-coin" aria-labelledby="coin-{{ s.coin }}">
+        <div class="card-header">
+          <h3 class="card-title" id="coin-{{ s.coin }}">{{ s.coin }}</h3>
+          <span class="pill {{ s.label()|sentiment_pill }}">{{ s.label() }}</span>
+        </div>
+        <div class="score-bar" aria-hidden="true">
+          {% if s.score > 0 %}<div class="fill pos {{ bar_width([s.score, 1]|min * 50) }}"></div>
+          {% elif s.score < 0 %}<div class="fill neg {{ bar_width([-s.score, 1]|min * 50) }}"></div>{% endif %}
+        </div>
+        <p class="small muted">Score {{ signed(s.score) }} op een schaal van -1 tot +1 · {{ s.items }} nieuwsfeit{{ "en" if s.items != 1 }} uit {{ s.articles }} bericht{{ "en" if s.articles != 1 }}{% if s.high_impact %}, waarvan {{ s.high_impact }} met impact middel of groot{% endif %}</p>
+        {% if s.top %}
+        <details class="news-top-box" open data-collapse-mobile>
+        <summary>Belangrijkste nieuws voor {{ s.coin }}</summary>
+        <ul class="list small news-top">
+          {% for t in s.top[:3] %}
+          {% set text = t.summary_nl or t.title %}
+          {% set lang = none if t.summary_nl else t.lang %}
+          <li>{% if t.list_url %}<a href="{{ t.list_url }}"{% if lang and lang != "nl" %} lang="{{ lang }}"{% endif %}>{{ text }}</a>{% elif t.safe_url %}{{ external(t.safe_url, text, lang) }}{% else %}<span{% if lang and lang != "nl" %} lang="{{ lang }}"{% endif %}>{{ text }}</span>{% endif %}{% if t.sources is defined and t.sources > 1 %} <span class="muted nowrap">· {{ t.sources }} bronnen</span>{% endif %}</li>
+          {% endfor %}
+        </ul>
+        </details>
+        {% endif %}
+      </section>
+      {% endfor %}
+    </div>
+  </section>
 
-  <section class="card">
-    {% set q = "&telt=" ~ telt if telt else "" %}
-    <div class="card-header">
-      <h2>Berichten</h2>
-      <div class="actions">
-        <nav class="segmented" aria-label="Telt mee voor het sentiment">
-          <a href="/news?hours={{ hours }}" {% if not telt %}class="active"{% endif %}>Alles</a>
-          <a href="/news?hours={{ hours }}&telt=ja" {% if telt == "ja" %}class="active"{% endif %}>Telt mee</a>
-          <a href="/news?hours={{ hours }}&telt=nee" {% if telt == "nee" %}class="active"{% endif %}>Telt niet mee</a>
-        </nav>
-        <nav class="segmented" aria-label="Periode">
-          <a href="/news?hours=6{{ q }}" {% if hours == 6 %}class="active"{% endif %}>6 uur</a>
-          <a href="/news?hours=24{{ q }}" {% if hours == 24 %}class="active"{% endif %}>24 uur</a>
-          <a href="/news?hours=72{{ q }}" {% if hours == 72 %}class="active"{% endif %}>3 dagen</a>
-        </nav>
+  <section class="card" id="berichten" aria-labelledby="berichten-title">
+    {{ ui.card_header("Berichten", 2, meta=(n_total ~ (" nieuwsfeit" if n_total == 1 else " nieuwsfeiten") ~ " uit " ~ n_articles ~ (" bericht" if n_articles == 1 else " berichten") ~ " · laatste " ~ (hours ~ " uur" if hours != 72 else "3 dagen")), id="berichten-title") }}
+    <div class="news-filters">
+      <div class="segmented" role="group" aria-label="Telt mee in het sentiment">
+        <a href="{{ filter_urls[''] }}"{% if not telt %} class="active" aria-current="true"{% endif %}>Alles<span class="count-badge">{{ n_total }}</span></a>
+        <a href="{{ filter_urls['ja'] }}"{% if telt == "ja" %} class="active" aria-current="true"{% endif %}>Telt mee<span class="count-badge">{{ n_counted }}</span></a>
+        <a href="{{ filter_urls['nee'] }}"{% if telt == "nee" %} class="active" aria-current="true"{% endif %}>Telt niet mee<span class="count-badge">{{ n_total - n_counted }}</span></a>
+      </div>
+      <div class="segmented" role="group" aria-label="Periode">
+        {% for h, label in periods %}<a href="{{ period_urls[h] }}"{% if hours == h %} class="active" aria-current="true"{% endif %}>{{ label }}</a>{% endfor %}
       </div>
     </div>
-    <p class="card-desc">Berichten over hetzelfde nieuwsfeit staan bij elkaar; het sentiment is dan het gemiddelde van die bronnen (één stem per bron), de impact de hoogste. Meldt maar één bron een feit, dan telt het hooguit als impact middel, en marktbreed nieuws telt pas mee als een tweede bron het meldt. Bij elk nieuwsfeit staat of het nu meetelt in het sentiment van jouw coins en zo niet, waarom: nog niet beoordeeld, niet koersrelevant, ouder dan 48 uur, over andere coins, of impact 0. Van de {{ n_total }} nieuwsfeit{{ "en" if n_total != 1 }} in deze periode {{ "telt" if n_counted == 1 else "tellen" }} er {{ n_counted }} mee. Bronnen: {{ settings.news_rss_feeds|length }} RSS-feeds{% if settings.gdelt_enabled %}, GDELT (wereldnieuws){% endif %}{% if settings.cryptopanic_token %}, CryptoPanic{% endif %}.</p>
+    {% if truncated %}{{ ui.notice("warn", "Deze periode heeft " ~ n_articles ~ " berichten; alleen de nieuwste " ~ max_items ~ " zijn gegroepeerd en geteld. Kies een kortere periode om alles te zien.", live=false) }}{% endif %}
+    {% if groups %}
+    <p class="news-range small muted">{{ first }}–{{ last }} van {{ n_shown }}{% if pages > 1 %} · pagina {{ page }} van {{ pages }}{% endif %}</p>
     {% for g in groups %}
     {% set it = g.lead %}
-    <article class="news-item {{ 'dim' if not g.status.counts and g.status.code != 'pending' else '' }}">
+    <article class="news-item {{ 'dim' if not g.status.counts and g.status.code != 'pending' else '' }}" id="{{ g.anchor }}" aria-labelledby="{{ g.anchor }}-t">
       <div>
         <div class="meta">
           <span>{{ it.published_at|dt }}</span>
-          <span>·</span>
+          <span aria-hidden="true">·</span>
           <span>{{ it.source_name }}</span>
-          {% if g.sources > 1 %}<span>·</span><span class="pill pill-blue">{{ g.sources }} bronnen</span>{% endif %}
-          <span>·</span>
-          {% if g.status.counts %}<span class="pill pill-green" title="{{ g.status.reason_nl }}">telt mee</span>{% else %}<span class="pill" title="{{ g.status.reason_nl }}">telt niet mee</span>{% endif %}
-          <span class="count-reason">{{ g.status.reason_nl }}</span>
+          {% if g.sources > 1 %}<span class="pill">{{ g.sources }} bronnen</span>{% endif %}
         </div>
-        {% if it.safe_url %}<a class="title" href="{{ it.safe_url }}" target="_blank" rel="noopener noreferrer">{{ it.title }}</a>{% else %}<span class="title">{{ it.title }}</span>{% endif %}
-        {% if it.summary_nl %}<div class="summary">{{ it.summary_nl }}</div>{% endif %}
+        <h3 class="title" id="{{ g.anchor }}-t">{% if it.safe_url %}{{ external(it.safe_url, it.title, it.lang) }}{% else %}<span{% if it.lang != "nl" %} lang="{{ it.lang }}"{% endif %}>{{ it.title }}</span>{% endif %}</h3>
+        {% if it.summary_nl %}<p class="summary">{{ it.summary_nl }}</p>{% endif %}
+        <p class="count-line">{% if g.status.counts %}<span class="pill pill-green">telt mee</span>{% else %}<span class="pill">telt niet mee</span>{% endif %} <span class="count-reason">{{ g.status.detail_nl(assessing) }}</span></p>
         {% if g.others %}
         <details class="news-others">
           <summary>Ook gemeld door {{ g.others|map(attribute="source_name")|unique|join(", ") }}</summary>
           <ul>
             {% for o in g.others %}
-            <li><span class="muted nowrap">{{ o.published_at|dt }} · {{ o.source_name }}</span> {% if o.safe_url %}<a href="{{ o.safe_url }}" target="_blank" rel="noopener noreferrer">{{ o.title }}</a>{% else %}{{ o.title }}{% endif %}{% if o.sentiment is not none and o.relevant %} <span class="muted nowrap">({{ o.sentiment|num }})</span>{% endif %}{% if o.counting is defined and o.counting.code != g.status.code %} <span class="muted">· {{ o.counting.reason_nl }}</span>{% endif %}</li>
+            <li><span class="muted nowrap">{{ o.published_at|dt }} · {{ o.source_name }}</span> {% if o.safe_url %}{{ external(o.safe_url, o.title, o.lang) }}{% else %}<span{% if o.lang != "nl" %} lang="{{ o.lang }}"{% endif %}>{{ o.title }}</span>{% endif %}{% if o.sentiment is not none and o.relevant %} <span class="muted nowrap">· sentiment {{ signed(o.sentiment) }}</span>{% endif %}{% if o.counting is defined and o.counting.code != g.status.code %} <span class="muted">· {{ "telt mee " if o.counting.counts else "telt niet mee: " }}{{ o.counting.detail_nl(assessing) }}</span>{% endif %}</li>
             {% endfor %}
           </ul>
         </details>
@@ -96,19 +126,30 @@
       <div class="side">
         {% if g.coin_list() %}<span class="chips">{% for c in g.coin_list() %}<span class="chip">{{ "alle coins" if c == "ALL" else c }}</span>{% endfor %}</span>{% endif %}
         {% if g.sentiment is not none %}
-        <span class="pill {{ 'pill-green' if g.sentiment > 0.1 else ('pill-red' if g.sentiment < -0.1 else '') }}">{{ "positief" if g.sentiment > 0.1 else ("negatief" if g.sentiment < -0.1 else "neutraal") }} {{ g.sentiment|num }}</span>
+        <span class="pill {{ 'pill-green' if g.sentiment > 0.1 else ('pill-red' if g.sentiment < -0.1 else '') }}">{{ "positief" if g.sentiment > 0.1 else ("negatief" if g.sentiment < -0.1 else "neutraal") }} {{ signed(g.sentiment) }}</span>
         {% endif %}
         {% if g.impact is not none %}
-        <span class="small muted">impact {{ "groot" if g.impact == 3 else ("middel" if g.impact == 2 else "klein") }}{% if it.horizon %} · {{ it.horizon|nl }}{% endif %}</span>
+        <span class="small muted">impact {{ "groot" if g.impact == 3 else ("middel" if g.impact == 2 else ("klein" if g.impact == 1 else "0")) }}{% if it.horizon %} · effect: {{ it.horizon|nl }}{% endif %}</span>
         {% endif %}
       </div>
     </article>
-    {% else %}
-    {% if telt == "ja" %}{{ ui.empty("Geen nieuwsfeiten die meetellen", "In deze periode weegt geen enkel nieuwsfeit mee in het sentiment van jouw coins.") }}
-    {% elif telt == "nee" %}{{ ui.empty("Alles telt mee", "Elk nieuwsfeit in deze periode weegt mee in het sentiment.") }}
-    {% else %}{{ ui.empty("Nog geen berichten", "Klik op 'Nu verversen' om het nieuws van de afgelopen " ~ hours ~ " uur op te halen.") }}{% endif %}
     {% endfor %}
+    {% if pages > 1 %}
+    <nav class="news-pager" aria-label="Pagina's met berichten">
+      {% if newer_url %}<a class="btn btn-sm" href="{{ newer_url }}" rel="prev">‹ Nieuwer</a>{% else %}<span class="btn btn-sm" aria-disabled="true">‹ Nieuwer</span>{% endif %}
+      <span class="small muted">pagina {{ page }} van {{ pages }}</span>
+      {% if older_url %}<a class="btn btn-sm" href="{{ older_url }}" rel="next">Ouder ›</a>{% else %}<span class="btn btn-sm" aria-disabled="true">Ouder ›</span>{% endif %}
+    </nav>
+    {% endif %}
+    {% elif n_total == 0 %}
+    {{ ui.empty("Nog geen berichten", "Er is geen nieuws uit de afgelopen " ~ (hours ~ " uur" if hours != 72 else "3 dagen") ~ ". Kies 'Nu verversen' om het op te halen.", symbol="news") }}
+    {% elif telt == "ja" %}
+    {{ ui.empty("Geen nieuwsfeiten die meetellen", "In deze periode weegt geen enkel nieuwsfeit mee in het sentiment van jouw coins." ~ ("" if assessing else " Zonder Claude-sleutel wordt nieuws niet beoordeeld en telt het dus niet mee."), symbol="news") }}
+    {% else %}
+    {{ ui.empty("Alles telt mee", "Elk nieuwsfeit in deze periode weegt mee in het sentiment.", symbol="news") }}
+    {% endif %}
   </section>
 </div>
 {% endblock %}
-{% block footer %}<span>Nieuws beoordeeld door {{ settings.claude_model_news }}</span>{% endblock %}
+{% block scripts %}<script src="/static/analysis.js?v={{ asset_version }}"></script>{% endblock %}
+{% block footer %}<span>Nieuwsbeoordeling: {% if assessing %}{{ settings.claude_model_news }}{% else %}uit (geen Claude-sleutel){% endif %}</span>{% endblock %}

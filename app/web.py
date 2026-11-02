@@ -10,6 +10,7 @@ from pathlib import Path
 
 from fastapi.templating import Jinja2Templates
 
+from app.labels import CLOSE_REASONS_NL as _CLOSE_REASONS_NL
 from app.strategy.describe import (  # noqa: F401
     OPERATORS_NL,
     SERIES_NL,
@@ -84,16 +85,9 @@ LABELS_NL: dict[str, str] = {
 }
 
 # Position.close_reason -> how a closed trade ended, as a phrase ('Reden: trailing stop geraakt').
-# One list for every page; the short labels for table cells stay in LABELS_NL.
-CLOSE_REASONS_NL: dict[str, str] = {
-    "stop_loss": "stop-loss geraakt",
-    "trailing_stop": "trailing stop geraakt",
-    "take_profit": "take-profit geraakt",
-    "signal": "verkoopsignaal van de strategie",
-    "news_exit": "verkocht op negatief nieuws",
-    "manual": "handmatig verkocht",
-    "reset": "oefenportefeuille gereset",
-}
+# One list for every page (app/labels.py, shared with the journal); the short labels for table
+# cells stay in LABELS_NL.
+CLOSE_REASONS_NL = _CLOSE_REASONS_NL
 
 # Who wrote an order reason: the engine prefixes it with the source ('claude: …').
 ORDER_REASON_SOURCES = ("claude", "rules", "manual", "mechanical")

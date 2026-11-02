@@ -171,7 +171,8 @@ async def test_news_endpoints(api):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["inserted"] >= 1 and body["assessed"] == 0  # no API key in tests
-    assert "ANTHROPIC_API_KEY" in body["error"]
+    # A missing key is a choice, not a failed run (UX-41): said in 'assessing', not 'error'.
+    assert body["assessing"] is False and body["error"] is None
 
     r = await api.get("/api/news?hours=24")
     titles = [i["title"] for i in r.json()]
@@ -189,7 +190,8 @@ async def test_news_endpoints(api):
     r = await api.get("/news")
     assert r.status_code == 200 and "hack sparks debate" in r.text
     assert "Fear" in r.text and "30" in r.text  # Fear & Greed index shown
-    assert "telt niet mee" in r.text and "nog niet beoordeeld door Claude" in r.text
+    # Without a key nothing waits for Claude, so the page does not say 'nog niet' (UX-45).
+    assert "telt niet mee" in r.text and "niet beoordeeld (geen Claude-sleutel)" in r.text
     r = await api.get("/news?hours=24&telt=ja")
     assert r.status_code == 200 and "hack sparks debate" not in r.text
     assert "Geen nieuwsfeiten die meetellen" in r.text

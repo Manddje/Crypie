@@ -217,7 +217,9 @@ async def test_service_without_key_only_fetches(session):
     service = NewsService(FakeFetcher([raw("a")]), analyst, ["BTC"], 48, 10)
     result = await service.refresh(session)
     assert result["inserted"] == 1 and result["assessed"] == 0 and result["pending"] == 1
-    assert "ANTHROPIC_API_KEY" in result["error"]
+    # No key is a choice, not a failed run (UX-41): no error, and the page shows no red notice.
+    assert result["assessing"] is False and result["error"] is None
+    assert service.last_error is None
 
 
 async def test_service_stops_when_budget_exhausted(session):

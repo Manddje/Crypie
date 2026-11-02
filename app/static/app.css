@@ -1124,30 +1124,84 @@ footer.site {
 .cycle-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
 
 /* ==== Pagina: Journaal ==== */
-/* Regels die alleen journal.html gebruikt: de filters, de trades en de notities. */
+/* Regels die alleen journal.html gebruikt: de filters, de trades en de notities.
+ * .page-help, .count-badge en .filter-chips gebruiken ook Nieuws, Tradingplan en Strategie. */
 
-.filters { display: grid; gap: 10px 12px; grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr)); align-items: end; }
-.filters label { display: block; font-size: var(--fs-caption); color: var(--text-2); font-weight: 500; margin-bottom: 4px; }
+/* 'Hoe werkt dit?' under a page title: the long explanation, folded away. */
+.page-help { margin-top: 10px; max-width: 70ch; color: var(--text-2); font-size: var(--fs-help); }
+.page-help summary { color: var(--accent); font-weight: 500; }
+.page-help > :not(summary) { margin-top: 8px; }
+/* A number inside a filter button: 'Telt mee 3'. */
+.segmented .count-badge {
+  display: inline-block;
+  min-width: 1.6em;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--fill-2);
+  color: var(--text-2);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.journal-modes { margin-top: 14px; }
+/* Active filters as labels that each remove their own filter. */
+.filter-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: -4px 0 14px; }
+.filter-chips ul { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.chip-remove {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--control-border);
+  background: var(--card);
+  color: var(--text);
+  font-size: var(--fs-detail);
+  text-decoration: none;
+}
+.chip-remove:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
+@media (pointer: coarse) { .chip-remove { min-height: 36px; } }
+
+.journal-filter-box > summary { display: flex; align-items: center; gap: 10px; min-height: 32px; }
+.journal-filter-box > summary .card-title { flex: 0 1 auto; margin: 0; }
+.journal-filter-box[open] > summary { margin-bottom: 14px; }
+.filters { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); align-items: end; }
 .filters input, .filters select { width: 100%; }
+.filters .journal-search { grid-column: span 2; }
 .filters .actions { display: flex; gap: 8px; }
+@media (max-width: 480px) {
+  .filters .journal-search { grid-column: auto; }
+  .journal-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .journal-stats .stat { padding: 12px 14px; }
+}
+.journal-breakdown .grid-2 { margin-top: 10px; }
+@media (max-width: 700px) { .journal-breakdown .grid-2 { grid-template-columns: minmax(0, 1fr); } }
+
 .trade { padding: 16px 18px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); }
 .trade + .trade { margin-top: 12px; }
 .trade:target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint-2); }
+.trade > .notice { margin-bottom: 12px; }
 .trade-head { display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap; }
 .trade-head .title { font-size: var(--fs-lead); font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.trade-head .trade-title { margin: 0; font-size: inherit; font-weight: inherit; line-height: 1.3; }
 .trade-head .pnl { font-size: var(--fs-h2); font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; text-align: right; }
 .trade-head .pnl .sub { display: block; font-size: var(--fs-caption); font-weight: 500; color: var(--text-2); }
+.trade-head .pnl .pnl-open { color: var(--text-2); font-size: var(--fs-help); font-weight: 500; letter-spacing: 0; }
 .trade-meta { color: var(--text-2); font-size: var(--fs-detail); margin-top: 4px; display: flex; gap: 6px 14px; flex-wrap: wrap; }
 .trade-grid { display: grid; gap: 14px 24px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 14px; }
 .trade-grid h4 { margin: 0 0 6px; font-size: var(--fs-detail); font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; }
 .trade-grid .kv { font-size: var(--fs-detail); gap: 4px 14px; }
-.trade-grid .why { font-size: var(--fs-detail); margin: 8px 0 0; line-height: 1.5; }
+.trade-grid .why { font-size: var(--fs-detail); margin: 8px 0 0; line-height: 1.5; overflow-wrap: anywhere; }
 .trade-note { --surface: var(--card); margin-top: 14px; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--fill); font-size: var(--fs-help); }
 .trade-note .prose { margin-top: 6px; }
 .trade-note .meta { font-size: var(--fs-caption); color: var(--text-2); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.trade-note .meta strong { color: var(--text); }
 .trade-note form { margin-top: 10px; display: grid; gap: 8px; }
 .trade-note textarea { min-height: 5rem; }
 @media (max-width: 600px) {
+  .trade { padding: 14px; }
   .trade-grid { grid-template-columns: minmax(0, 1fr); }
   .trade-head .pnl { text-align: left; }
 }
@@ -1173,14 +1227,43 @@ footer.site {
 /* Regels die alleen strategy.html gebruikt: editor, voorstel en backtest. */
 
 /* ==== Pagina: Nieuws ==== */
-/* Regels die alleen news.html gebruikt: de berichten en hun bronnen. */
+/* Regels die alleen news.html gebruikt: sentiment per coin, de berichten en hun bronnen. */
+
+.news-section-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin-bottom: 12px; }
+.news-section-head h2 { font-size: var(--fs-card-title); line-height: 1.3; }
+.news-coin .card-header { margin-bottom: 6px; }
+.news-top-box { margin-top: 10px; font-size: var(--fs-detail); }
+.news-top-box > summary { color: var(--text-2); font-weight: 500; }
+.news-top { margin-top: 6px; }
+.news-top li { padding: 8px 0; }
+/* The bar of a score: the filled part as a class (no inline styles), 0-50% in steps of 5. */
+.score-bar .fill.w-0 { width: 0; }
+.score-bar .fill.w-5 { width: 5%; }
+.score-bar .fill.w-10 { width: 10%; }
+.score-bar .fill.w-15 { width: 15%; }
+.score-bar .fill.w-20 { width: 20%; }
+.score-bar .fill.w-25 { width: 25%; }
+.score-bar .fill.w-30 { width: 30%; }
+.score-bar .fill.w-35 { width: 35%; }
+.score-bar .fill.w-40 { width: 40%; }
+.score-bar .fill.w-45 { width: 45%; }
+.score-bar .fill.w-50 { width: 50%; }
+
+.news-filters { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 6px; }
+.news-filters .segmented .count-badge { margin-left: 6px; }
+.news-range { margin: 8px 0 0; }
+.news-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding-top: 14px; border-top: 1px solid var(--hairline); }
 
 .news-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 20px; padding: 14px 0; border-bottom: 1px solid var(--hairline); }
-.news-item:last-child { border-bottom: 0; }
-.news-item .meta { color: var(--text-2); font-size: var(--fs-detail); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.news-item .title { font-weight: 600; font-size: var(--fs-body); color: var(--text); overflow-wrap: anywhere; }
-.news-item .title:hover { color: var(--accent); }
-.news-item .summary { color: var(--text-2); font-size: var(--fs-help); margin-top: 4px; overflow-wrap: anywhere; }
+.news-item:last-of-type { border-bottom: 0; }
+.news-item:target { box-shadow: -10px 0 0 var(--card), -13px 0 0 var(--accent); }
+.news-item .meta { color: var(--text-2); font-size: var(--fs-detail); display: flex; gap: 6px 8px; flex-wrap: wrap; align-items: center; }
+.news-item .title { margin: 4px 0 0; font-weight: 600; font-size: var(--fs-body); line-height: 1.4; color: var(--text); overflow-wrap: anywhere; }
+.news-item .title a { color: inherit; text-decoration: none; }
+.news-item .title a:hover { color: var(--accent); text-decoration: underline; }
+.ext-icon { width: 0.85em; height: 0.85em; margin-left: 0.3em; vertical-align: -0.05em; color: var(--text-2); }
+.news-item .summary { color: var(--text-2); font-size: var(--fs-help); margin: 4px 0 0; overflow-wrap: anywhere; }
+.news-item .count-line { margin: 6px 0 0; font-size: var(--fs-detail); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .news-item .count-reason { color: var(--text-2); }
 /* A message that does not count: quieter title, everything still readable (no opacity). */
 .news-item.dim .title { color: var(--text-2); font-weight: 500; }
@@ -1188,12 +1271,14 @@ footer.site {
 .news-others summary { color: var(--text-2); }
 .news-others summary:hover { color: var(--accent); }
 .news-others ul { margin: 6px 0 0; padding-left: 18px; color: var(--text-2); }
-.news-others li { margin: 3px 0; }
+.news-others li { margin: 3px 0; overflow-wrap: anywhere; }
 .news-others a { color: var(--text); }
 .news-item .side { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; text-align: right; white-space: nowrap; }
 @media (max-width: 600px) {
   .news-item { grid-template-columns: minmax(0, 1fr); }
-  .news-item .side { flex-direction: row; align-items: center; flex-wrap: wrap; white-space: normal; }
+  .news-item .side { flex-direction: row; align-items: center; flex-wrap: wrap; white-space: normal; text-align: left; }
+  .news-coin { padding: 16px; }
+  .news-top li { padding: 6px 0; }
 }
 
 /* ==== Pagina: Instellingen ==== */

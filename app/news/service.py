@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -230,6 +231,17 @@ def load_market_mood(session: Session, now: datetime | None = None) -> dict | No
     return {"value": value, "label": fear_greed_label(value), "at": at}
 
 
+# alternative.me's bands, as the news page says them (the stored label stays English: Claude
+# and the API get the source's own words).
+FEAR_GREED_NL = {
+    "Extreme Fear": "Extreme angst",
+    "Fear": "Angst",
+    "Neutral": "Neutraal",
+    "Greed": "Hebzucht",
+    "Extreme Greed": "Extreme hebzucht",
+}
+
+
 def pending_items(session: Session, limit: int, since: datetime | None = None) -> list[NewsItem]:
     """Unassessed items: never-tried ones first, newest fetched first."""
     stmt = select(NewsItem).where(NewsItem.assessed.is_(False))
@@ -257,6 +269,42 @@ def recent_items(session: Session, hours: int = 24, limit: int = 100) -> list[Ne
             .limit(limit)
         )
     )
+
+
+def count_items(session: Session, hours: int, now: datetime | None = None) -> int:
+    """How many articles were published in the last ``hours`` (the whole window, not a page)."""
+    now = now or datetime.now(UTC)
+    cutoff = now - timedelta(hours=hours)
+    return int(
+        session.scalar(
+            select(func.count(NewsItem.id)).where(
+                NewsItem.published_at >= cutoff, NewsItem.published_at <= now
+            )
+        )
+        or 0
+    )
+
+
+# Function words that tell an English headline from a Dutch one. Words both languages use
+# ('in', 'is') are left out. Only a hint for screen readers (lang="en"), never for logic.
+_EN_WORDS = frozenset(
+    "the a an of to and for on with as by after from will its are at says new over amid into "
+    "this that has have was were be been than but not you your how why what who".split()
+)
+_NL_WORDS = frozenset(
+    "de het een van en op met voor naar niet dat bij uit zijn wordt worden ook door maar nog "
+    "deze die dan al wel om tot over aan heeft hebben was waren".split()
+)
+_WORD = re.compile(r"[^\W\d_]+(?:'[^\W\d_]+)?")
+
+
+def text_lang(text: str | None) -> str:
+    """'en' or 'nl' for a headline: Dutch only when its Dutch function words outnumber the
+    English ones. The default feeds are English, so a headline without clues counts as English."""
+    words = _WORD.findall((text or "").lower())
+    en = sum(1 for w in words if w in _EN_WORDS)
+    nl = sum(1 for w in words if w in _NL_WORDS)
+    return "nl" if nl > en else "en"
 
 
 def event_key_for(item: NewsItem) -> str:
@@ -368,6 +416,19 @@ class CountStatus:
     reason_nl: str
     coins: tuple[str, ...] = ()  # the tracked coins this article weighs for
 
+    def detail_nl(self, assessing: bool = True) -> str:
+        """The reason for use next to a 'telt mee' / 'telt niet mee' label, without repeating
+        it: 'voor BTC · sentiment gemiddeld over 2 bronnen'. Without a Claude key nothing is
+        waiting for an assessment, so that is said instead of 'nog niet'."""
+        if self.code == "pending" and not assessing:
+            return "niet beoordeeld (geen Claude-sleutel)"
+        if self.code == "no_impact":
+            return "impact 0: weegt niet mee in het sentiment"
+        text = self.reason_nl
+        if text.startswith("telt mee "):
+            text = text[len("telt mee ") :]
+        return text.replace(", hoogste impact", "")
+
 
 def count_status(
     item: NewsItem,
@@ -410,6 +471,12 @@ class NewsGroup:
     @property
     def others(self) -> list[NewsItem]:
         return [it for it in self.items if it is not self.lead]
+
+    @property
+    def anchor(self) -> str:
+        """A stable id for the fact on the page ('feit-1a2b3c4d5e'), so the coin cards can link
+        to it."""
+        return fact_anchor(self.key)
 
     @property
     def assessed(self) -> bool:
@@ -457,6 +524,10 @@ class NewsGroup:
         return CountStatus(True, "counted", reason, coins)
 
 
+def fact_anchor(key: str) -> str:
+    return "feit-" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:10]
+
+
 def group_items(items: list[NewsItem]) -> list[NewsGroup]:
     """Fold a newest-first list of articles into one group per news fact, newest fact first."""
     groups: dict[str, list[NewsItem]] = {}
@@ -481,6 +552,7 @@ def annotate_groups(
     for g in groups:
         for it in g.items:
             it.counting = count_status(it, tracked, now)  # type: ignore[attr-defined]
+            it.lang = text_lang(it.title)  # type: ignore[attr-defined]
         g.status = g.count_status(tracked, now)
         if counted is None or g.status.counts == counted:
             out.append(g)
@@ -772,14 +844,15 @@ class NewsService:
                     self._count_failure(session, skipped, now)
                 if n == 0:
                     break  # Claude returned nothing usable; do not loop forever
-        else:
-            errors.append("ANTHROPIC_API_KEY ontbreekt; nieuws wordt niet beoordeeld")
+        # Without a key nothing is assessed. That is a choice, not a failure of this run: it
+        # is reported as 'assessing': False (and on the page), never as last_error.
         self.last_error = "; ".join(dict.fromkeys(errors)) or None
         self.last_run = datetime.now(UTC)
         return {
             "fetched": len(fetched),
             "inserted": inserted,
             "assessed": assessed,
+            "assessing": self.analyst.available,
             "pending": len(pending_items(session, 1000, since=since)),
             "error": self.last_error,
         }
