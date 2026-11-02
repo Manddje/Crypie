@@ -116,11 +116,15 @@ limieten. Live-modus kun je in het portaal pas kiezen als de omgeving `LIVE_TRAD
 oefenmodus. Dezelfde instellingen zijn er als API: `GET/PUT /api/settings`,
 `DELETE /api/settings[/{key}]`.
 
-**Huidig wachtwoord bij gevoelige wijzigingen.** Wie de modus, de markten, een harde limiet (het hele
-blok Harde limieten), risk-off aan/uit, het gedrag zonder Claude, het Claude-maandbudget of de
-RSS-feeds wijzigt of terugzet, moet in dat blok het veld **Huidig wachtwoord** invullen. Hetzelfde
-geldt voor het resetten van de oefenportefeuille en voor handmatige orders zolang de bot live handelt.
-Andere instellingen (intervallen, modellen, nieuwsbronnen aan/uit) gaan zonder wachtwoord. Bij een
+**Huidig wachtwoord bij gevoelige wijzigingen.** Wie de modus, automatisch handelen aan/uit
+(`TRADING_ENABLED`), de markten, een harde limiet (het hele blok Harde limieten), de exit-controle
+(`EXIT_CHECK_INTERVAL_MIN`), risk-off (aan/uit, het venster ervoor en erna, de agenda en de
+shockpauze), het gedrag zonder Claude, het Claude-maandbudget of de RSS-feeds wijzigt of terugzet, moet
+in dat blok het veld **Huidig wachtwoord** invullen. Hetzelfde geldt voor het resetten van de
+oefenportefeuille en voor handmatige orders zolang de bot live handelt. Andere instellingen (overige
+intervallen, modellen, nieuwsbronnen aan/uit) gaan zonder wachtwoord. De pauzeknop (kill switch) op
+/trading werkt bewust zonder wachtwoord, zodat je de bot altijd snel kunt stilzetten; hervatten na een
+pauze vraagt ook geen wachtwoord. Bij een
 ontbrekend of fout wachtwoord wordt niets opgeslagen en blijven je ingevulde waarden staan; foute
 wachtwoorden tellen mee voor dezelfde wachttijd als het inloggen. Via de API stuur je het mee als
 `"current_password"` in de JSON-body of in de header `X-Current-Password` (handig bij `DELETE`); zonder
@@ -132,12 +136,18 @@ Grenzen bij het opslaan:
 - **Plafonds uit de omgeving**: `MAX_TRADE_EUR_CEILING` (standaard 1000 euro),
   `MAX_EXPOSURE_PCT_CEILING` (100%) en `MAX_TRADES_PER_DAY_CEILING` (50). Het portaal kan ze niet
   zetten of overschrijden; een hogere waarde uit het portaal of de omgeving wordt bij het starten
-  verlaagd tot het plafond (staat in de log). Wil je hoger, verhoog dan het plafond in Coolify of `.env`.
+  verlaagd tot het plafond (staat in de log), en `MIN_TRADE_EUR` zakt zo nodig mee. Wil je hoger,
+  verhoog dan het plafond in Coolify of `.env`. Een plafond van 0 of lager valt met een waarschuwing
+  terug op zijn standaard.
+- Ook alleen via de omgeving begrensd: `AUTH_SESSION_HOURS` op 1-168 en `NEWS_MAX_AGE_HOURS` op hoogstens
+  720 (de bewaartermijn van 30 dagen); een waarde daarbuiten wordt met een waarschuwing aangepast.
 - Maximaal 20 markten, 30 feeds en 200 agendaregels. `NaN` of oneindig in een getalveld wordt geweigerd
   ("geen geldig getal").
-- RSS-feeds moeten `http(s)`-URL's zijn met een publieke domeinnaam: geen IP-adressen, `localhost`,
+- RSS-feeds moeten `https`-URL's zijn met een publieke domeinnaam: geen IP-adressen, `localhost`,
   namen zonder punt of op `.local`, `.internal`, `.lan`, `.home.arpa` of `.intranet`, en geen
-  `gebruiker:wachtwoord@` in de URL.
+  `gebruiker:wachtwoord@` in de URL. Een eerder opgeslagen `http`-feed (of een uit de omgeving) blijft
+  werken met één waarschuwing in de log, maar het blok Nieuws kan pas weer worden opgeslagen als je die
+  feed op `https://` zet.
 - Elke wijziging komt met oude en nieuwe waarde in de log (niveau INFO).
 
 ## Strategie en indicatoren
@@ -165,17 +175,23 @@ de pagina.
 
 Controles bij opslaan of toepassen (op /strategy, via `PUT /api/strategy` en bij een evaluatievoorstel):
 
-- een strategie moet een `stop_loss_pct` of een `trailing_stop_pct` hebben;
+- een strategie moet vanaf de instap een stop hebben: een `stop_loss_pct`, of een `trailing_stop_pct`
+  zonder `trailing_start_pct` (een trailing stop die pas na een stijging ingaat telt niet). Een eerder
+  opgeslagen strategie zonder zo'n stop blijft laden;
 - harde koopvoorwaarden mogen niet altijd waar zijn (zoals `close > 0` of `rsi14 <= 100`); als zacht
   filter mag dat wel;
 - indicatorperiodes zijn begrensd op 1000 candles (RSI 200, MACD-traag 500) en de totale opwarmtijd op
   1000. Een live cyclus haalt genoeg candles op voor die opwarmtijd (minstens 300, hoogstens 1440).
 
 Een voorstel van Claude of van de evaluatie toont eerst een overzicht van wat er verandert ten opzichte van
-de actieve strategie; een voorstel dat de controles niet haalt krijgt geen knop om toe te passen. Is de
-opgeslagen strategie ongeldig geworden (bijvoorbeeld door strengere grenzen na een update), dan handelt de
-bot met de standaardstrategie, logt dat als fout en tonen /strategy en het overzicht een waarschuwing. Sla
-een geldige strategie op om dat op te heffen.
+de actieve strategie; een voorstel dat de controles niet haalt krijgt geen knop om toe te passen. Een
+evaluatievoorstel kan bovendien niet met één klik (op /trading of via de API) worden toegepast als het de
+stop vanaf de instap ruimer maakt of weghaalt, of als de backtest een live koopsignaal op meer dan 50% van
+de candles laat zien; de kaart zegt dan waarom. Zo'n strategie kun je wel zelf opslaan op /strategy. Is de
+opgeslagen strategie ongeldig geworden (bijvoorbeeld door strengere grenzen na een update), dan opent de
+bot geen nieuwe posities (journaal: "opgeslagen strategie ongeldig"); verkopen, stop-loss, trailing stop
+en take-profit blijven werken, met de regels van de standaardstrategie. Dat staat als fout in de log en
+/strategy en het overzicht tonen een waarschuwing. Sla een geldige strategie op om dat op te heffen.
 
 Met een open positie gaat een verkoopsignaal voor op een gelijktijdig koopsignaal. De RSI is 50 op een
 volkomen vlakke koers en negeert bewegingen kleiner dan 0,01%.
@@ -200,10 +216,12 @@ een Nederlandse samenvatting, plus een `event_key` voor het nieuwsfeit (bijvoorb
 berichten van verschillende bronnen over hetzelfde feit bij elkaar horen; Claude krijgt de sleutels van de laatste
 48 uur mee om ze te hergebruiken. Per coin wordt daaruit een **marktsentiment** berekend **per nieuwsfeit** (niet
 per bericht: tien bronnen over één hack wegen als één hack): gewogen op impact en met vervaltijd per horizon
-(6 uur, 36 uur, 1 week halfwaardetijd). Binnen een nieuwsfeit telt **één stem per nieuwsbron** (domein), en
-"n bronnen" telt verschillende bronnen, niet berichten. Een feit dat maar één bron meldt telt hoogstens als
-impact 'middel'; marktbreed nieuws ('alle coins') telt pas mee als een tweede bron het meldt. Het getoonde
-bericht per feit is de eerste melding. Dit sentiment is de input voor de handelsbeslissing in stap 4. Pagina
+(6 uur, 36 uur, 1 week halfwaardetijd). Binnen een nieuwsfeit telt **één stem per nieuwsbron**, en
+"n bronnen" telt verschillende bronnen, niet berichten. Bij RSS is de bron de site van de feed zelf (niet
+de site waar een bericht naar linkt); elders de uitgever of het domein van de link, waarbij uitgevernaam en
+site als één bron tellen. Een feit dat maar één bron meldt telt hoogstens als impact 'middel'; marktbreed
+nieuws ('alle coins') telt pas mee als een tweede bron het meldt. Het getoonde bericht per feit is het
+eerst opgeslagen bericht. Dit sentiment is de input voor de handelsbeslissing in stap 4. Pagina
 **/news** toont alles, met per nieuwsfeit of het nu **meetelt** in dat sentiment en zo niet waarom (nog niet
 beoordeeld, niet koersrelevant, ouder dan 48 uur, over andere coins, impact 0, marktbreed nieuws uit één
 bron); de knoppen *Telt mee* / *Telt niet mee* filteren daarop (`?telt=ja|nee`). API: `GET /api/news`
@@ -212,20 +230,29 @@ bron); de knoppen *Telt mee* / *Telt niet mee* filteren daarop (`?telt=ja|nee`).
 
 Nieuws is onbetrouwbare invoer, dus:
 
-- Feeds moeten publieke `http(s)`-URL's met een hostnaam zijn (geen IP-adres, geen `localhost` of interne
-  namen, geen `gebruiker:wachtwoord@`). Feeds die doorsturen naar `http`, naar een privé-adres of vaker
-  dan 3 keer, worden overgeslagen. Per verzoek maximaal 5 MB en 30 seconden, maximaal 200 berichten per
-  antwoord. De container moet zelf DNS kunnen opvragen; met alleen een HTTP-proxy en geen lokale DNS
-  weigert de controle alle feeds.
+- Feeds moeten publieke `https`-URL's met een hostnaam zijn (geen IP-adres, geen `localhost` of interne
+  namen, geen `gebruiker:wachtwoord@`; zie [Instellingen](#instellingen)). Een feed op een IP-adres, een
+  naam zonder punt of een interne of Docker-host (bijvoorbeeld een eigen RSSHub op
+  `http://rsshub:1200`) wordt bij het ophalen overgeslagen, met alleen een waarschuwing in de log. Feeds
+  die doorsturen naar `http`, naar een privé-adres of vaker dan 3 keer, worden ook overgeslagen. Per
+  verzoek maximaal 5 MB en 30 seconden, maximaal 200 berichten per antwoord. De verbinding gaat naar het
+  IP-adres dat gecontroleerd is. Daardoor negeert de nieuwsophaler `HTTP_PROXY`/`HTTPS_PROXY`: de
+  container moet zelf DNS kunnen opvragen en rechtstreeks naar buiten kunnen, anders komt er geen nieuws
+  binnen.
 - Berichten zonder `http(s)`-link worden niet opgeslagen; links op /news openen met
-  `rel="noopener noreferrer"`. Een publicatiedatum in de toekomst wordt de ophaaltijd.
+  `rel="noopener noreferrer"`. Een publicatiedatum in de toekomst wordt de ophaaltijd; zulke berichten die
+  al in de database stonden worden bij het starten rechtgezet en tellen tot dan nergens mee.
 - In de beslisprompt staan geen URL's of ruwe titels; nieuwsteksten staan in een apart afgebakend blok dat
   Claude als onbetrouwbaar behandelt.
-- Berichten die Claude 3 keer niet kan beoordelen worden overgeslagen ("Beoordeling door Claude mislukt").
+- Berichten die Claude 3 keer niet kan beoordelen worden overgeslagen ("Beoordeling door Claude mislukt");
+  een time-out telt ook als mislukte poging.
 - Fear & Greed wordt genegeerd als de waarde ouder is dan 48 uur, het ophalen mislukt of de bron uit
   staat. Het label volgt uit de waarde (0-24 Extreme Fear, 25-46 Fear, 47-54 Neutral, 55-75 Greed,
   76-100 Extreme Greed).
-- Bewaartermijn: nieuws 30 dagen, Claude-gebruik 400 dagen.
+- Bewaartermijn: nieuws 30 dagen, Claude-gebruik 400 dagen (opgeruimd bij elke nieuwsronde).
+- Na de update krijgen oudere RSS-berichten bij de volgende nieuwsronde de site van hun feed. Delen twee
+  feeds dezelfde titel, dan blijven hun oude berichten onder die titel tellen tot ze uit het nieuwsvenster
+  vallen.
 
 ## Handelen
 
@@ -238,7 +265,11 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    als `TRADING_ENABLED` uit staat, de kill switch aan staat of de markt uit `MARKETS` is gehaald; de kill
    switch stopt alleen nieuwe aankopen. Bitvavo kent geen stop-orders aan de beurskant: de bescherming
    werkt alleen zolang de app draait, en met een interval van 2 minuten kan een snelle crash ruim voorbij
-   de stop gaan.
+   de stop gaan. Lukt een verkoop niet (geen coins op het account, door Bitvavo geweigerd, of onuitgevoerd
+   geannuleerd), dan blijft de positie open met zijn stop en probeert de volgende controle het opnieuw.
+   Zo'n fout komt hoogstens eens per 60 minuten per positie in het journaal, en de positie staat dan met de
+   reden in de rode melding over onbeschermde posities. Daar staan ook posities zonder koers (bijvoorbeeld
+   een geschrapte markt) en posities die vastzitten op een order met onbekende uitkomst.
 2. **Niets te beslissen?** Geen buy-signaal zonder positie, geen sell-signaal met positie en geen
    zwaar positief of negatief nieuws (impact-gewogen score ≥ 0,4 of ≤ -0,3 met minstens één bericht van
    hoge impact): dan wordt alleen een `hold` gelogd en wordt Claude niet aangeroepen (bespaart kosten).
@@ -269,7 +300,8 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    FOMC-rentebesluiten en Amerikaanse CPI-cijfers t/m 2027, regels als `2026-12-09 19:00 Omschrijving` in UTC)
    koopt de bot niet van `RISK_OFF_BEFORE_MIN` (60) minuten ervoor tot `RISK_OFF_AFTER_MIN` (120) minuten erna.
    Na een nieuwsfeit met impact 3 en sentiment ≤ -0,5 (hack, beurs in problemen) pauzeert kopen
-   `SHOCK_PAUSE_HOURS` (6) uur voor de geraakte coins, mits minstens twee bronnen het melden. Verkopen,
+   `SHOCK_PAUSE_HOURS` (6) uur voor de geraakte coins, mits minstens twee bronnen het melden (één bron die
+   een hack meldt pauzeert dus niet; zo kan één vijandige feed niet alle aankopen stilzetten). Verkopen,
    stop-loss en take-profit blijven werken; de
    dipbewaking wordt niet gewapend. Claude ziet dit als `market_events` (actieve risk-off en de komende 72 uur);
    /trading toont de agenda en een actieve risk-off. Alles instelbaar in het portaal.
@@ -284,7 +316,10 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
 4. **Harde limieten** (`app/trading/risk.py`), in code afgedwongen: `MAX_TRADE_EUR`, `MAX_EXPOSURE_PCT`,
    `DAILY_LOSS_LIMIT_PCT`, `MAX_TRADES_PER_DAY`, `COOLDOWN_MIN_AFTER_STOP`, plus een kill switch
    (pauzeren op `/trading`, blokkeert alleen nieuwe aankopen). De daglimiet telt het gerealiseerde
-   resultaat van vandaag plus het ongerealiseerde resultaat van open posities. Met `LIVE_CAPITAL_EUR`
+   resultaat van vandaag plus alleen de ongerealiseerde verliezen van open posities; een ongerealiseerde
+   winst verbergt dus geen gerealiseerd verlies. `MAX_TRADES_PER_DAY` telt elke gevulde of nog
+   onafgehandelde order van vandaag, ook handmatige orders en verkopen door stop-loss of take-profit; bij
+   de limiet koopt de bot niet meer, verkopen blijft altijd mogelijk. Met `LIVE_CAPITAL_EUR`
    (standaard 0 = het hele account) rekenen blootstelling en daglimiet live met dat bedrag en alleen met
    de posities van de bot zelf. Na een order die Bitvavo of de oefenportefeuille weigert, vraagt de bot
    60 minuten geen advies aan Claude voor die markt. Zonder Claude (budget op, geen key):
@@ -306,7 +341,9 @@ De actieve strategie bepaalt de regels (indicatoren, condities, stop-loss, trail
 markt uit `MARKETS` toegepast; het `market`-veld van de strategie is alleen de standaard voor backtests.
 
 **Handmatige orders** (overzicht en `POST /api/orders`) volgen dezelfde regels als de bot: de markt moet
-in `MARKETS` staan en het bedrag ligt tussen 5 euro en het maximum per order. Een aankoop wordt
+in `MARKETS` staan, een aankoop ligt tussen 5 euro en het maximum per order, en handmatige orders tellen
+mee voor `MAX_TRADES_PER_DAY`. Een verkoop mag groter zijn dan het maximum per order, zodat je een hele
+positie in één keer kunt sluiten. Een aankoop wordt
 tegengehouden door de kill switch en de harde limieten, opent een beschermde positie (één per markt) en
 kan niet als er al een positie of een onafgehandelde order in die markt is. Een verkoop verkleint of
 sluit de positie van de bot in die markt. Zolang de bot live handelt vraagt een handmatige order om je
@@ -318,8 +355,10 @@ onafgehandelde orders worden bij het starten en vóór elke exit-controle afgest
 Gedeeltelijke vullingen worden als zodanig geboekt; de rest blijft open met zijn stop. Live verkopen gebruiken
 de hoeveelheid coins, afgerond naar beneden op de `quantityDecimals` van de markt en begrensd op het
 beschikbare saldo. Een herstart start niet meer meteen een volledige cyclus: de taken gaan verder op hun
-volgende tijdstip (bewaard in de `settings`-tabel). Draai één instantie (`--workers 1`); de database
-voorkomt bovendien dat twee instanties dezelfde markt kopen.
+volgende tijdstip (bewaard in de `settings`-tabel). Aankopen in verschillende markten (cyclus,
+dipbewaking en handmatig) worden één voor één gecontroleerd en geboekt, zodat ze samen de limieten niet
+kunnen overschrijden. Draai één instantie (`--workers 1`); de database voorkomt bovendien dat twee
+instanties dezelfde markt kopen.
 
 **Database**: er is geen handmatige migratie nodig. Bij het starten worden nieuwe kolommen en indexen
 toegevoegd, en op Postgres worden te korte `VARCHAR`-kolommen verbreed. Staan er in oude data twee open
@@ -365,8 +404,11 @@ en herstart.
 1. Draai minimaal enkele weken in `TRADING_MODE=paper` en bekijk de evaluaties.
 2. Zorg dat het account beveiligd is: login met authenticator, `SESSION_SECRET` gezet, eigen
    https-domein (zie [Beveiliging](#beveiliging)). Live kan alleen met `AUTH_ENABLED=true`.
-3. Maak in Bitvavo een API-key met alleen **trade**-rechten (geen opname) en een IP-whitelist. Gebruik
-   bij voorkeur een apart (sub)account, of zet `LIVE_CAPITAL_EUR` op het bedrag dat de bot mag beheren.
+3. Maak in Bitvavo een API-key met alleen **view**- en **trade**-rechten (nooit opnemen) en een
+   IP-whitelist, en zet daarna `BITVAVO_KEY_RESTRICTED=true`. Gebruik bij voorkeur een apart
+   (sub)account, of zet `LIVE_CAPITAL_EUR` op het bedrag dat de bot mag beheren. In live-modus toont het
+   overzicht een herinnering zolang `LIVE_CAPITAL_EUR` 0 is of `BITVAVO_KEY_RESTRICTED` niet op `true`
+   staat; de app controleert de rechten van de key zelf niet.
 4. Zet in de omgeving de keys en `LIVE_TRADING_ACK=true`, en kies daarna op **Instellingen** de modus
    Live, met je huidige wachtwoord (of zet `TRADING_MODE=live` in de omgeving). Zonder die bevestiging
    weigert de app live-modus en draait hij in oefenmodus. Begin met een laag maximum per order.
@@ -399,13 +441,18 @@ voor), en zet `LIVE_TRADING_ACK` en een trade-key pas als het account beveiligd 
 
 **Account** (`/account`), steeds met je huidige wachtwoord ter bevestiging:
 
-- **Wachtwoord wijzigen** en **Nieuwe herstelcodes**: andere browsers worden uitgelogd; deze browser
-  blijft ingelogd met de oorspronkelijke verlooptijd.
+- **Wachtwoord wijzigen**: andere browsers worden uitgelogd; deze browser blijft ingelogd met de
+  oorspronkelijke verlooptijd.
+- **Nieuwe herstelcodes**: wachtwoord plus een huidige code uit je authenticator of een herstelcode.
+  Andere browsers worden uitgelogd; deze browser blijft ingelogd.
 - **Authenticator opnieuw instellen**: wachtwoord plus een huidige code of een herstelcode, daarna koppel
   je binnen 5 minuten de nieuwe app op `/account/mfa`. Andere browsers worden uitgelogd. *Annuleren* gaat
   terug naar /account.
 - **Overal uitloggen**: beëindigt alle sessies, ook die van deze browser. *Uitloggen* in de menubalk logt
   alleen deze browser uit.
+
+/account toont ook hoeveel foute codes er vóór je laatste login zijn ingevuld. Staat daar een getal dat
+je niet herkent, dan kent iemand anders waarschijnlijk je wachtwoord: wijzig het.
 
 Buitengesloten? Gebruik de commando's in de container (Coolify: Terminal bij de app), zie
 [Beveiliging](#beveiliging). Na `reset-mfa` of `create-account` kun je de authenticator alleen koppelen
@@ -413,9 +460,11 @@ met de eenmalige code die het commando toont (1 uur geldig). Een bestaand accoun
 (bijvoorbeeld een setup die langer dan 10 minuten geleden is afgebroken) krijgt zo'n code met
 `python -m app.auth reset-mfa`.
 
-Omgevingsvariabelen: `AUTH_SESSION_HOURS` (standaard 24), `SESSION_SECRET` (zie
+Omgevingsvariabelen: `AUTH_SESSION_HOURS` (standaard 24, 1-168), `SESSION_SECRET` (zie
 [Beveiliging](#beveiliging)), `SETUP_TOKEN` (optioneel vast setup-token) en `AUTH_ENABLED=false` om de
-login lokaal uit te zetten (dan kan live handelen niet).
+login lokaal uit te zetten. Dan toont elke pagina een waarschuwing: iedereen die het adres kan bereiken
+kan instellingen wijzigen en in oefenmodus handelen. Live handelen kan dan niet; open live posities
+blijven wel beschermd zolang de sleutel en `LIVE_TRADING_ACK` er staan.
 
 Technisch: wachtwoord (PBKDF2 met 600.000 iteraties; een oudere hash wordt bij het inloggen bijgewerkt,
 een hash onder 100.000 iteraties of een onversleuteld wachtwoord werkt niet meer), TOTP-geheim en gehashte herstelcodes staan in de tabel `auth_users`. Het TOTP-geheim staat
@@ -438,7 +487,8 @@ pas je aan op **Instellingen** (het budget met je huidige wachtwoord).
   Opus, $0,35 voor een evaluatie). Daardoor stopt het budget net vóór 100% in plaats van erover te gaan.
   Mislukte aanroepen die waarschijnlijk wel betaald zijn (ongeldig of afgebroken antwoord, time-out) tellen
   mee tegen de geschatte kosten.
-- Een aanroep heeft een time-out van 60 seconden en 1 nieuwe poging (de strategie-assistent 180 seconden).
+- Een aanroep heeft een time-out van 60 seconden en 1 nieuwe poging (de nieuwsbeoordeling en de
+  strategie-assistent 180 seconden).
 - `GET /api/claude/usage` toont het gebruik per doel (`by_purpose`), de plafonds (`shares`) en wat
   gereserveerd is voor lopende aanroepen (`reserved_usd`).
 
@@ -483,7 +533,8 @@ Crypie handelt met echt geld en draait op een publiek domein, dus het web-deel i
   wegen bij een tweede bron, nieuws en vrije tekst afgebakend in de prompt (zie [Nieuws](#nieuws)). De
   CryptoPanic-token en de volledige verzoekregels van httpx komen niet meer in de log.
 - **Waarschuwingen op het overzicht**: bij een ontbrekende of te korte `SESSION_SECRET`, bij onbeschermde
-  posities en bij een ongeldige opgeslagen strategie.
+  posities, bij een ongeldige opgeslagen strategie, met `AUTH_ENABLED=false` (op elke pagina) en in
+  live-modus zolang `LIVE_CAPITAL_EUR` 0 is of `BITVAVO_KEY_RESTRICTED` niet op `true` staat.
 
 ### Checklist voor de eigenaar
 
@@ -492,16 +543,24 @@ Crypie handelt met echt geld en draait op een publiek domein, dus het web-deel i
    `SESSION_SECRET` logt iedereen uit en maakt openstaande herstelcodes en koppelcodes ongeldig (TOTP blijft
    werken; maak daarna nieuwe herstelcodes).
 2. Draai Crypie op een eigen https-domein in plaats van een gegenereerde `*.sslip.io`-naam.
-3. Zet zo nodig `FORWARDED_ALLOW_IPS` op het netwerk van Coolify's Traefik (standaard loopback en de
-   privé-reeksen), nooit op `*`: anders kan een bezoeker zijn eigen IP-adres kiezen en de wachttijd
-   omzeilen. Staat Cloudflare ervoor, voeg dan de IP-reeksen van Cloudflare toe, anders delen alle bezoekers
-   één wachttijd. Het client-IP is het meest rechtse adres in `X-Forwarded-For` dat niet in de lijst staat.
-4. Haal bij de eerste deploy de setup-link uit de log en maak het account meteen aan.
-5. Vervang je CryptoPanic-token bij CryptoPanic: eerdere versies schreven hem leesbaar in de log.
-6. Gebruik een Bitvavo-key met alleen de nodige rechten (view, en trade pas bij live; nooit opnemen) en
-   een IP-whitelist op het serveradres.
-7. Optioneel: zet `LIVE_CAPITAL_EUR`, en laat de bot live werken op een apart Bitvavo-(sub)account.
-8. In GitHub: zet de workflow-rechten van Actions op 'Read' en bescherm de `main`-branch.
+3. Zet zo nodig `FORWARDED_ALLOW_IPS` op het netwerk van Coolify's Traefik (standaard loopback, de
+   privé-reeksen en IPv6 `fc00::/7`), nooit op `*`: anders kan een bezoeker zijn eigen IP-adres kiezen en
+   de wachttijd omzeilen. Staat Cloudflare ervoor, voeg dan de IP-reeksen van Cloudflare toe, anders delen
+   alle bezoekers één wachttijd. Het client-IP is het meest rechtse adres in `X-Forwarded-For` dat niet in
+   de lijst staat. Stuurt een proxy die niet in de lijst staat `X-Forwarded-Proto: https`, dan staat er
+   één waarschuwing in de log; controleer dan de lijst.
+4. Houd de `readTimeout` van Traefik's entrypoint kort, of zet buffering aan met `maxRequestBodyBytes`:
+   uvicorn heeft geen eigen time-out op trage uploads, en 64 trage verbindingen laten `/health` en het
+   overzicht een 503 geven.
+5. Haal bij de eerste deploy de setup-link uit de log en maak het account meteen aan.
+6. Vervang je CryptoPanic-token bij CryptoPanic: eerdere versies schreven hem leesbaar in de log. Wis ook
+   de oude logs in Coolify.
+7. Gebruik een Bitvavo-key met alleen de nodige rechten (view, en trade pas bij live; nooit opnemen) en
+   een IP-whitelist op het serveradres, en zet dan `BITVAVO_KEY_RESTRICTED=true`.
+8. Optioneel: zet `LIVE_CAPITAL_EUR`, en laat de bot live werken op een apart Bitvavo-(sub)account.
+9. Controleer na de update je opgeslagen waarden: wat boven een nieuw plafond lag is verlaagd, en een
+   `http`-feed moet `https` worden voordat je het blok Nieuws weer kunt opslaan.
+10. In GitHub: zet de workflow-rechten van Actions op 'Read' en bescherm de `main`-branch.
 
 ### Commando's op de server
 
@@ -527,8 +586,9 @@ als argument mee (het zou in de shell-geschiedenis en de proceslijst terechtkome
 | `SESSION_SECRET` | leeg | Sleutel voor cookies en herstelcodes; zet minstens 32 tekens |
 | `SETUP_TOKEN` | leeg | Vast setup-token; leeg = bij elke start een nieuw token in de log |
 | `TRUSTED_ORIGINS` | leeg | Extra origins die mogen posten (komma-gescheiden), bijvoorbeeld `https://crypie.example.nl`; handig als de proxy het https-schema niet doorgeeft |
-| `API_DOCS_ENABLED` | `false` | `/docs`, `/redoc` en `/openapi.json` aan (ook dan achter de login) |
-| `FORWARDED_ALLOW_IPS` | loopback en privé-reeksen | Proxies die `X-Forwarded-For`/`-Proto` mogen zetten |
+| `API_DOCS_ENABLED` | `false` | `/docs`, `/redoc` en `/openapi.json` aan (ook dan achter de login); Swagger UI en ReDoc komen dan in een vaste versie met SRI-hash van jsDelivr |
+| `FORWARDED_ALLOW_IPS` | loopback, privé-reeksen en `fc00::/7` | Proxies die `X-Forwarded-For`/`-Proto` mogen zetten |
+| `BITVAVO_KEY_RESTRICTED` | `false` | Zet op `true` als de Bitvavo-key alleen view/trade-rechten en een IP-whitelist heeft; haalt de herinnering in live-modus weg (wordt niet gecontroleerd) |
 | `EXIT_CHECK_INTERVAL_MIN` | 2 | Minuten tussen controles van stop-loss en take-profit (1-60; ook in het portaal) |
 | `LIVE_CAPITAL_EUR` | 0 | Bedrag dat de bot live beheert; 0 = het hele account (ook in het portaal) |
 | `MAX_TRADE_EUR_CEILING` | 1000 | Plafond voor het maximum per order, alleen via de omgeving |
