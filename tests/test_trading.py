@@ -553,7 +553,8 @@ async def test_fallback_hold_when_claude_unavailable(session):
     engine = make_engine_(session, {"BTC-EUR": candles(BUY_SERIES)}, {"BTC-EUR": 12.0}, decider)
     (result,) = await engine.run_cycle(session)
     assert result.action == "hold" and result.source == "rules" and not result.executed
-    assert "ANTHROPIC_API_KEY" in engine.last_error
+    assert engine.last_error == "er is geen Claude-sleutel"
+    assert "Claude niet beschikbaar: er is geen Claude-sleutel; niets gedaan" in result.reason
 
 
 async def test_fallback_indicators_follows_signal_when_budget_exhausted(session):

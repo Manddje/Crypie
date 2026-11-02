@@ -1256,7 +1256,7 @@ class TradingEngine:
                 self.last_error = f"Claude-beslissing mislukt: {exc}"
                 log.exception("decision failed")
         else:
-            self.last_error = "ANTHROPIC_API_KEY ontbreekt"
+            self.last_error = "er is geen Claude-sleutel"
         return self._fallback(signal, position, sentiment)
 
     def _fallback(
@@ -1265,7 +1265,7 @@ class TradingEngine:
         """What to do without Claude. A strategy sell signal on an open position is always
         followed (in both modes); ``indicators`` also follows a buy signal, but with half the
         budget and not against strongly negative news. Risk-off is enforced afterwards."""
-        why = f"Claude niet beschikbaar ({self.last_error})"
+        why = f"Claude niet beschikbaar: {self.last_error}"
         if signal == "sell" and position is not None:
             return (
                 "sell",

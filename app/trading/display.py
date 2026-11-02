@@ -205,6 +205,11 @@ def _explain(d: Decision, checks: dict[str, list[dict]]) -> tuple[str | None, st
         return text, None
     if d.source != "rules":
         return text, None
+    # Decisions stored before the wording changed.
+    text = text.replace(
+        "Claude niet beschikbaar (ANTHROPIC_API_KEY ontbreekt)",
+        "Claude niet beschikbaar: er is geen Claude-sleutel",
+    )
     sentence = _signal_sentence(d, checks)
     if sentence and text.startswith(sentence):
         text = text[len(sentence) :].lstrip()
