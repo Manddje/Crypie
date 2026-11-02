@@ -8,6 +8,7 @@
 </div>
 
 <div class="stack">
+  {% if error %}{{ ui.notice("error", error) }}{% endif %}
   {% if status.last_error %}{{ ui.notice("error", "Laatste fout: " ~ status.last_error) }}{% endif %}
   {% if not status.claude_available %}{{ ui.notice("info", "De Claude-sleutel (ANTHROPIC_API_KEY) ontbreekt. Bij een signaal doet de bot nu: " ~ ("afwachten" if settings.claude_unavailable_mode == "hold" else "de indicatoren volgen") ~ ".") }}{% endif %}
 
@@ -30,7 +31,7 @@
         {% if status.paused %}
         <form class="inline" method="post" action="/trading/action"><button class="btn btn-primary" name="action" value="resume">Hervatten</button></form>
         {% else %}
-        <form class="inline" method="post" action="/trading/action" onsubmit="return confirm('De bot pauzeren? Er wordt dan niets meer gekocht totdat je hervat.')"><button class="btn btn-danger" name="action" value="pause">Pauzeren</button></form>
+        <form class="inline" method="post" action="/trading/action" data-confirm="De bot pauzeren? Er wordt dan niets meer gekocht totdat je hervat."><button class="btn btn-danger" name="action" value="pause">Pauzeren</button></form>
         {% endif %}
         <form class="inline" method="post" action="/trading/action"><button class="btn" name="action" value="cycle">Nu een cyclus draaien</button></form>
       </div>
@@ -254,8 +255,16 @@
         {% if pb.current %}{{ ui.stat("Huidige strategie", pb.current.return_pct|pct, pb.current.trades ~ " trades", "pos" if pb.current.return_pct >= 0 else "neg") }}{% endif %}
       </div>
       {% endif %}
+      {% set proposed_bt = ev.proposal_backtest.get("proposed") if ev.proposal_backtest is mapping else none %}
+      {% set live_pct = proposed_bt.get("live_buy_signal_pct") if proposed_bt is mapping else none %}
+      {% if live_pct is not none %}<p class="small muted" style="margin-top: 8px">Live koopsignaal op {{ live_pct|pct(1, false) }} van de candles{% if live_pct > 20 %} <span class="neg">(erg vaak: bijna elke cyclus een Claude-aanroep)</span>{% endif %}.</p>{% endif %}
       {% if not ev.applied %}
-      <form class="inline" method="post" action="/trading/action" style="display: block; margin-top: 14px" onsubmit="return confirm('Dit voorstel vervangt de huidige strategie. Doorgaan?')"><button class="btn btn-primary btn-sm" name="action" value="apply:{{ ev.id }}">Voorstel toepassen als actieve strategie</button></form>
+      {{ ui.strategy_diff(ev.diff, "Wat er verandert als je dit voorstel toepast") }}
+      {% if ev.problems %}
+      {{ ui.notice("warn", "Dit voorstel kan niet worden toegepast: " ~ ev.problems|join("; ") ~ ".") }}
+      {% else %}
+      <form class="inline" method="post" action="/trading/action" style="display: block; margin-top: 14px" data-confirm="Dit voorstel vervangt de huidige strategie. Bekijk de wijzigingen hierboven. Doorgaan?"><button class="btn btn-primary btn-sm" name="action" value="apply:{{ ev.id }}">Voorstel toepassen als actieve strategie</button></form>
+      {% endif %}
       {% endif %}
       {% endif %}
     </article>

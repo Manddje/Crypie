@@ -205,7 +205,7 @@
     <section class="card">
       <div class="card-header"><h2>Handmatige order</h2></div>
       <p class="card-desc">Koop of verkoop direct tegen de marktprijs{% if settings.trading_mode == "paper" %} met oefengeld{% else %}. <strong>Dit plaatst een echte order op Bitvavo.</strong>{% endif %}</p>
-      <form method="post" action="/orders" onsubmit="return confirm('Weet je zeker dat je deze order wilt plaatsen?')">
+      <form method="post" action="/orders" data-confirm="Weet je zeker dat je deze order wilt plaatsen?">
         <div class="form-row">
           <label>Markt
             <select name="market">{% for m in settings.markets %}<option>{{ m }}</option>{% endfor %}</select>

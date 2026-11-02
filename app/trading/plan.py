@@ -50,11 +50,15 @@ PLAN_FIELDS: dict[str, tuple[str, str, str]] = {
 }
 
 
+# Maximum length per field; the form and the API share these.
+PLAN_MAX_LENGTH: dict[str, int] = {"goal": 2000, "rules": 4000, "avoid": 4000, "lessons": 4000}
+
+
 class TradingPlan(BaseModel):
-    goal: str = Field(default="", max_length=2000)
-    rules: str = Field(default="", max_length=4000)
-    avoid: str = Field(default="", max_length=4000)
-    lessons: str = Field(default="", max_length=4000)
+    goal: str = Field(default="", max_length=PLAN_MAX_LENGTH["goal"])
+    rules: str = Field(default="", max_length=PLAN_MAX_LENGTH["rules"])
+    avoid: str = Field(default="", max_length=PLAN_MAX_LENGTH["avoid"])
+    lessons: str = Field(default="", max_length=PLAN_MAX_LENGTH["lessons"])
     updated_at: datetime | None = None
 
     def is_empty(self) -> bool:

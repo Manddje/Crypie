@@ -22,7 +22,7 @@
   {% for g in groups %}
   {% set changed = g.fields|selectattr("overridden")|list|length %}
   <section class="card" id="{{ g.key }}">
-    <form method="post" action="/settings#{{ g.key }}" {% if g.key == "trading" %}data-current-mode="{{ settings.trading_mode }}" onsubmit="return confirmLive(this)"{% endif %}>
+    <form method="post" action="/settings#{{ g.key }}" {% if g.key == "trading" %}data-current-mode="{{ settings.trading_mode }}" data-confirm-live="Overschakelen naar LIVE? Vanaf de volgende cyclus plaatst de bot echte orders op Bitvavo met echt geld."{% endif %}>
       <input type="hidden" name="group" value="{{ g.key }}">
       <div class="card-header">
         <h2>{{ g.title }}</h2>
@@ -38,6 +38,7 @@
             <label for="{{ fid }}">{{ f.label }}</label>
             {% if f.help %}<div class="setting-help">{{ f.help }}</div>{% endif %}
             {% if f.overridden %}<div class="setting-default">Standaard uit omgeving: <strong>{{ f.default_text }}</strong> · {{ f.env_name }}</div>{% endif %}
+            {% if f.ceiling is not none %}<div class="setting-default">Plafond uit de omgeving: <strong>{{ f.ceiling|num(0) }}{{ " " ~ f.unit if f.unit else "" }}</strong> · {{ f.env_name }}_CEILING</div>{% endif %}
             {% if f.key in errors %}<div class="setting-error" role="alert">{{ errors[f.key] }}</div>{% endif %}
           </div>
           <div class="setting-control">
@@ -66,9 +67,9 @@
                 {% for value, label in f.choices %}<option value="{{ value }}" {% if f.value == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
               </select>
             {% elif f.kind == "model" %}
-              <input type="text" id="{{ fid }}" name="{{ f.key }}" value="{{ f.text }}" list="claude-models" spellcheck="false" autocomplete="off">
+              <input type="text" id="{{ fid }}" name="{{ f.key }}" value="{{ f.text }}" list="claude-models" spellcheck="false" autocomplete="off" maxlength="100">
             {% elif f.kind in ("lines", "events") %}
-              <textarea id="{{ fid }}" name="{{ f.key }}" rows="{{ 8 if f.kind == 'events' else 4 }}" spellcheck="false">{{ f.text }}</textarea>
+              <textarea id="{{ fid }}" name="{{ f.key }}" rows="{{ 8 if f.kind == 'events' else 4 }}" spellcheck="false" maxlength="20000">{{ f.text }}</textarea>
             {% elif f.kind in ("int", "float") %}
               <div class="unit-input">
                 {% if f.unit in ("€", "$") %}<span class="unit">{{ f.unit }}</span>{% endif %}
@@ -78,7 +79,7 @@
                 {% if f.unit and f.unit not in ("€", "$") %}<span class="unit">{{ f.unit }}</span>{% endif %}
               </div>
             {% else %}
-              <input type="text" id="{{ fid }}" name="{{ f.key }}" value="{{ f.text }}" spellcheck="false" {% if f.kind == "markets" %}placeholder="BTC-EUR, ETH-EUR" style="text-transform: uppercase"{% endif %}>
+              <input type="text" id="{{ fid }}" name="{{ f.key }}" value="{{ f.text }}" spellcheck="false" maxlength="2000" {% if f.kind == "markets" %}placeholder="BTC-EUR, ETH-EUR" style="text-transform: uppercase"{% endif %}>
             {% endif %}
           </div>
         </div>
@@ -87,7 +88,7 @@
 
       <div class="actions" style="margin-top: 18px">
         <button class="btn btn-primary" type="submit" name="action" value="save">Opslaan</button>
-        <button class="btn" type="submit" name="action" value="reset" {% if not changed %}disabled{% endif %} formnovalidate onclick="return confirm('Alle instellingen in dit blok terugzetten naar de waarden uit de serveromgeving?')">Standaard herstellen</button>
+        <button class="btn" type="submit" name="action" value="reset" {% if not changed %}disabled{% endif %} formnovalidate data-confirm="Alle instellingen in dit blok terugzetten naar de waarden uit de serveromgeving?">Standaard herstellen</button>
       </div>
     </form>
   </section>
@@ -110,7 +111,7 @@
       <div class="card-header"><h2>Oefenportefeuille</h2></div>
       {% if settings.trading_mode == "paper" %}
       <p class="card-desc">Zet het oefensaldo terug op het startbedrag ({{ settings.paper_start_eur|eur(0) }}) en sluit open oefenposities zonder resultaat. Het logboek met beslissingen en orders blijft bewaard.</p>
-      <form method="post" action="/settings" onsubmit="return confirm('Oefenportefeuille resetten? Het saldo gaat terug naar het startbedrag en open oefenposities worden gesloten.')">
+      <form method="post" action="/settings" data-confirm="Oefenportefeuille resetten? Het saldo gaat terug naar het startbedrag en open oefenposities worden gesloten.">
         <input type="hidden" name="group" value="trading">
         <button class="btn btn-danger" type="submit" name="action" value="reset_paper">Oefenportefeuille resetten</button>
       </form>
@@ -121,19 +122,4 @@
   </div>
 </div>
 
-<script>
-  function confirmLive(form) {
-    var chosen = form.querySelector('input[name="trading_mode"]:checked');
-    if (chosen && chosen.value === "live" && form.dataset.currentMode !== "live") {
-      return confirm("Overschakelen naar LIVE? Vanaf de volgende cyclus plaatst de bot echte orders op Bitvavo met echt geld.");
-    }
-    return true;
-  }
-  document.querySelectorAll(".switch input").forEach(function (box) {
-    box.addEventListener("change", function () {
-      var state = box.parentElement.querySelector(".state");
-      if (state) state.textContent = box.checked ? "Aan" : "Uit";
-    });
-  });
-</script>
 {% endblock %}

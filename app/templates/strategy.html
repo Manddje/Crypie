@@ -10,6 +10,7 @@
 <div class="stack">
   {% if error %}{{ ui.notice("error", error) }}{% endif %}
   {% if message %}{{ ui.notice("ok", message) }}{% endif %}
+  {% if load_warning %}{{ ui.notice("warn", load_warning) }}{% endif %}
 
   {% macro strategy_summary(s) %}
     <p class="muted small">{{ s.market }} · candles van {{ s.interval|nl }}{% if s.position_size_pct < 100 %} · {{ s.position_size_pct|num(0) }}% van het beschikbare bedrag per positie{% endif %}</p>
@@ -48,7 +49,7 @@
       {% if assistant_available %}
       <p class="card-desc">Beschrijf wat je wilt. Claude maakt er een complete strategie van, legt uit waarom en laat zien hoe die het de afgelopen tijd had gedaan. Je kiest daarna zelf of je hem opslaat.</p>
       <form method="post" action="/strategy">
-        <textarea name="description" rows="5" required minlength="5" placeholder="Bijvoorbeeld: koop ETH als de MACD boven de signaallijn kruist en de koers boven de 200 EMA zit. Verkoop bij 8% winst of 4% verlies.">{{ description or "" }}</textarea>
+        <textarea name="description" rows="5" required minlength="5" maxlength="4000" placeholder="Bijvoorbeeld: koop ETH als de MACD boven de signaallijn kruist en de koers boven de 200 EMA zit. Verkoop bij 8% winst of 4% verlies.">{{ description or "" }}</textarea>
         <input type="hidden" name="strategy_json" value="{{ strategy_json }}">
         <div class="actions" style="margin-top: 12px">
           <button class="btn btn-primary" type="submit" name="action" value="propose">Voorstel maken</button>
@@ -73,6 +74,7 @@
     <h4 style="margin-top: 20px">Toelichting van Claude</h4>
     <p class="prose small" style="margin-top: 6px">{{ explanation }}</p>
     {% endif %}
+    {{ ui.strategy_diff(proposal_diff) }}
     <div class="actions" style="margin-top: 20px">
       <button class="btn btn-primary" type="submit" form="json-form" name="action" value="save">Opslaan als actieve strategie</button>
       <a class="btn" href="/strategy">Verwerpen</a>
@@ -93,7 +95,9 @@
       {{ ui.stat("Trades", backtest.trades ~ (" (+1 open)" if backtest.open_position else ""), (backtest.win_rate_pct|pct(0, false) ~ " winstgevend") if backtest.win_rate_pct is not none else "nog geen afgeronde trades") }}
       {{ ui.stat("Eindwaarde", backtest.final_eur|eur, "fee " ~ backtest.fee_pct|num ~ "% per order") }}
       {{ ui.stat("Signaal nu", backtest.latest.signal|nl, None, "pos" if backtest.latest.signal == "buy" else ("neg" if backtest.latest.signal == "sell" else "")) }}
+      {% if backtest.live_buy_signal_pct is not none %}{{ ui.stat("Koopsignaal live", backtest.live_buy_signal_pct|pct(1, false), "van de candles na " ~ backtest.warmup_candles ~ " candles opwarmen", "neg" if backtest.live_buy_signal_pct > 20 else "") }}{% endif %}
     </div>
+    {% if backtest.live_buy_signal_pct is not none and backtest.live_buy_signal_pct > 20 %}{{ ui.notice("warn", "Live geven de harde koopvoorwaarden op " ~ backtest.live_buy_signal_pct|pct(1, false) ~ " van de candles een koopsignaal. Dat betekent bijna elke cyclus een Claude-aanroep en een aankoop die vooral op Claude's oordeel leunt; de backtest hierboven rekent strenger (met de zachte filters als harde voorwaarden).") }}{% endif %}
     <p class="form-help" style="margin-top: 12px">De backtest rekent zonder Claude en telt zachte filters daarom als harde voorwaarden. Live ontstaat het signaal ook als een zacht filter niet geldt; Claude weegt dat dan mee met het nieuws en koopt kleiner.</p>
     <details class="advanced" style="margin-top: 18px">
       <summary>Indicatorwaarden van de laatste candle</summary>
@@ -125,13 +129,13 @@
     <details class="advanced" {% if proposal or error %}open{% endif %}>
       <summary>Geavanceerd: strategie als JSON bewerken</summary>
       <p class="card-desc">Voor wie precies wil instellen wat de bot doet. Testen kan altijd; opslaan maakt de strategie meteen actief.</p>
-      <form method="post" action="/strategy" class="inline" style="margin-bottom: 12px" onsubmit="return confirm('De actieve strategie wordt vervangen door de standaardstrategie van Crypie. Doorgaan?')">
+      <form method="post" action="/strategy" class="inline" style="margin-bottom: 12px" data-confirm="De actieve strategie wordt vervangen door de standaardstrategie van Crypie. Doorgaan?">
         <input type="hidden" name="strategy_json" value="">
         <button class="btn btn-tint" type="submit" name="action" value="reset">Standaardstrategie herstellen</button>
         <span class="small muted">Zet de meegeleverde strategie terug, inclusief nieuwe standaardregels na een update.</span>
       </form>
       <form method="post" action="/strategy" id="json-form">
-        <textarea class="code" name="strategy_json" spellcheck="false">{{ strategy_json }}</textarea>
+        <textarea class="code" name="strategy_json" spellcheck="false" maxlength="100000">{{ strategy_json }}</textarea>
         <div class="actions" style="margin-top: 12px">
           <button class="btn btn-tint" type="submit" name="action" value="backtest">Testen</button>
           <button class="btn btn-primary" type="submit" name="action" value="save">Opslaan als actieve strategie</button>
