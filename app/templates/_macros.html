@@ -212,3 +212,28 @@
 {% macro session_secret_notice(weak) -%}
 {% if weak %}{{ notice("warn", "SESSION_SECRET ontbreekt of is korter dan 32 tekens. Stel in de omgeving een lange willekeurige waarde in (bijvoorbeeld de uitvoer van 'openssl rand -hex 32') en herstart de app. Daarna log je opnieuw in en maak je nieuwe herstelcodes aan.", live=false) }}{% endif %}
 {%- endmacro %}
+
+{# The words of trading, explained once (UX-104): under the title of the pages that use them
+   (Handelen, Tradingplan, Strategie), folded away. A list on the page, not a tooltip, so it also
+   works on a phone and with a keyboard. #}
+{% macro glossary(id="begrippen") -%}
+<details class="page-help" id="{{ id }}">
+  <summary>Begrippen uitgelegd</summary>
+  <dl class="glossary">
+    <dt>Order, positie en trade</dt><dd>Een order is één koop- of verkoopopdracht. Een positie is wat de bot in een markt bezit (open of gesloten). Een trade is één positie van aankoop tot verkoop, zoals het journaal ze toont.</dd>
+    <dt>Candle</dt><dd>De koersen van één periode, bijvoorbeeld één uur: open, hoog, laag en slot. Indicatoren rekenen met de laatste candles.</dd>
+    <dt>RSI</dt><dd>Relative Strength Index: een getal van 0 tot 100 dat zegt hoe hard de koers de laatste candles steeg of daalde. Laag (onder 30 à 35) betekent: flink gedaald.</dd>
+    <dt>EMA</dt><dd>Het gemiddelde van de koers over een aantal candles, waarbij recente candles zwaarder wegen. Staat de koers boven de EMA 200, dan gaat de trend omhoog.</dd>
+    <dt>Zacht filter (~)</dt><dd>Een voorwaarde die niet hoeft te gelden. Geldt hij niet, dan weegt dat mee in het besluit, maar het blokkeert de aankoop niet.</dd>
+    <dt>Stop-loss</dt><dd>Verkopen zodra de koers een vast percentage onder de instapkoers zakt, om het verlies te beperken.</dd>
+    <dt>Trailing stop</dt><dd>Een stop die meeschuift met de hoogste koers sinds de aankoop. Hij gaat nooit omlaag, dus een deel van de winst blijft vast.</dd>
+    <dt>Take-profit</dt><dd>Verkopen zodra de koers een vast percentage boven de instapkoers staat.</dd>
+    <dt>Dipbewaking</dt><dd>Is de koers flink gedaald maar nog niet gedraaid, dan kijkt de bot vaker dan elke cyclus of de draai komt.</dd>
+    <dt>Risk-off</dt><dd>Rond belangrijke momenten in de agenda (rentebesluiten, inflatiecijfers) en na een nieuwsschok koopt de bot een tijd niet. Verkopen gaat door.</dd>
+    <dt>Lange-termijntrend (PlanB-stijl)</dt><dd>De koers vergeleken met het gemiddelde van 200 weken en de RSI per maand, zoals analist PlanB dat doet. Geen koopsignaal, maar context: wat voor markt het is.</dd>
+    <dt>Grootste daling</dt><dd>De grootste daling van een hoogste stand naar de laagste stand daarna (in het Engels: drawdown).</dd>
+    <dt>Netto en bruto</dt><dd>Netto is na de kosten van Bitvavo, bruto ervoor.</dd>
+    <dt>Noodstop</dt><dd>{{ kill_switch_text.help }}</dd>
+  </dl>
+</details>
+{%- endmacro %}

@@ -915,6 +915,14 @@ textarea.code { font-family: var(--mono); font-size: 13px; min-height: 24rem; }
 .page-help { margin-top: 10px; max-width: 70ch; color: var(--text-2); font-size: var(--fs-help); }
 .page-help summary { color: var(--accent); font-weight: 500; }
 .page-help > :not(summary) { margin-top: 8px; }
+/* 'Begrippen uitgelegd' (ui.glossary): term, then its explanation. */
+.glossary { display: grid; grid-template-columns: minmax(0, 13rem) minmax(0, 1fr); gap: 6px 16px; margin: 10px 0 0; }
+.glossary dt { color: var(--text); font-weight: 600; }
+.glossary dd { margin: 0; }
+@media (max-width: 640px) {
+  .glossary { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .glossary dd + dt { margin-top: 8px; }
+}
 
 /* -- The mode in running text ('in oefenmodus, met fictief geld'), in the colour of its pill -- */
 .mode-text { font-weight: 600; }

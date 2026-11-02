@@ -359,3 +359,22 @@ async def test_a_failing_market_has_its_own_card_and_does_not_break_the_chart(ap
 
     monkeypatch.setattr(app.state.client, "candles", none)
     assert (await api.get("/api/portfolio/history?period=7d")).status_code == 502
+
+
+def test_the_words_of_trading_are_explained_on_the_pages_that_use_them():
+    """UX-104: a glossary on the page (not a tooltip) where the jargon is."""
+    templates_dir = STATIC_DIR.parent / "templates"
+    for name in ("trading.html", "plan.html", "strategy.html"):
+        assert "{{ ui.glossary() }}" in (templates_dir / name).read_text(encoding="utf-8"), name
+    html = templates.env.from_string(
+        '{% import "_macros.html" as ui %}{{ ui.glossary() }}'
+    ).render()
+    for term in (
+        "Trailing stop",
+        "Zacht filter (~)",
+        "Lange-termijntrend",
+        "Grootste daling",
+        "Noodstop",
+    ):
+        assert f"<dt>{term}" in html, term
+    assert "title=" not in html

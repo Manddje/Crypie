@@ -82,6 +82,7 @@
 <div class="page-header">
   <h1>Handelen</h1>
   <p class="subtitle">Wat de bot doet en waarom, en waar je hem bedient. De bot handelt nu <strong class="mode-text {{ 'is-live' if live else 'is-paper' }}">{% if live %}live, met echt geld op Bitvavo{% else %}in oefenmodus, met fictief geld{% endif %}</strong>.</p>
+  {{ ui.glossary() }}
 </div>
 
 <div class="stack">
