@@ -101,7 +101,7 @@
           <span class="{{ 'is-bad' if not h.exits_ok else '' }}">Bewaking stop-loss/take-profit: {% if h.last_exit_ok %}laatst gelukt {{ h.last_exit_ok|ago }}{% else %}nog niet gelukt{% endif %} (elke {{ h.exit_interval_min }} min){% if not h.exits_ok %} · loopt achter{% endif %}</span>
         </p>
         {% if not h.claude_available %}<p class="small"><a href="/settings#trading">Kies wat de bot zonder Claude doet</a></p>{% endif %}
-        <p class="status-update" data-status-note hidden></p>
+        <p class="status-update" data-status-note role="status"></p>
       </div>
       <div class="trading-controls">
         {{ ui.kill_switch(status.paused, next="/trading") }}
@@ -267,8 +267,8 @@
             <tr>
               <td><strong>{{ t.market }}</strong></td>
               <td class="num">{% if t.wma200 is not none %}{{ t.wma200|price_eur }}{% else %}<span class="muted">te weinig historie ({{ t.weeks }} weken)</span>{% endif %}</td>
-              <td class="num {{ 'pos' if t.above_wma200 else ('neg' if t.above_wma200 is not none else '') }}">{% if t.vs_wma200_pct is not none %}{{ t.vs_wma200_pct|pct(1) }}{% else %}–{% endif %}</td>
-              <td class="num {{ 'pos' if t.monthly_rsi_above_50 else ('neg' if t.monthly_rsi_above_50 is not none else '') }}">{% if t.monthly_rsi is not none %}{{ t.monthly_rsi|num(0) }}{% else %}<span class="muted">te weinig maanden ({{ t.months }})</span>{% endif %}</td>
+              <td class="num {{ ('pos' if t.above_wma200 else 'neg') if t.vs_wma200_pct is not none and t.above_wma200 is not none else '' }}">{% if t.vs_wma200_pct is not none %}{{ t.vs_wma200_pct|pct(1) }}{% else %}–{% endif %}</td>
+              <td class="num {{ ('pos' if t.monthly_rsi_above_50 else 'neg') if t.monthly_rsi is not none and t.monthly_rsi_above_50 is not none else '' }}">{% if t.monthly_rsi is not none %}{{ t.monthly_rsi|num(0) }}{% else %}<span class="muted">te weinig maanden ({{ t.months }})</span>{% endif %}</td>
               <td><span class="pill {{ 'pill-green' if t.regime == 'up' else ('pill-red' if t.regime == 'down' else '') }}">{{ t.regime_nl }}</span></td>
             </tr>
             {% endfor %}
@@ -289,67 +289,6 @@
         </section>
       </div>
     </details>
-  </section>
-
-  {%- set c = cycles -%}
-  <section class="card" id="cycli" aria-labelledby="cycli-title">
-    {{ ui.card_header("Alle cycli", 2, meta=("laatste " ~ settings.decision_history_days ~ " dagen · " ~ c.total_all ~ (" beslissing" if c.total_all == 1 else " beslissingen")), href="/settings#trading", link="Bewaartermijn aanpassen", id="cycli-title") }}
-    {% if c.total_all or c.market %}
-    <div class="cycles-filters">
-      <nav class="segmented" aria-label="Welke beslissingen">
-        <a href="{{ c.view_links.important }}"{% if c.view == "important" %} class="active" aria-current="true"{% endif %}>Belangrijk <span class="count">{{ c.total_important }}</span></a>
-        <a href="{{ c.view_links.all }}"{% if c.view == "all" %} class="active" aria-current="true"{% endif %}>Alles <span class="count">{{ c.total_all }}</span></a>
-      </nav>
-      {% if c.market_links|length > 2 %}
-      <nav class="segmented" aria-label="Markt">
-        {% for m in c.market_links %}<a href="{{ m.url }}"{% if m.on %} class="active" aria-current="true"{% endif %}>{{ m.label }}</a>{% endfor %}
-      </nav>
-      {% endif %}
-    </div>
-    {% endif %}
-    <p class="card-desc">{% if c.view == "important" %}Aankopen, verkopen, koopsignalen, blokkades en adviezen van Claude. Kies Alles om ook elke keer 'afwachten' van de regels te zien.{% else %}Elke cyclus per markt: het besluit, waarom, en hoe de koers daarna bewoog. Die uitkomsten krijgt Claude terug bij de volgende beslissing.{% endif %}</p>
-    {% if c.rows %}
-    {% call ui.table_wrap("Alle cycli") %}
-    <table class="cycles">
-      <thead><tr><th scope="col">Tijd</th><th scope="col">Markt</th><th scope="col">Besluit</th><th scope="col" class="num">Bedrag</th><th scope="col" class="num">Na 1u</th><th scope="col" class="num">Na 24u</th><th scope="col" class="num">Na 72u</th></tr></thead>
-      {% for v in c.rows %}{% set d = v.d %}
-      <tbody class="cycle-entry{{ ' is-blocked' if d.blocked_by else '' }}">
-        <tr>
-          <td class="nowrap when">{{ d.created_at|dt }}</td>
-          <td class="nowrap market"><strong>{{ d.market }}</strong><span class="sub">{{ d.price|price_eur }}</span></td>
-          <td class="decision">{{ decision_line(v) }}<span class="sub">{{ d.source|nl }}{% if d.confidence is not none %} · {{ (d.confidence * 100)|num(0) }}% zeker{% endif %}</span></td>
-          <td class="num" data-label="Bedrag">{{ d.amount_quote|eur(0) if d.amount_quote else "–" }}</td>
-          {% for o in v.outcomes %}<td class="num {{ o.pct|pnl_class(1) if o.pct is not none else '' }}" data-label="{{ o.label }}">{{ o.pct|pct if o.pct is not none else "–" }}</td>{% endfor %}
-        </tr>
-        <tr class="cycle-detail">
-          <td colspan="7">
-            {% if v.explanation %}<p class="decision-why">{{ v.explanation }}</p>{% endif %}
-            {% if d.blocked_by %}<p class="neg">Niet uitgevoerd: {{ d.blocked_by }}</p>{% endif %}
-            <details class="cycle-checks">
-              <summary>{{ "Voorwaarden en nieuws" if v.has_checks else "Nieuws" }}</summary>
-              {% if v.has_checks %}{{ ui.checks(v.checklist) }}{% endif %}
-              {{ news_line(v) }}
-            </details>
-          </td>
-        </tr>
-      </tbody>
-      {% endfor %}
-    </table>
-    {% endcall %}
-    {% if c.pages > 1 %}
-    <nav class="pager" aria-label="Pagina's van Alle cycli">
-      {% if c.newer_url %}<a class="btn btn-sm" href="{{ c.newer_url }}" rel="prev"><span aria-hidden="true">‹ </span>Nieuwer</a>{% endif %}
-      <span class="small muted">{{ c.first }}–{{ c.last }} van {{ c.total }} · pagina {{ c.page }} van {{ c.pages }}</span>
-      {% if c.older_url %}<a class="btn btn-sm" href="{{ c.older_url }}" rel="next">Ouder<span aria-hidden="true"> ›</span></a>{% endif %}
-    </nav>
-    {% endif %}
-    {% elif c.total_all == 0 and not c.market %}
-    {{ ui.empty("Nog geen beslissingen", "Na de eerste cyclus zie je hier per markt wat de bot besloot en waarom.", symbol="list") }}
-    {% elif c.view == "important" and c.total_important == 0 and c.total_all > 0 %}
-    {{ ui.empty("Geen belangrijke beslissingen", "In deze periode alleen 'afwachten' van de regels: geen koopsignaal, geen order en geen advies van Claude.", c.view_links.all, "Alles tonen", symbol="list") }}
-    {% else %}
-    {{ ui.empty("Geen beslissingen in deze selectie", None, c.clear_url, "Filters wissen", symbol="search") }}
-    {% endif %}
   </section>
 
   {%- set perf = status.performance_30d -%}
@@ -426,6 +365,68 @@
     {{ ui.empty("Nog geen evaluaties", "Met 'Nu evalueren' vraag je Claude om terug te kijken op de beslissingen en resultaten.", symbol="journal") }}
     {% endif %}
     {% endfor %}
+  </section>
+
+  {#- The log comes last: it is the longest part of the page, and it is paged. -#}
+  {%- set c = cycles -%}
+  <section class="card" id="cycli" aria-labelledby="cycli-title">
+    {{ ui.card_header("Alle cycli", 2, meta=("laatste " ~ settings.decision_history_days ~ " dagen · " ~ c.total_all ~ (" beslissing" if c.total_all == 1 else " beslissingen")), href="/settings#trading", link="Bewaartermijn aanpassen", id="cycli-title") }}
+    {% if c.total_all or c.market %}
+    <div class="cycles-filters">
+      <nav class="segmented" aria-label="Welke beslissingen">
+        <a href="{{ c.view_links.important }}"{% if c.view == "important" %} class="active" aria-current="true"{% endif %}>Belangrijk <span class="count">{{ c.total_important }}</span></a>
+        <a href="{{ c.view_links.all }}"{% if c.view == "all" %} class="active" aria-current="true"{% endif %}>Alles <span class="count">{{ c.total_all }}</span></a>
+      </nav>
+      {% if c.market_links|length > 2 %}
+      <nav class="segmented" aria-label="Markt">
+        {% for m in c.market_links %}<a href="{{ m.url }}"{% if m.on %} class="active" aria-current="true"{% endif %}>{{ m.label }}</a>{% endfor %}
+      </nav>
+      {% endif %}
+    </div>
+    {% endif %}
+    <p class="card-desc">{% if c.view == "important" %}Aankopen, verkopen, koopsignalen, blokkades en adviezen van Claude. Kies Alles om ook elke keer 'afwachten' van de regels te zien.{% else %}Elke cyclus per markt: het besluit, waarom, en hoe de koers daarna bewoog. Die uitkomsten krijgt Claude terug bij de volgende beslissing.{% endif %}</p>
+    {% if c.rows %}
+    {% call ui.table_wrap("Alle cycli") %}
+    <table class="cycles">
+      <thead><tr><th scope="col">Tijd</th><th scope="col">Markt</th><th scope="col">Besluit</th><th scope="col" class="num">Bedrag</th><th scope="col" class="num">Na 1u</th><th scope="col" class="num">Na 24u</th><th scope="col" class="num">Na 72u</th></tr></thead>
+      {% for v in c.rows %}{% set d = v.d %}
+      <tbody class="cycle-entry{{ ' is-blocked' if d.blocked_by else '' }}">
+        <tr>
+          <td class="nowrap when">{{ d.created_at|dt }}</td>
+          <td class="nowrap market"><strong>{{ d.market }}</strong><span class="sub">{{ d.price|price_eur }}</span></td>
+          <td class="decision">{{ decision_line(v) }}<span class="sub">{{ d.source|nl }}{% if d.confidence is not none %} · {{ (d.confidence * 100)|num(0) }}% zeker{% endif %}</span></td>
+          <td class="num" data-label="Bedrag">{{ d.amount_quote|eur(0) if d.amount_quote else "–" }}</td>
+          {% for o in v.outcomes %}<td class="num {{ o.pct|pnl_class(1) if o.pct is not none else '' }}" data-label="{{ o.label }}">{{ o.pct|pct if o.pct is not none else "–" }}</td>{% endfor %}
+        </tr>
+        <tr class="cycle-detail">
+          <td colspan="7">
+            {% if v.explanation %}<p class="decision-why">{{ v.explanation }}</p>{% endif %}
+            {% if d.blocked_by %}<p class="neg">Niet uitgevoerd: {{ d.blocked_by }}</p>{% endif %}
+            <details class="cycle-checks">
+              <summary>{{ "Voorwaarden en nieuws" if v.has_checks else "Nieuws" }}</summary>
+              {% if v.has_checks %}{{ ui.checks(v.checklist) }}{% endif %}
+              {{ news_line(v) }}
+            </details>
+          </td>
+        </tr>
+      </tbody>
+      {% endfor %}
+    </table>
+    {% endcall %}
+    {% if c.pages > 1 %}
+    <nav class="pager" aria-label="Pagina's van Alle cycli">
+      {% if c.newer_url %}<a class="btn btn-sm" href="{{ c.newer_url }}" rel="prev"><span aria-hidden="true">‹ </span>Nieuwer</a>{% endif %}
+      <span class="small muted">{{ c.first }}–{{ c.last }} van {{ c.total }} · pagina {{ c.page }} van {{ c.pages }}</span>
+      {% if c.older_url %}<a class="btn btn-sm" href="{{ c.older_url }}" rel="next">Ouder<span aria-hidden="true"> ›</span></a>{% endif %}
+    </nav>
+    {% endif %}
+    {% elif c.total_all == 0 and not c.market %}
+    {{ ui.empty("Nog geen beslissingen", "Na de eerste cyclus zie je hier per markt wat de bot besloot en waarom.", symbol="list") }}
+    {% elif c.view == "important" and c.total_important == 0 and c.total_all > 0 %}
+    {{ ui.empty("Geen belangrijke beslissingen", "In deze periode alleen 'afwachten' van de regels: geen koopsignaal, geen order en geen advies van Claude.", c.view_links.all, "Alles tonen", symbol="list") }}
+    {% else %}
+    {{ ui.empty("Geen beslissingen in deze selectie", None, c.clear_url, "Filters wissen", symbol="search") }}
+    {% endif %}
   </section>
 </div>
 {% endblock %}

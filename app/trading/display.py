@@ -363,10 +363,7 @@ def position_view(p: Position, price: float | None, fee_pct: float) -> dict[str,
 # -- messages after an action ------------------------------------------------------------------
 
 # The kill switch, in the words of the glossary (KILL_SWITCH_NL in app/web.py).
-PAUSED_FLASH = (
-    "Noodstop actief: kopen gepauzeerd. Stop-loss, trailing stop, take-profit en verkopen op "
-    "een verkoopsignaal blijven werken."
-)
+PAUSED_FLASH = "Noodstop aangezet: de bot koopt niets meer tot je hervat."
 RESUMED_FLASH = "Kopen hervat: de bot mag weer kopen."
 
 

@@ -1132,6 +1132,8 @@ footer.site {
 .trading-controls { flex: 0 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
 .trading-controls form { margin: 0; }
 .status-update { padding: 8px 12px; border-radius: var(--radius-control); background: var(--accent-tint); font-size: var(--fs-help); }
+/* An empty live region stays in the page (so it is announced when filled) but takes no room. */
+.status-update:empty { padding: 0; margin-top: -8px; background: none; }
 @media (max-width: 700px) {
   .trading-controls { flex-basis: 100%; }
 }
@@ -1167,6 +1169,7 @@ footer.site {
 /* 'Alle cycli': filters, one tbody per decision (a row plus its explanation), pages. */
 .cycles-filters { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 12px; }
 .segmented .count { margin-left: 6px; color: var(--text-2); font-weight: 400; font-variant-numeric: tabular-nums; }
+.segmented .active .count { color: inherit; }
 .cycles td.decision { min-width: 16rem; }
 .cycles td.decision .decision-line { margin-bottom: 2px; }
 .cycles tbody tr:first-child td { border-bottom: 0; padding-bottom: 4px; }

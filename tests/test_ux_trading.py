@@ -134,9 +134,9 @@ async def test_page_order_status_first_and_no_inline_styles(api):
         'id="laatste-cyclus"',
         'id="open-posities"',
         'id="context"',
-        'id="cycli"',
         'id="gesloten-posities"',
         'id="evaluaties"',
+        'id="cycli"',  # the long log last
     ]
     positions = [page.index(x) for x in order]
     assert positions == sorted(positions)
@@ -162,6 +162,15 @@ async def test_subtitle_names_the_mode_and_the_cycle_asks_in_live(api, monkeypat
     monkeypatch.setattr(app.state.engine.broker, "mode", "live")
     page = (await api.get("/trading")).text
     assert "live, met echt geld op Bitvavo" in page and "trading-mode is-live" in page
+
+
+async def test_kill_switch_stays_with_one_sentence_when_trading_is_off(api, monkeypatch):
+    off = app.state.settings.model_copy(update={"trading_enabled": False})
+    monkeypatch.setattr(app.state, "settings", off)
+    page = (await api.get("/trading")).text
+    assert "status-off" in page and "Uitgeschakeld" in page
+    assert "Automatisch handelen staat uit, dus er draaien geen geplande cycli." in page
+    assert 'value="pause"' in page and "alleen als je er zelf een start" in page
 
 
 async def test_exit_watch_is_red_when_it_falls_behind(api, monkeypatch):

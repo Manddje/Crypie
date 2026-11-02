@@ -3,7 +3,8 @@
  * The hero carries what the page showed when it was rendered (data-level, data-label,
  * data-last-cycle, data-exits-ok). Every 60 s while the tab is visible, and when it becomes
  * visible again, this asks /api/status (light: no Bitvavo calls) and, when something changed,
- * says so in the hero with a link to reload the page. It never changes the status itself: the
+ * says so in the hero (a polite live region that is already in the page, so screen readers hear
+ * it once) with a link to reload the page. It never changes the status itself: the
  * server-rendered page stays the source of truth, and without JavaScript nothing is missing
  * except this hint.
  */
@@ -51,8 +52,6 @@
     link.href = window.location.pathname + window.location.search;
     link.textContent = "Pagina vernieuwen";
     note.appendChild(link);
-    // Announced once, politely: the page itself did not change.
-    note.setAttribute("role", "status");
     note.hidden = false;
   }
 
