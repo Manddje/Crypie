@@ -18,6 +18,8 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # NaN or infinity would make every limit check pass silently (NaN compares False).
+        allow_inf_nan=False,
         # Docker/Coolify secrets: a file /run/secrets/<setting name>, e.g. bitvavo_api_secret.
         secrets_dir="/run/secrets" if os.path.isdir("/run/secrets") else None,
     )
@@ -91,6 +93,11 @@ class Settings(BaseSettings):
     max_trades_per_day: int = 6
     cooldown_min_after_stop: int = 240  # no new buy in a market after a stop-loss
     min_trade_eur: float = 10.0
+    # Hard ceilings for the limits above. Only the environment sets them (they are not in the
+    # portal), so a stolen session cannot raise the limits past what the server allows.
+    max_trade_eur_ceiling: float = 1000.0
+    max_exposure_pct_ceiling: float = 100.0
+    max_trades_per_day_ceiling: int = 50
     claude_unavailable_mode: Literal["hold", "indicators"] = "hold"
     evaluation_interval_hours: int = 168
     backtest_fee_pct: float = 0.25

@@ -18,8 +18,8 @@ from app.strategy.model import IndicatorSpec
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
-# Bumped whenever app.css changes so browsers pick up the new file.
-ASSET_VERSION = "12"
+# Bumped whenever app.css or a script in /static changes so browsers pick up the new file.
+ASSET_VERSION = "13"
 
 # Internal identifiers -> what the user sees.
 LABELS_NL: dict[str, str] = {

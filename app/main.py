@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Path, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
@@ -45,10 +46,18 @@ from app.news.service import (
 from app.news.sources import NewsFetcher
 from app.security import BodySizeLimit, CrossOriginProtection, SecurityHeaders
 from app.settings_store import SettingsError
-from app.strategy.describe import levels_summary
+from app.strategy.describe import levels_summary, strategy_diff
 from app.strategy.engine import backtest, latest_snapshot
-from app.strategy.model import DEFAULT_STRATEGY, Strategy
-from app.strategy.store import load_strategy, save_strategy
+from app.strategy.model import (
+    DEFAULT_STRATEGY,
+    DESCRIPTION_MAX,
+    INTERVALS,
+    MAX_CANDLES,
+    Strategy,
+    check_for_use,
+    use_problems,
+)
+from app.strategy.store import load_strategy, load_strategy_checked, save_strategy
 from app.trading import risk
 from app.trading.engine import (
     NEWS_ENTRY_MIN_SCORE,
@@ -81,7 +90,7 @@ from app.trading.journal import (
     save_note,
     unlinked_orders,
 )
-from app.trading.plan import PLAN_FIELDS, TradingPlan, load_plan, save_plan
+from app.trading.plan import PLAN_FIELDS, PLAN_MAX_LENGTH, TradingPlan, load_plan, save_plan
 from app.trading.risk import RiskLimits
 from app.trading.trend import load_trends, refresh_trends
 from app.web import STATIC_DIR, templates
@@ -482,29 +491,45 @@ async def prices(request: Request, client: BitvavoClient = Depends(get_client)):
         raise HTTPException(502, f"Bitvavo unreachable: {exc}") from exc
 
 
+# Path and query bounds. A market goes into the Bitvavo URL path, so only the strict
+# Bitvavo notation is accepted (no '..', '?' or '#'); ids fit the database's integer columns.
+MARKET_PATH = Path(pattern=r"^[A-Za-z0-9]{2,10}-[Ee][Uu][Rr]$")
+DB_ID_MAX = 2**31 - 1
+INTERVAL_PATTERN = "^(" + "|".join((*INTERVALS, "1W", "1M")) + ")$"  # what Bitvavo offers
+
+
+def _tracked_market(request: Request, market: str) -> str:
+    market = market.upper()
+    if market not in request.app.state.settings.markets:
+        raise HTTPException(404, f"Markt {market} wordt niet gevolgd")
+    return market
+
+
 @app.get("/api/candles/{market}")
 async def candles(
-    market: str, interval: str = "1h", limit: int = 100, client: BitvavoClient = Depends(get_client)
+    request: Request,
+    market: str = MARKET_PATH,
+    interval: str = Query("1h", pattern=INTERVAL_PATTERN),
+    limit: int = Query(100, ge=1, le=MAX_CANDLES),
+    client: BitvavoClient = Depends(get_client),
 ):
+    market = _tracked_market(request, market)
     try:
-        return await client.candles(market.upper(), interval, limit)
+        return await client.candles(market, interval, limit)
     except BitvavoError as exc:
         raise HTTPException(502, str(exc)) from exc
 
 
 @app.get("/api/chart/{market}")
 async def chart_market(
-    market: str,
     request: Request,
-    period: str = "7d",
+    market: str = MARKET_PATH,
+    period: str = Query("7d", max_length=8),
     client: BitvavoClient = Depends(get_client),
     session: Session = Depends(get_session),
 ):
     """Candles of one market plus the bot's actions in that window, for the overview chart."""
-    settings: Settings = request.app.state.settings
-    market = market.upper()
-    if market not in settings.markets:
-        raise HTTPException(404, f"Markt {market} wordt niet gevolgd")
+    market = _tracked_market(request, market)
     key, interval, limit = period_spec(period)
     try:
         rows = await client.candles(market, interval, limit)
@@ -529,7 +554,7 @@ async def chart_market(
 @app.get("/api/portfolio/history")
 async def portfolio_history_api(
     request: Request,
-    period: str = "7d",
+    period: str = Query("7d", max_length=8),
     client: BitvavoClient = Depends(get_client),
     broker: Broker = Depends(get_broker),
     session: Session = Depends(get_session),
@@ -626,13 +651,17 @@ async def create_order(
 
 
 class ProposalIn(BaseModel):
-    description: str = Field(min_length=5, max_length=4000)
+    description: str = Field(min_length=5, max_length=DESCRIPTION_MAX)
 
 
 class BacktestIn(BaseModel):
     strategy: Strategy | None = None
-    limit: int = Field(default=500, ge=50, le=1440)
-    start_eur: float = Field(default=1000, gt=0)
+    limit: int = Field(default=500, ge=50, le=MAX_CANDLES)
+    start_eur: float = Field(default=1000, gt=0, le=1e9, allow_inf_nan=False)
+
+
+# The JSON of the largest valid strategy is far below this; the form refuses anything bigger.
+STRATEGY_JSON_MAX = 100_000
 
 
 async def _run_backtest(
@@ -670,6 +699,10 @@ async def put_strategy(
 ):
     if strategy.market not in request.app.state.settings.markets:
         raise HTTPException(400, f"{strategy.market} is not in MARKETS")
+    try:
+        check_for_use(strategy)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     save_strategy(session, strategy)
     return strategy.model_dump()
 
@@ -715,6 +748,8 @@ async def run_backtest(
         return await _run_backtest(request, client, strategy, body.limit, body.start_eur)
     except BitvavoError as exc:
         raise HTTPException(502, str(exc)) from exc
+    except (ValueError, ArithmeticError) as exc:
+        raise HTTPException(422, f"backtest failed: {exc}") from exc
 
 
 @app.get("/strategy", response_class=HTMLResponse)
@@ -723,7 +758,7 @@ async def strategy_page(
     assistant: StrategyAssistant = Depends(get_assistant),
     session: Session = Depends(get_session),
 ):
-    strategy = load_strategy(session)
+    strategy, load_warning = load_strategy_checked(session)
     return templates.TemplateResponse(
         request,
         "strategy.html",
@@ -731,8 +766,10 @@ async def strategy_page(
             "settings": request.app.state.settings,
             "strategy_json": strategy.model_dump_json(indent=2),
             "strategy": strategy,
+            "load_warning": load_warning,
             "assistant_available": assistant.available,
             "proposal": None,
+            "proposal_diff": None,
             "explanation": None,
             "backtest": None,
             "error": None,
@@ -744,21 +781,24 @@ async def strategy_page(
 @app.post("/strategy", response_class=HTMLResponse)
 async def strategy_action(
     request: Request,
-    action: str = Form(...),
+    action: str = Form(..., max_length=32),
     strategy_json: str = Form(""),
     description: str = Form(""),
-    limit: int = Form(500),
+    limit: int = Form(500, ge=50, le=MAX_CANDLES),
     client: BitvavoClient = Depends(get_client),
     assistant: StrategyAssistant = Depends(get_assistant),
     session: Session = Depends(get_session),
 ):
     settings: Settings = request.app.state.settings
+    current, load_warning = load_strategy_checked(session)
     ctx: dict = {
         "settings": settings,
-        "strategy_json": strategy_json,
-        "strategy": load_strategy(session),
+        "strategy_json": strategy_json[:STRATEGY_JSON_MAX],
+        "strategy": current,
+        "load_warning": load_warning,
         "assistant_available": assistant.available,
         "proposal": None,
+        "proposal_diff": None,
         "explanation": None,
         "backtest": None,
         "error": None,
@@ -769,11 +809,14 @@ async def strategy_action(
         if action == "propose":
             if not assistant.available:
                 raise RuntimeError("ANTHROPIC_API_KEY is niet ingesteld")
+            # Same bounds as POST /api/strategy/propose.
+            ProposalIn(description=description)
             proposal = await assistant.propose(
                 session, description, ctx["strategy"], settings.markets
             )
             ctx["strategy_json"] = proposal.strategy.model_dump_json(indent=2)
             ctx["proposal"] = proposal.strategy
+            ctx["proposal_diff"] = strategy_diff(current, proposal.strategy)
             ctx["explanation"] = proposal.explanation
             ctx["description"] = description
             ctx["backtest"] = await _run_backtest(request, client, proposal.strategy, limit, 1000)
@@ -781,30 +824,44 @@ async def strategy_action(
                 "Claude heeft een voorstel gemaakt. "
                 "Bekijk het hieronder en sla het op als je het goed vindt."
             )
+            problems = use_problems(proposal.strategy)
+            if problems:
+                ctx["error"] = (
+                    "Dit voorstel kan zo niet worden opgeslagen: " + "; ".join(problems) + "."
+                )
         elif action == "reset":
             save_strategy(session, DEFAULT_STRATEGY)
             ctx["strategy"] = DEFAULT_STRATEGY
+            ctx["load_warning"] = None
             ctx["strategy_json"] = DEFAULT_STRATEGY.model_dump_json(indent=2)
             ctx["message"] = f"Standaardstrategie '{DEFAULT_STRATEGY.name}' hersteld en actief."
         else:
+            if len(strategy_json) > STRATEGY_JSON_MAX:
+                raise ValueError(
+                    f"De strategie-JSON is te lang (maximaal {STRATEGY_JSON_MAX} tekens)."
+                )
             candidate = Strategy.model_validate_json(strategy_json)
             if candidate.market not in settings.markets:
                 raise ValueError(f"{candidate.market} staat niet in MARKETS")
             if action == "backtest":
                 ctx["proposal"] = candidate
+                ctx["proposal_diff"] = strategy_diff(current, candidate)
                 ctx["backtest"] = await _run_backtest(request, client, candidate, limit, 1000)
             elif action == "save":
+                check_for_use(candidate)
                 save_strategy(session, candidate)
                 ctx["strategy"] = candidate
+                ctx["load_warning"] = None
                 ctx["message"] = f"Strategie '{candidate.name}' opgeslagen en actief."
             else:
                 raise ValueError(f"Onbekende actie {action!r}")
     except ValidationError as exc:
-        ctx["error"] = "Ongeldige strategie: " + "; ".join(
+        what = "Ongeldige omschrijving" if action == "propose" else "Ongeldige strategie"
+        ctx["error"] = f"{what}: " + "; ".join(
             f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()
         )
         status = 400
-    except (ValueError, RuntimeError, BitvavoError) as exc:
+    except (ValueError, RuntimeError, ArithmeticError, BitvavoError) as exc:
         ctx["error"] = str(exc)
         status = 400
     return templates.TemplateResponse(request, "strategy.html", ctx, status_code=status)
@@ -1014,16 +1071,16 @@ async def positions(
 
 @app.get("/api/decisions")
 async def decisions(
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=500),
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
-    return [_decision_dict(d) for d in recent_decisions(session, engine.mode, min(limit, 500))]
+    return [_decision_dict(d) for d in recent_decisions(session, engine.mode, limit)]
 
 
 @app.post("/api/evaluations", status_code=201)
 async def run_evaluation(
-    days: int = 7,
+    days: int = Query(7, ge=1, le=365),
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
@@ -1057,20 +1114,96 @@ async def list_evaluations(session: Session = Depends(get_session)):
     return [_evaluation_dict(e) for e in rows]
 
 
-@app.post("/api/evaluations/{evaluation_id}/apply")
-async def apply_evaluation(
-    evaluation_id: int, request: Request, session: Session = Depends(get_session)
-):
+class ProposalError(Exception):
+    """An evaluation's proposal cannot be applied; ``status`` and a Dutch ``message``."""
+
+    def __init__(self, status: int, message: str):
+        self.status = status
+        self.message = message
+        super().__init__(message)
+
+
+def _proposal(ev: Evaluation) -> Strategy | None:
+    """The proposed strategy of an evaluation, or None when there is none or it is invalid."""
+    if not ev.proposed_strategy:
+        return None
+    try:
+        return Strategy.model_validate_json(ev.proposed_strategy)
+    except ValidationError:
+        return None
+
+
+def _apply_proposal(request: Request, session: Session, evaluation_id: int) -> Strategy:
+    """Make an evaluation's proposal the active strategy, with the same checks as a save via
+    the API or the strategy page. Raises ProposalError."""
     ev = session.get(Evaluation, evaluation_id)
     if ev is None or not ev.proposed_strategy:
-        raise HTTPException(404, "evaluation or proposal not found")
-    strategy = Strategy.model_validate_json(ev.proposed_strategy)
+        raise ProposalError(404, "Evaluatie of voorstel niet gevonden.")
+    strategy = _proposal(ev)
+    if strategy is None:
+        raise ProposalError(
+            400, "Het voorstel is geen geldige strategie en kan niet worden toegepast."
+        )
     if strategy.market not in request.app.state.settings.markets:
-        raise HTTPException(400, f"{strategy.market} is not in MARKETS")
+        raise ProposalError(400, f"{strategy.market} staat niet in MARKETS.")
+    try:
+        check_for_use(strategy)
+    except ValueError as exc:
+        raise ProposalError(400, str(exc)) from exc
     save_strategy(session, strategy)
     ev.applied = True
     session.commit()
+    return strategy
+
+
+@app.post("/api/evaluations/{evaluation_id}/apply")
+async def apply_evaluation(
+    request: Request,
+    evaluation_id: int = Path(ge=1, le=DB_ID_MAX),
+    session: Session = Depends(get_session),
+):
+    try:
+        strategy = _apply_proposal(request, session, evaluation_id)
+    except ProposalError as exc:
+        raise HTTPException(exc.status, exc.message) from exc
     return {"applied": True, "strategy": strategy.model_dump()}
+
+
+def _trading_context(
+    request: Request, engine: TradingEngine, session: Session, error: str | None = None
+) -> dict:
+    settings: Settings = request.app.state.settings
+    evaluations = session.scalars(select(Evaluation).order_by(Evaluation.id.desc()).limit(5)).all()
+    strategy = load_strategy(session)
+    last_cycle = latest_decisions(session, engine.mode, list(engine.markets))
+    evaluation_rows = []
+    for e in evaluations:
+        row = _evaluation_dict(e)
+        proposal = _proposal(e)
+        # What applying would change, and why it cannot be applied (shown on the card).
+        row["diff"] = strategy_diff(strategy, proposal) if proposal is not None else []
+        if e.proposed_strategy and proposal is None:
+            row["problems"] = ["het voorstel is geen geldige strategie"]
+        elif proposal is not None:
+            row["problems"] = use_problems(proposal)
+            if proposal.market not in settings.markets:
+                row["problems"].append(f"{proposal.market} staat niet in MARKETS")
+        else:
+            row["problems"] = []
+        evaluation_rows.append(row)
+    return {
+        "settings": settings,
+        "status": _trading_status(engine, session, settings),
+        "open_positions": open_positions(session, engine.mode),
+        "closed_positions": closed_positions(session, engine.mode)[:20],
+        "decisions": recent_decisions(
+            session, engine.mode, limit=5000, days=settings.decision_history_days
+        ),
+        "last_cycle": last_cycle,
+        "levels": {d.id: levels_summary(strategy, d.indicator_values()) for d in last_cycle},
+        "evaluations": evaluation_rows,
+        "error": error,
+    }
 
 
 @app.get("/trading", response_class=HTMLResponse)
@@ -1079,32 +1212,18 @@ async def trading_page(
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
-    settings: Settings = request.app.state.settings
-    evaluations = session.scalars(select(Evaluation).order_by(Evaluation.id.desc()).limit(5)).all()
-    strategy = load_strategy(session)
-    last_cycle = latest_decisions(session, engine.mode, list(engine.markets))
     return templates.TemplateResponse(
-        request,
-        "trading.html",
-        {
-            "settings": settings,
-            "status": _trading_status(engine, session, settings),
-            "open_positions": open_positions(session, engine.mode),
-            "closed_positions": closed_positions(session, engine.mode)[:20],
-            "decisions": recent_decisions(
-                session, engine.mode, limit=5000, days=settings.decision_history_days
-            ),
-            "last_cycle": last_cycle,
-            "levels": {d.id: levels_summary(strategy, d.indicator_values()) for d in last_cycle},
-            "evaluations": [_evaluation_dict(e) for e in evaluations],
-            "error": None,
-        },
+        request, "trading.html", _trading_context(request, engine, session)
     )
+
+
+APPLY_ACTION_RE = re.compile(r"apply:([0-9]{1,9})")
 
 
 @app.post("/trading/action")
 async def trading_action(
-    action: str = Form(...),
+    request: Request,
+    action: str = Form(..., max_length=32),
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
@@ -1117,11 +1236,14 @@ async def trading_action(
     elif action == "evaluate" and engine.evaluator.available:
         await engine.run_evaluation(session)
     elif action.startswith("apply:"):
-        ev = session.get(Evaluation, int(action.split(":", 1)[1]))
-        if ev is not None and ev.proposed_strategy:
-            save_strategy(session, Strategy.model_validate_json(ev.proposed_strategy))
-            ev.applied = True
-            session.commit()
+        match = APPLY_ACTION_RE.fullmatch(action)
+        if match is None:
+            raise HTTPException(400, "Ongeldig voorstel: verwacht apply:<nummer>.")
+        try:
+            _apply_proposal(request, session, int(match.group(1)))
+        except ProposalError as exc:
+            ctx = _trading_context(request, engine, session, error=exc.message)
+            return templates.TemplateResponse(request, "trading.html", ctx, status_code=exc.status)
     return RedirectResponse("/trading", status_code=303)
 
 
@@ -1136,6 +1258,7 @@ def _plan_context(request: Request, engine: TradingEngine, session: Session) -> 
         "settings": settings,
         "plan": load_plan(session),
         "fields": PLAN_FIELDS,
+        "max_length": PLAN_MAX_LENGTH,
         "strategy": strategy,
         "mode": engine.mode,
         "limits": engine.limits,
@@ -1221,21 +1344,34 @@ def _journal_filter(
     )
 
 
+# Journal filters: free text is short, days stay within what timedelta and the database
+# handle.
+JOURNAL_FILTERS = {
+    "market": Query(None, max_length=16),
+    "status": Query(None, max_length=16),
+    "result": Query(None, max_length=16),
+    "reason": Query(None, max_length=32),
+    "tag": Query(None, max_length=64),
+    "days": Query(None, ge=0, le=3650),
+    "q": Query(None, max_length=200),
+}
+
+
 @app.get("/api/journal")
 async def api_journal(
-    market: str | None = None,
-    status: str | None = None,
-    result: str | None = None,
-    reason: str | None = None,
-    tag: str | None = None,
-    days: int | None = None,
-    q: str | None = None,
-    limit: int = 200,
+    market: str | None = JOURNAL_FILTERS["market"],
+    status: str | None = JOURNAL_FILTERS["status"],
+    result: str | None = JOURNAL_FILTERS["result"],
+    reason: str | None = JOURNAL_FILTERS["reason"],
+    tag: str | None = JOURNAL_FILTERS["tag"],
+    days: int | None = JOURNAL_FILTERS["days"],
+    q: str | None = JOURNAL_FILTERS["q"],
+    limit: int = Query(200, ge=1, le=1000),
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
     flt = _journal_filter(market, status, result, reason, tag, days, q)
-    entries = journal_entries(session, engine.mode, flt, min(limit, 1000))
+    entries = journal_entries(session, engine.mode, flt, limit)
     return {
         "mode": engine.mode,
         "totals": journal_totals(entries),
@@ -1249,7 +1385,11 @@ class NoteIn(BaseModel):
 
 
 @app.put("/api/journal/{position_id}/note")
-async def api_journal_note(position_id: int, body: NoteIn, session: Session = Depends(get_session)):
+async def api_journal_note(
+    body: NoteIn,
+    position_id: int = Path(ge=1, le=DB_ID_MAX),
+    session: Session = Depends(get_session),
+):
     try:
         save_note(session, position_id, body.note, body.tags)
     except LookupError as exc:
@@ -1264,14 +1404,14 @@ async def api_journal_note(position_id: int, body: NoteIn, session: Session = De
 @app.get("/journal", response_class=HTMLResponse)
 async def journal_page(
     request: Request,
-    market: str | None = None,
-    status: str | None = None,
-    result: str | None = None,
-    reason: str | None = None,
-    tag: str | None = None,
-    days: int | None = None,
-    q: str | None = None,
-    saved: int | None = None,
+    market: str | None = JOURNAL_FILTERS["market"],
+    status: str | None = JOURNAL_FILTERS["status"],
+    result: str | None = JOURNAL_FILTERS["result"],
+    reason: str | None = JOURNAL_FILTERS["reason"],
+    tag: str | None = JOURNAL_FILTERS["tag"],
+    days: int | None = JOURNAL_FILTERS["days"],
+    q: str | None = JOURNAL_FILTERS["q"],
+    saved: int | None = Query(None, ge=0, le=DB_ID_MAX),
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
@@ -1300,11 +1440,11 @@ async def journal_page(
 
 @app.post("/journal/{position_id}/note")
 async def journal_note_form(
-    position_id: int,
     request: Request,
+    position_id: int = Path(ge=1, le=DB_ID_MAX),
     note: str = Form(""),
     tags: str = Form(""),
-    back: str = Form(""),
+    back: str = Form("", max_length=2000),
     session: Session = Depends(get_session),
 ):
     try:
@@ -1347,9 +1487,18 @@ def _save_settings(request: Request, session: Session, raw: dict) -> Settings:
         if blocker:
             raise SettingsError({"trading_mode": f"live handelen kan nog niet: {blocker}"})
     cfg.save_overrides(session, values, app_.state.env)
+    _log_setting_changes(app_.state.settings, candidate)
     apply_settings(app_, candidate)
     app_.state.config_warning = None
     return candidate
+
+
+def _log_setting_changes(old: Settings, new: Settings) -> None:
+    """An audit trail in the container log: every portal change with old and new value."""
+    for key in cfg.EDITABLE_KEYS:
+        before, after = getattr(old, key), getattr(new, key)
+        if before != after:
+            log.info("setting %s changed in the portal: %r -> %r", key, before, after)
 
 
 def _reset_settings(request: Request, session: Session, keys: list[str] | None) -> int:

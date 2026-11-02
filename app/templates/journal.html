@@ -93,12 +93,12 @@
       </div>
       <div>
         <label for="f-tag">Label</label>
-        <input id="f-tag" name="tag" list="journal-tags" value="{{ filter.tag or '' }}" placeholder="bijv. fout">
+        <input id="f-tag" name="tag" list="journal-tags" value="{{ filter.tag or '' }}" placeholder="bijv. fout" maxlength="64">
         <datalist id="journal-tags">{% for t in tags %}<option value="{{ t }}">{% endfor %}</datalist>
       </div>
       <div>
         <label for="f-q">Zoek in notities en toelichting</label>
-        <input id="f-q" name="q" value="{{ filter.query or '' }}" placeholder="bijv. hack, ema200">
+        <input id="f-q" name="q" value="{{ filter.query or '' }}" placeholder="bijv. hack, ema200" maxlength="200">
       </div>
       <div class="actions">
         <button class="btn btn-primary" type="submit">Filteren</button>
@@ -179,9 +179,9 @@
           <form method="post" action="/journal/{{ p.id }}/note">
             <input type="hidden" name="back" value="{{ back_url }}">
             <label class="small muted" for="note-{{ p.id }}">Wat zag je, wat ging goed of fout, wat zou je anders doen?</label>
-            <textarea id="note-{{ p.id }}" name="note" rows="3" placeholder="Bijvoorbeeld: instap klopte, maar de take-profit stond te krap; het nieuws over de ETF was al ingeprijsd.">{{ p.note or "" }}</textarea>
+            <textarea id="note-{{ p.id }}" name="note" rows="3" maxlength="4000" placeholder="Bijvoorbeeld: instap klopte, maar de take-profit stond te krap; het nieuws over de ETF was al ingeprijsd.">{{ p.note or "" }}</textarea>
             <label class="small muted" for="tags-{{ p.id }}">Labels, gescheiden door komma's</label>
-            <input id="tags-{{ p.id }}" name="tags" list="journal-tags" value="{{ p.tag_list()|join(', ') }}" placeholder="bijv. goed, fout, nieuws, fomo, les">
+            <input id="tags-{{ p.id }}" name="tags" list="journal-tags" value="{{ p.tag_list()|join(', ') }}" placeholder="bijv. goed, fout, nieuws, fomo, les" maxlength="256">
             <div class="actions"><button class="btn btn-primary btn-sm" type="submit">Opslaan</button></div>
           </form>
         </details>

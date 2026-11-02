@@ -55,3 +55,22 @@
 </ul>
 {% endif %}
 {%- endmacro %}
+
+{# Field-level differences between the active strategy and a proposal (strategy_diff()). #}
+{% macro strategy_diff(diff, title="Verschil met de actieve strategie") -%}
+{% if diff is not none %}
+<h4 style="margin-top: 16px">{{ title }}</h4>
+{% if diff %}
+<div class="table-wrap strategy-diff" style="margin-top: 8px">
+<table class="small">
+  <tr><th>Onderdeel</th><th>Nu</th><th>Voorstel</th></tr>
+  {% for d in diff %}
+  <tr><td class="nowrap"><strong>{{ d.label }}</strong></td><td class="muted">{{ d.old }}</td><td>{{ d.new }}</td></tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<p class="small muted" style="margin-top: 6px">Geen verschil: het voorstel is gelijk aan de actieve strategie.</p>
+{% endif %}
+{% endif %}
+{%- endmacro %}

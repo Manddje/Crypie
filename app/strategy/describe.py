@@ -218,3 +218,52 @@ def levels_summary(strategy: Strategy, values: dict[str, float | None]) -> list[
                 }
             )
     return out
+
+
+DIFF_FIELDS_NL: dict[str, str] = {
+    "name": "Naam",
+    "market": "Markt",
+    "interval": "Candles",
+    "indicators": "Indicatoren",
+    "buy": "Kopen als",
+    "sell": "Verkopen als",
+    "stop_loss_pct": "Stop-loss (%)",
+    "trailing_stop_pct": "Trailing stop (%)",
+    "trailing_start_pct": "Trailing stop actief vanaf winst (%)",
+    "take_profit_pct": "Take-profit (%)",
+    "position_size_pct": "Positiegrootte (%)",
+    "description": "Omschrijving",
+}
+
+
+def _indicator_text(ind: object) -> str:
+    params = ", ".join(
+        f"{k}={v:g}" if isinstance(v, float) else f"{k}={v}"
+        for k, v in ind.model_dump().items()  # type: ignore[attr-defined]
+        if k not in ("id", "type")
+    )
+    return f"{ind.id}: {ind.type}({params})"  # type: ignore[attr-defined]
+
+
+def _field_text(strategy: Strategy, key: str) -> str:
+    value = getattr(strategy, key)
+    if key == "indicators":
+        return "; ".join(_indicator_text(i) for i in value)
+    if key in ("buy", "sell"):
+        return " én ".join(condition_nl(c) for c in value) or "–"
+    if value is None:
+        return "geen"
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
+
+
+def strategy_diff(old: Strategy, new: Strategy) -> list[dict[str, str]]:
+    """Field by field what changes when ``new`` replaces ``old``, in Dutch, so the owner can
+    review a proposal before applying it. Unchanged fields are left out."""
+    out: list[dict[str, str]] = []
+    for key, label in DIFF_FIELDS_NL.items():
+        before, after = _field_text(old, key), _field_text(new, key)
+        if before != after:
+            out.append({"field": key, "label": label, "old": before, "new": after})
+    return out

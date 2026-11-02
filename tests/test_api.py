@@ -248,7 +248,7 @@ async def test_trading_endpoints(api):
     r = await api.get("/trading")
     assert "Lange-termijntrend" in r.text and "opwaarts" in r.text and "+33,3%" in r.text
     assert "Laatste cyclus per markt" in r.text and "Alle cyclussen" in r.text
-    # Flat candles push RSI to 100 but it does not fall, so no sell signal: hold, explained per
+    # Flat candles keep the RSI at a neutral 50: no buy and no sell signal, so hold, explained per
     # condition.
     assert "Geen koopsignaal" in r.text and "rsi14 lager dan 35 ✗" in r.text
     assert "laatste 7 dagen" in r.text

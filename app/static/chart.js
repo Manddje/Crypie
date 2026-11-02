@@ -50,10 +50,21 @@
     var d = new Date(ts * 1000);
     return interval === "1d" ? fmtDay.format(d) : fmtMoment.format(d);
   }
+  // Only for the tooltip HTML; everything else is built with DOM nodes and textContent.
   function escapeHtml(text) {
-    return String(text == null ? "" : text).replace(/[&<>"]/g, function (c) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    return String(text == null ? "" : text).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
     });
+  }
+  // el("span", "class", "text", child, ...): an element with text content, never parsed HTML.
+  function el(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = text;
+    for (var i = 3; i < arguments.length; i++) {
+      if (arguments[i] != null) node.appendChild(arguments[i]);
+    }
+    return node;
   }
   function timeFormatter(interval) {
     return function (time) { return fmtTime(time, interval) + (interval === "1d" ? "" : " UTC"); };
@@ -179,21 +190,26 @@
 
   function renderActionList() {
     var acts = visibleActions().slice().reverse();
+    priceList.textContent = "";
     if (!acts.length) {
-      priceList.innerHTML = '<p class="muted small">Nog geen acties in deze periode voor ' + escapeHtml(state.market) + ".</p>";
+      priceList.appendChild(el("p", "muted small", "Nog geen acties in deze periode voor " + state.market + "."));
       return;
     }
     var d = priceData.decimals;
-    var html = '<ul class="list">';
+    var list = el("ul", "list");
     acts.slice(0, 50).forEach(function (a) {
-      var how = a.price != null ? fmtPrice(a.price, d) : "";
-      if (a.amount_quote != null && a.executed) how += "<br>" + fmtEur.format(a.amount_quote);
-      html += '<li><span class="when">' + fmtTime(a.time, "1h") + '</span><span class="what"><strong>' + escapeHtml(a.label) + "</strong>" +
-        (a.detail ? '<span class="detail">' + escapeHtml(a.detail) + "</span>" : "") + '</span><span class="how">' + how + "</span></li>";
+      var how = el("span", "how", a.price != null ? fmtPrice(a.price, d) : "");
+      if (a.amount_quote != null && a.executed) {
+        how.appendChild(document.createElement("br"));
+        how.appendChild(document.createTextNode(fmtEur.format(a.amount_quote)));
+      }
+      list.appendChild(el("li", null, null,
+        el("span", "when", fmtTime(a.time, "1h")),
+        el("span", "what", null, el("strong", null, a.label), a.detail ? el("span", "detail", a.detail) : null),
+        how));
     });
-    html += "</ul>";
-    if (acts.length > 50) html += '<p class="muted small">Alleen de laatste 50 van ' + acts.length + " acties.</p>";
-    priceList.innerHTML = html;
+    priceList.appendChild(list);
+    if (acts.length > 50) priceList.appendChild(el("p", "muted small", "Alleen de laatste 50 van " + acts.length + " acties."));
   }
 
   function loadPrice() {
@@ -300,9 +316,12 @@
         if (!data.points.length) { portfolioStatus.textContent = "Nog geen gegevens om de waarde te berekenen."; return; }
         var first = data.points[0].value, last = data.points[data.points.length - 1].value;
         var diff = last - first;
-        portfolioStatus.innerHTML = "Van " + fmtEur.format(first) + " naar <strong>" + fmtEur.format(last) + "</strong> (" +
-          '<span class="' + (diff >= 0 ? "pos" : "neg") + '">' + (diff >= 0 ? "+" : "") + fmtEur.format(diff) + ", " + fmtPct.format(first ? diff / first : 0) + "</span>) · " +
-          countNl(data.actions.length, "order") + " in deze periode";
+        portfolioStatus.textContent = "Van " + fmtEur.format(first) + " naar ";
+        portfolioStatus.appendChild(el("strong", null, fmtEur.format(last)));
+        portfolioStatus.appendChild(document.createTextNode(" ("));
+        portfolioStatus.appendChild(el("span", diff >= 0 ? "pos" : "neg",
+          (diff >= 0 ? "+" : "") + fmtEur.format(diff) + ", " + fmtPct.format(first ? diff / first : 0)));
+        portfolioStatus.appendChild(document.createTextNode(") · " + countNl(data.actions.length, "order") + " in deze periode"));
       })
       .catch(function (err) {
         portfolioStatus.textContent = "De grafiek kon niet worden geladen (" + err.message + ").";

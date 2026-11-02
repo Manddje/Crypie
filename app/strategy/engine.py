@@ -106,30 +106,55 @@ def hard_conditions(conditions: list[Condition]) -> list[Condition]:
 
 
 def signal_at(
-    strategy: Strategy, series: dict[str, Series], i: int, soft_as_hard: bool = False
+    strategy: Strategy,
+    series: dict[str, Series],
+    i: int,
+    soft_as_hard: bool = False,
+    has_position: bool = False,
 ) -> Signal:
     """Strategy signal on candle ``i``.
 
     Live, soft conditions do not block the signal (Claude weighs them). A backtest has no
     Claude, so it passes ``soft_as_hard=True`` and simulates the strict version.
+
+    With an open position (``has_position``) the sell side is checked first: a buy signal on
+    the same candle must not hide the sell signal for the position that is already open.
+    Without a position the buy side goes first, as there is nothing to sell.
     """
     buy = strategy.buy if soft_as_hard else hard_conditions(strategy.buy)
     sell = strategy.sell if soft_as_hard else hard_conditions(strategy.sell)
-    if all(check_condition(c, series, i) for c in buy):
-        return "buy"
-    if all(check_condition(c, series, i) for c in sell):
-        return "sell"
+    sides: list[tuple[Signal, list[Condition]]] = [("buy", buy), ("sell", sell)]
+    if has_position:
+        sides.reverse()
+    for signal, conditions in sides:
+        if all(check_condition(c, series, i) for c in conditions):
+            return signal
     return "hold"
 
 
-def latest_snapshot(strategy: Strategy, candles: list[Candle]) -> dict[str, object]:
+def buy_signal_pct(strategy: Strategy, series: dict[str, Series], start: int = 0) -> float | None:
+    """Percentage of candles from ``start`` on where the live buy signal (the hard buy
+    conditions only) fires; None without candles. A high number means the strategy would ask
+    for a buy (and a Claude call) on most cycles."""
+    n = len(series["close"])
+    if start >= n:
+        return None
+    buy = hard_conditions(strategy.buy)
+    hits = sum(1 for i in range(start, n) if all(check_condition(c, series, i) for c in buy))
+    return hits / (n - start) * 100
+
+
+def latest_snapshot(
+    strategy: Strategy, candles: list[Candle], has_position: bool = False
+) -> dict[str, object]:
     """Signal and indicator values for the most recent candle (used by the dashboard)."""
     if not candles:
         return {"signal": "hold", "values": {}}
     series = compute_series(strategy, candles)
     i = len(candles) - 1
     values = {k: round(v[i], 6) for k, v in series.items() if k != "volume" and v[i] is not None}
-    return {"signal": signal_at(strategy, series, i), "values": values, "timestamp": candles[i][0]}
+    signal = signal_at(strategy, series, i, has_position=has_position)
+    return {"signal": signal, "values": values, "timestamp": candles[i][0]}
 
 
 @dataclass
@@ -158,6 +183,8 @@ class BacktestResult:
     trades: list[Trade] = field(default_factory=list)
     candles: int = 0
     fee_pct: float = 0.0
+    warmup: int = 0
+    live_buy_signal_pct: float | None = None
 
     @property
     def closed_trades(self) -> list[Trade]:
@@ -183,6 +210,10 @@ class BacktestResult:
             "open_position": any(t.exit_price is None for t in self.trades),
             "win_rate_pct": round(self.win_rate_pct, 1) if self.win_rate_pct is not None else None,
             "fee_pct": self.fee_pct,
+            "warmup_candles": self.warmup,
+            "live_buy_signal_pct": round(self.live_buy_signal_pct, 1)
+            if self.live_buy_signal_pct is not None
+            else None,
         }
 
 
@@ -198,7 +229,11 @@ def backtest(
 
     Stop-loss, trailing stop and take-profit are checked against the bar's low/high and filled
     at the threshold price; the trailing stop follows the highest high of earlier bars. Fees
-    are charged on both entry and exit.
+    are charged on both entry and exit. With an open trade the sell signal is checked first,
+    as live.
+
+    ``live_buy_signal_pct`` in the result is how often the live buy signal (hard conditions
+    only) fired after the warm-up: the backtest itself trades the stricter version.
     """
     if len(candles) < 2:
         raise ValueError("need at least 2 candles")
@@ -232,7 +267,10 @@ def backtest(
                 target = open_trade.entry_price * (1 + strategy.take_profit_pct / 100)
                 if high >= target:
                     exit_price, reason = target, "take_profit"
-            if exit_price is None and signal_at(strategy, series, i, soft_as_hard=True) == "sell":
+            if (
+                exit_price is None
+                and signal_at(strategy, series, i, soft_as_hard=True, has_position=True) == "sell"
+            ):
                 exit_price, reason = close, "signal"
             if exit_price is not None:
                 eur += coin * exit_price * (1 - fee)
@@ -264,4 +302,6 @@ def backtest(
         trades=trades,
         candles=len(candles),
         fee_pct=fee_pct,
+        warmup=strategy.warmup(),
+        live_buy_signal_pct=buy_signal_pct(strategy, series, strategy.warmup()),
     )

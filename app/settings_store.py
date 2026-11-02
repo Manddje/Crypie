@@ -8,11 +8,14 @@ are deliberately *not* editable here: they stay in the environment.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -27,6 +30,21 @@ log = logging.getLogger(__name__)
 
 CONFIG_PREFIX = "config:"
 MARKET_RE = re.compile(r"^[A-Z0-9]{2,10}-EUR$")
+
+# Upper bounds on list settings and on any raw value, so one form post cannot store
+# thousands of markets or feeds (every one costs API calls each cycle).
+MAX_MARKETS = 20
+MAX_FEEDS = 30
+MAX_CALENDAR_LINES = 200
+MAX_URL_LENGTH = 500
+MAX_RAW_LENGTH = 20_000
+
+# Limits with a hard ceiling that only the environment can set: setting key -> ceiling field.
+CEILINGS: dict[str, str] = {
+    "max_trade_eur": "max_trade_eur_ceiling",
+    "max_exposure_pct": "max_exposure_pct_ceiling",
+    "max_trades_per_day": "max_trades_per_day_ceiling",
+}
 
 GROUPS: dict[str, tuple[str, str]] = {
     "trading": (
@@ -501,7 +519,30 @@ def effective_settings(session: Session, env: Settings | None = None) -> Setting
 def _build(env: Settings, overrides: dict[str, Any]) -> Settings:
     # Init kwargs beat the environment in pydantic-settings, which is exactly the order we
     # want: portal > environment > built-in default. Validators run on the stored values.
-    return Settings(**overrides)
+    return apply_ceilings(Settings(**overrides))
+
+
+def apply_ceilings(settings: Settings) -> Settings:
+    """Clamp the limits to their environment ceilings.
+
+    The portal refuses values above a ceiling; this catches what was stored before a ceiling
+    existed or was lowered, and an environment value above its own ceiling.
+    """
+    update: dict[str, Any] = {}
+    for key, ceiling_key in CEILINGS.items():
+        value, ceiling = getattr(settings, key), getattr(settings, ceiling_key)
+        if value > ceiling:
+            log.warning(
+                "%s=%r is above %s=%r; using the ceiling", key, value, ceiling_key.upper(), ceiling
+            )
+            update[key] = type(value)(ceiling)
+    return settings.model_copy(update=update) if update else settings
+
+
+def ceiling_of(settings: Settings, key: str) -> float | None:
+    """The environment ceiling for this setting, or None when it has none."""
+    ceiling_key = CEILINGS.get(key)
+    return getattr(settings, ceiling_key) if ceiling_key else None
 
 
 def save_overrides(session: Session, values: dict[str, Any], env: Settings | None = None) -> None:
@@ -564,6 +605,9 @@ def _parse_number(spec: Spec, raw: Any) -> float | int:
         value = float(text)
     except ValueError as exc:
         raise ValueError("geen geldig getal") from exc
+    if not math.isfinite(value):
+        # NaN passes every min/max check (comparisons are False) and switches limits off.
+        raise ValueError("geen geldig getal")
     if spec.kind == "int":
         if value != int(value):
             raise ValueError("heel getal verwacht")
@@ -588,7 +632,42 @@ def _parse_markets(raw: Any) -> list[str]:
             markets.append(m)
     if not markets:
         raise ValueError("kies minstens één markt")
+    if len(markets) > MAX_MARKETS:
+        raise ValueError(f"maximaal {MAX_MARKETS} markten")
     return markets
+
+
+def _feed_problem(url: str) -> str | None:
+    """Why this feed address is refused, or None. Only http(s) to a named public host."""
+    shown = url[:60]
+    if len(url) > MAX_URL_LENGTH:
+        return f"'{shown}…' is te lang (maximaal {MAX_URL_LENGTH} tekens)"
+    if not re.match(r"^https?://\S+$", url, re.IGNORECASE):
+        return f"'{shown}' is geen geldig adres (begin met http:// of https://)"
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        _ = parts.port  # raises ValueError on a malformed port
+    except ValueError:
+        return f"'{shown}' is geen geldig adres"
+    if parts.scheme.lower() not in ("http", "https") or not host:
+        return f"'{shown}' is geen geldig adres (begin met http:// of https://)"
+    if parts.username is not None or parts.password is not None:
+        return f"'{shown}': een adres met inloggegevens is niet toegestaan"
+    host = host.rstrip(".").lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        return f"'{shown}': localhost is niet toegestaan"
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        return f"'{shown}': gebruik een domeinnaam, geen IP-adres"
+    if "." not in host or re.fullmatch(r"[0-9.]+|0x[0-9a-f.x]+", host):
+        # Single-label names resolve on the local network; numeric forms like 2130706433 or
+        # 0x7f.1 are IP addresses in disguise.
+        return f"'{shown}': gebruik een volledige domeinnaam"
+    return None
 
 
 def _parse_lines(raw: Any) -> list[str]:
@@ -598,17 +677,32 @@ def _parse_lines(raw: Any) -> list[str]:
         url = str(part).strip()
         if not url:
             continue
-        if not re.match(r"^https?://\S+$", url):
-            raise ValueError(f"'{url[:60]}' is geen geldig adres (begin met http:// of https://)")
+        problem = _feed_problem(url)
+        if problem:
+            raise ValueError(problem)
         if url not in urls:
             urls.append(url)
     if not urls:
         raise ValueError("vul minstens één feed in")
+    if len(urls) > MAX_FEEDS:
+        raise ValueError(f"maximaal {MAX_FEEDS} feeds")
     return urls
+
+
+def _parse_events(raw: Any) -> list[str]:
+    lines = raw if isinstance(raw, list) else re.split(r"[\r\n;]+", str(raw))
+    if sum(1 for line in lines if str(line).strip()) > MAX_CALENDAR_LINES:
+        raise ValueError(f"maximaal {MAX_CALENDAR_LINES} regels")
+    return validate_calendar_lines(raw)
 
 
 def parse_value(spec: Spec, raw: Any) -> Any:
     """Turn a form/JSON value into the typed value the Settings model expects."""
+    if isinstance(raw, list):
+        if len(raw) > 1000 or any(len(str(v)) > MAX_URL_LENGTH for v in raw):
+            raise ValueError("te lang")
+    elif len(str(raw)) > MAX_RAW_LENGTH:
+        raise ValueError("te lang")
     if spec.kind == "bool":
         return _parse_bool(raw)
     if spec.kind in ("int", "float"):
@@ -628,7 +722,7 @@ def parse_value(spec: Spec, raw: Any) -> Any:
     if spec.kind == "lines":
         return _parse_lines(raw)
     if spec.kind == "events":
-        return validate_calendar_lines(raw)
+        return _parse_events(raw)
     value = str(raw).strip()
     if not value:
         raise ValueError("mag niet leeg zijn")
@@ -655,6 +749,21 @@ def parse_values(raw: dict[str, Any]) -> dict[str, Any]:
     return values
 
 
+def check_ceilings(values: dict[str, Any], env: Settings) -> dict[str, str]:
+    """Values above the environment's hard ceiling; only the server environment can raise it."""
+    errors: dict[str, str] = {}
+    for key, value in values.items():
+        ceiling = ceiling_of(env, key)
+        if ceiling is not None and value > ceiling:
+            spec = SPEC_BY_KEY[key]
+            unit = f" {spec.unit}" if spec.unit else ""
+            errors[key] = (
+                f"maximaal {ceiling:g}{unit}: dat plafond staat in de serveromgeving "
+                f"({CEILINGS[key].upper()}) en is hier niet te verhogen"
+            )
+    return errors
+
+
 def check_consistency(settings: Settings) -> dict[str, str]:
     """Rules that span more than one field; checked on the merged result."""
     errors: dict[str, str] = {}
@@ -669,6 +778,9 @@ def preview(session: Session, values: dict[str, Any], env: Settings | None = Non
     Raises SettingsError when the Settings model or a cross-field rule rejects the result.
     """
     env = env or get_settings()
+    errors = check_ceilings(values, env)
+    if errors:
+        raise SettingsError(errors)
     merged = {**load_overrides(session), **values}
     try:
         candidate = _build(env, merged)
@@ -712,6 +824,7 @@ def describe(session: Session, current: Settings, env: Settings | None = None) -
         for spec in SPECS:
             if spec.group != group:
                 continue
+            ceiling = ceiling_of(env, spec.key)
             fields.append(
                 {
                     "key": spec.key,
@@ -720,7 +833,8 @@ def describe(session: Session, current: Settings, env: Settings | None = None) -
                     "kind": spec.kind,
                     "choices": list(spec.choices),
                     "min": spec.min,
-                    "max": spec.max,
+                    "max": spec.max if ceiling is None else min(spec.max or ceiling, ceiling),
+                    "ceiling": ceiling,
                     "unit": spec.unit,
                     "env_name": spec.env_name,
                     "value": getattr(current, spec.key),

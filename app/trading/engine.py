@@ -412,15 +412,16 @@ class TradingEngine:
         prices: dict[str, float],
         watch: bool = False,
     ) -> CycleResult:
-        candles = await self.client.candles(market, strategy.interval, 300)
+        candles = await self.client.candles(market, strategy.interval, strategy.candles_needed())
         series = compute_series(strategy, candles)
         i = len(candles) - 1
-        signal = signal_at(strategy, series, i)
+        position = open_position(session, self.mode, market)
+        # With an open position the sell side goes first: a buy signal must not hide it.
+        signal = signal_at(strategy, series, i, has_position=position is not None)
         checks = explain_signal(strategy, series, i)
         signal_reason = signal_reason_nl(signal, checks)
         price = prices.get(market) or candles[-1][4]
         now = datetime.now(UTC)
-        position = open_position(session, self.mode, market)
         risk_off = self.risk_off(session, market, now) if position is None else None
 
         # Dip watch: arm on the dip, fire on the turn, give up after watch_max_min.

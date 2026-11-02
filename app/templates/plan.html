@@ -24,7 +24,7 @@
         <div class="plan-field">
           <label for="plan-{{ key }}">{{ label }}</label>
           <div class="setting-help">{{ help }}</div>
-          <textarea id="plan-{{ key }}" name="{{ key }}" rows="4" placeholder="{{ placeholder }}">{{ plan[key] }}</textarea>
+          <textarea id="plan-{{ key }}" name="{{ key }}" rows="4" maxlength="{{ max_length[key] }}" placeholder="{{ placeholder }}">{{ plan[key] }}</textarea>
         </div>
         {% endfor %}
       </div>

@@ -41,17 +41,30 @@ def ema(values: Sequence[float], period: int) -> Series:
     return out
 
 
+RSI_MIN_MOVE = 1e-4  # relative close-to-close moves below this count as no movement
+
+
 def rsi(values: Sequence[float], period: int = 14) -> Series:
-    """Wilder's RSI (0-100)."""
+    """Wilder's RSI (0-100).
+
+    Flat candles do not make it degenerate: without any movement the RSI is 50 (neutral)
+    instead of 100, and moves smaller than ``RSI_MIN_MOVE`` of the price (rounding ticks on
+    an illiquid market) are ignored, so one tick after a flat stretch does not swing it to 0.
+    """
     if period < 1:
         raise ValueError("period must be >= 1")
     out: Series = [None] * len(values)
     if len(values) <= period:
         return out
+
+    def move(i: int) -> float:
+        delta = values[i] - values[i - 1]
+        return 0.0 if abs(delta) < abs(values[i - 1]) * RSI_MIN_MOVE else delta
+
     gains = 0.0
     losses = 0.0
     for i in range(1, period + 1):
-        delta = values[i] - values[i - 1]
+        delta = move(i)
         if delta >= 0:
             gains += delta
         else:
@@ -61,13 +74,13 @@ def rsi(values: Sequence[float], period: int = 14) -> Series:
 
     def to_rsi(g: float, loss: float) -> float:
         if loss == 0:
-            return 100.0
+            return 50.0 if g == 0 else 100.0
         rs = g / loss
         return 100.0 - 100.0 / (1.0 + rs)
 
     out[period] = to_rsi(avg_gain, avg_loss)
     for i in range(period + 1, len(values)):
-        delta = values[i] - values[i - 1]
+        delta = move(i)
         gain = max(delta, 0.0)
         loss = max(-delta, 0.0)
         avg_gain = (avg_gain * (period - 1) + gain) / period

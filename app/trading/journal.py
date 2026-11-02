@@ -21,6 +21,9 @@ from app.db import Decision, Order, Position
 TAG_RE = re.compile(r"[^a-z0-9àâäéèêëíìîïóòôöúùûüç_\-]+")
 NOTE_MAX = 4000
 TAGS_MAX = 10
+TAG_LEN_MAX = 32
+TAGS_INPUT_MAX = 256  # what the form and the API accept before normalising
+TAGS_COLUMN_MAX = 128  # positions.tags is VARCHAR(128)
 
 # close_reason -> what the journal calls it
 EXIT_NL: dict[str, str] = {
@@ -291,15 +294,19 @@ def journal_totals(entries: list[JournalEntry]) -> dict[str, Any]:
 
 
 def normalize_tags(raw: str | None) -> str:
-    """'Fout, Nieuws FOMO' -> 'fout,nieuws-fomo'; at most TAGS_MAX unique tags."""
+    """'Fout, Nieuws FOMO' -> 'fout,nieuws-fomo'; at most TAGS_MAX unique tags of at most
+    TAG_LEN_MAX characters, together short enough for the tags column."""
     if not raw:
         return ""
     out: list[str] = []
     for part in raw.replace(";", ",").split(","):
-        tag = TAG_RE.sub("-", part.strip().lower()).strip("-")
-        if tag and tag not in out:
-            out.append(tag)
-    return ",".join(out[:TAGS_MAX])
+        tag = TAG_RE.sub("-", part.strip().lower()).strip("-")[:TAG_LEN_MAX].strip("-")
+        if not tag or tag in out:
+            continue
+        if len(out) >= TAGS_MAX or len(",".join([*out, tag])) > TAGS_COLUMN_MAX:
+            break
+        out.append(tag)
+    return ",".join(out)
 
 
 def save_note(session: Session, position_id: int, note: str | None, tags: str | None) -> Position:
@@ -309,6 +316,8 @@ def save_note(session: Session, position_id: int, note: str | None, tags: str | 
     note = (note or "").strip()
     if len(note) > NOTE_MAX:
         raise ValueError(f"een notitie mag maximaal {NOTE_MAX} tekens lang zijn")
+    if len(tags or "") > TAGS_INPUT_MAX:
+        raise ValueError(f"de tags mogen samen maximaal {TAGS_INPUT_MAX} tekens lang zijn")
     p.note = note or None
     p.tags = normalize_tags(tags) or None
     p.note_updated_at = datetime.now(UTC) if (p.note or p.tags) else None
