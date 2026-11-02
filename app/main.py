@@ -47,6 +47,7 @@ from app.bitvavo.broker import PAPER_WALLET_KEY, Broker, LiveBroker, PaperBroker
 from app.bitvavo.client import BitvavoClient, BitvavoError, InvalidMarketError
 from app.config import Settings, get_settings
 from app.db import Evaluation, Position, SessionLocal, Setting, get_session, init_db
+from app.labels import daily_loss_rule_nl, max_orders_rule_nl
 from app.news.service import (
     FEAR_GREED_NL,
     NEWS_RETENTION_DAYS,
@@ -87,6 +88,7 @@ from app.trading.engine import (
     NEWS_ENTRY_MIN_SCORE,
     NEWS_ENTRY_SIZE_FACTOR,
     NEWS_EXIT_MAX_SCORE,
+    NEWS_MIN_SOURCES,
     EvaluationBusy,
     TradingEngine,
     closed_positions,
@@ -1740,10 +1742,34 @@ async def trading_action(
 # -- Trading plan ---------------------------------------------------------------------
 
 
+def _plan_claude(settings: Settings, available: bool, budget: dict) -> dict:
+    """Whether Claude applies the plan right now, in one honest sentence (UX-11): the owner's
+    rules are instructions for Claude, so without Claude they are not applied at all."""
+    if available and not budget.get("exhausted"):
+        return {
+            "active": True,
+            "text": "Claude leest dit plan bij elke beslissing en elke evaluatie.",
+        }
+    why = "er is geen Claude-sleutel" if not available else "het Claude-budget van deze maand is op"
+    if settings.claude_unavailable_mode == "indicators":
+        text = (
+            f"Claude is nu niet beschikbaar ({why}). De bot volgt dan alleen het koopsignaal van "
+            "de strategie, met de halve inzet: je eigen regels hieronder worden nu niet "
+            "toegepast, ook niet een regel als 'niet kopen in het weekend'."
+        )
+    else:
+        text = (
+            f"Claude is nu niet beschikbaar ({why}). De bot koopt daarom niets tot Claude terug "
+            "is; een verkoopsignaal volgt hij wel. Je plan wordt nu dus niet gebruikt."
+        )
+    return {"active": False, "text": text}
+
+
 def _plan_context(request: Request, engine: TradingEngine, session: Session) -> dict:
     """Everything the plan page shows: the owner's own text plus the rules the code follows."""
     settings: Settings = request.app.state.settings
     strategy = load_strategy(session)
+    budget = request.app.state.budget.status(session)
     return {
         "settings": settings,
         "plan": load_plan(session),
@@ -1756,11 +1782,15 @@ def _plan_context(request: Request, engine: TradingEngine, session: Session) -> 
         "news_entry_min_score": NEWS_ENTRY_MIN_SCORE,
         "news_exit_max_score": NEWS_EXIT_MAX_SCORE,
         "half_order_pct": int(NEWS_ENTRY_SIZE_FACTOR * 100),
-        "budget": request.app.state.budget.status(session),
+        "budget": budget,
         "paused": risk.is_paused(session),
         "claude_available": engine.decision_maker.available,
+        "claude": _plan_claude(settings, engine.decision_maker.available, budget),
+        "daily_loss_rule": daily_loss_rule_nl(engine.limits.daily_loss_limit_pct),
+        "max_orders_rule": max_orders_rule_nl(engine.limits.max_trades_per_day),
+        "news_min_sources": NEWS_MIN_SOURCES,
         "error": None,
-        "message": None,
+        "field_errors": {},
     }
 
 
@@ -1775,6 +1805,11 @@ async def api_put_plan(plan: TradingPlan, session: Session = Depends(get_session
 
 
 PLAN_SAVED = "Tradingplan opgeslagen. Claude krijgt het vanaf de volgende beslissing mee."
+# Without Claude the plan is stored but not applied: the message must not promise otherwise.
+PLAN_SAVED_IDLE = (
+    "Tradingplan opgeslagen. Claude is nu niet beschikbaar, dus de bot gebruikt het plan pas "
+    "als Claude terug is."
+)
 
 
 @app.get("/plan", response_class=HTMLResponse)
@@ -1800,14 +1835,32 @@ async def plan_save(
     except ValidationError as exc:
         ctx = _plan_context(request, engine, session)
         ctx["plan"] = TradingPlan.model_construct(**raw)
+        errors: dict[str, str] = {}
+        for e in exc.errors():
+            key = str(e["loc"][0]) if e.get("loc") else ""
+            if key in PLAN_MAX_LENGTH and str(e.get("type", "")).startswith("string_too_long"):
+                errors[key] = (
+                    f"te lang: {len(raw[key])} tekens, maximaal {PLAN_MAX_LENGTH[key]}. "
+                    "Kort de tekst in."
+                )
+            else:
+                errors[key] = "deze tekst kan niet worden opgeslagen"
+        ctx["field_errors"] = errors
         ctx["error"] = "Niet opgeslagen: " + "; ".join(
-            f"{PLAN_FIELDS.get(str(e['loc'][0]), (str(e['loc'][0]),))[0]}: {e['msg']}"
-            for e in exc.errors()
+            f"{PLAN_FIELDS.get(key, (key,))[0]} is {msg}" for key, msg in errors.items()
         )
         return templates.TemplateResponse(request, "plan.html", ctx, status_code=400)
     save_plan(session, plan)
-    # A one-time message (not ?saved=1): a reload or a restored tab shows no stale "saved".
-    return flash.redirect_with_flash("/plan", "ok", PLAN_SAVED)
+    # A one-time message (not ?saved=1): a reload or a restored tab shows no stale "saved". It
+    # only promises that Claude uses the plan when Claude is there to use it.
+    claude = _plan_claude(
+        request.app.state.settings,
+        engine.decision_maker.available,
+        request.app.state.budget.status(session),
+    )
+    return flash.redirect_with_flash(
+        "/plan#eigen", "ok", PLAN_SAVED if claude["active"] else PLAN_SAVED_IDLE
+    )
 
 
 # -- Trade journal --------------------------------------------------------------------

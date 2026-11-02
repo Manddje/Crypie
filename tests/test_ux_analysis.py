@@ -407,3 +407,64 @@ def test_text_lang_is_a_simple_hint():
     assert text_lang("Exchange hack drains $40m in Ether") == "en"
     assert text_lang("Bitcoin ETF") == "en"
     assert text_lang("De koers van bitcoin stijgt na een hack") == "nl"
+
+
+# -- Plan ---------------------------------------------------------------------------------
+
+
+async def test_plan_says_honestly_whether_claude_applies_it(api, monkeypatch):
+    """UX-11: without Claude the page says the rules are not applied, and the message after
+    saving does not promise otherwise."""
+    from app.main import PLAN_SAVED, PLAN_SAVED_IDLE
+
+    r = await api.get("/plan")
+    assert "Jouw doel en regels voor Claude, plus wat de code altijd afdwingt." in r.text
+    assert "Het plan waar de bot zich aan houdt" not in r.text
+    assert "Claude is nu niet beschikbaar (er is geen Claude-sleutel)" in r.text
+    assert "De bot koopt daarom niets tot Claude terug is" in r.text
+
+    indicators = app.state.settings.model_copy(update={"claude_unavailable_mode": "indicators"})
+    monkeypatch.setattr(app.state, "settings", indicators)
+    r = await api.get("/plan")
+    assert "je eigen regels hieronder worden nu niet toegepast" in r.text
+    r = await api.post("/plan", data={"rules": "Niet kopen in het weekend"})
+    assert flashes_from_response(r) == [{"kind": "ok", "text": PLAN_SAVED_IDLE}]
+
+    dm = type(app.state.engine.decision_maker)
+    monkeypatch.setattr(dm, "available", property(lambda self: True))
+    r = await api.get("/plan")
+    assert "Claude leest dit plan bij elke beslissing en elke evaluatie." in r.text
+    r = await api.post("/plan", data={"rules": "Niet kopen in het weekend"})
+    assert flashes_from_response(r) == [{"kind": "ok", "text": PLAN_SAVED}]
+
+
+async def test_plan_separates_own_text_from_derived_rules(api):
+    """UX-47, UX-12, UX-105: two sections, a clear field name, 'nog leeg' from the content,
+    counters, the rules without the free description, one wording for the limits."""
+    r = await api.get("/plan")
+    assert "Jouw plan" in r.text and "Wat de bot afdwingt" in r.text
+    assert "Wanneer de bot nooit mag handelen" in r.text and "Wat de bot niet doet" not in r.text
+    assert '<span class="pill">nog leeg</span>' in r.text
+    assert 'data-char-count="plan-goal-count"' in r.text and "0 van 2.000 tekens" in r.text
+    assert "gerealiseerd plus het verlies op open posities" in r.text
+    assert "gerealiseerd verlies koopt de bot" not in r.text
+    assert "kopen en verkopen tellen allebei" in r.text and "Trades per dag" not in r.text
+    assert "impact middel of groot" in r.text and "hoge impact" not in r.text
+    assert '$ 0,00</span> van <span class="money">$ 100' in r.text and "dollar" not in r.text
+    assert "Koop als RSI onder 35" not in r.text  # the free description is not on the plan
+    assert "rsi14 lager dan 35" in r.text
+    assert 'style="' not in r.text.split("<main", 1)[1]
+
+    # Written and emptied again: 'nog leeg', not 'laatst gewijzigd'.
+    await api.post("/plan", data={"goal": "Rustig"})
+    assert "laatst gewijzigd" in (await api.get("/plan")).text
+    await api.post("/plan", data={"goal": ""})
+    assert '<span class="pill">nog leeg</span>' in (await api.get("/plan")).text
+
+
+async def test_plan_error_is_next_to_its_field(api):
+    r = await api.post("/plan", data={"goal": "x" * 2001})
+    assert r.status_code == 400
+    assert 'id="plan-goal" name="goal"' in r.text and 'aria-invalid="true"' in r.text
+    assert 'id="plan-goal-error">Doel en horizon is te lang: 2001 tekens, maximaal 2000' in r.text
+    assert "String should have" not in r.text

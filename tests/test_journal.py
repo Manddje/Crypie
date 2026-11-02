@@ -9,7 +9,7 @@ from app.ai.decision_maker import TradeDecision
 from app.ai.evaluator import EvaluationResult
 from app.db import Decision, Order, Position
 from app.flash import flashes_from_response
-from app.main import PLAN_SAVED
+from app.main import PLAN_SAVED_IDLE
 from app.trading.journal import (
     JournalFilter,
     journal_entries,
@@ -301,9 +301,10 @@ async def test_plan_page_and_api(api):
     assert "Tradingplan" in r.text and "Harde limieten" in r.text and "rsi14 lager dan 35" in r.text
 
     r = await api.post("/plan", data={"goal": "Rustig opbouwen", "rules": "Geen weekend"})
-    # A one-time message instead of ?saved=1, so a reload shows no stale confirmation.
-    assert r.status_code == 303 and r.headers["location"] == "/plan"
-    assert flashes_from_response(r) == [{"kind": "ok", "text": PLAN_SAVED}]
+    # A one-time message instead of ?saved=1, so a reload shows no stale confirmation. Without
+    # a Claude key it does not promise that Claude uses the plan (UX-11).
+    assert r.status_code == 303 and r.headers["location"] == "/plan#eigen"
+    assert flashes_from_response(r) == [{"kind": "ok", "text": PLAN_SAVED_IDLE}]
     r = await api.get("/plan")
     assert "Rustig opbouwen" in r.text
     assert flashes_from_response(r) == []  # shown once: the cookie is cleared
