@@ -31,6 +31,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \
 # proxies in FORWARDED_ALLOW_IPS (env, see .env.example) may set X-Forwarded-For/-Proto; the
 # client IP is the right-most address in X-Forwarded-For that is not one of them.
 # --ws none: the app has no websockets. --limit-concurrency answers 503 beyond 64 open
-# connections/requests instead of piling them up.
+# connections/requests instead of piling them up. --workers 1: the trading engine, its locks
+# and the schedulers live in one process (a WEB_CONCURRENCY env var must not change that).
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", \
-     "--ws", "none", "--limit-concurrency", "64", "--timeout-keep-alive", "5"]
+     "--ws", "none", "--limit-concurrency", "64", "--timeout-keep-alive", "5", "--workers", "1"]

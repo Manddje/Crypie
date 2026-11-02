@@ -61,6 +61,12 @@ services:
       DAILY_LOSS_LIMIT_PCT: ${DAILY_LOSS_LIMIT_PCT:-5}
       MAX_TRADES_PER_DAY: ${MAX_TRADES_PER_DAY:-6}
       COOLDOWN_MIN_AFTER_STOP: ${COOLDOWN_MIN_AFTER_STOP:-240}
+      LIVE_CAPITAL_EUR: ${LIVE_CAPITAL_EUR:-0}
+      EXIT_CHECK_INTERVAL_MIN: ${EXIT_CHECK_INTERVAL_MIN:-2}
+      # Ceilings for the limits; only settable here, never in the portal.
+      MAX_TRADE_EUR_CEILING: ${MAX_TRADE_EUR_CEILING:-1000}
+      MAX_EXPOSURE_PCT_CEILING: ${MAX_EXPOSURE_PCT_CEILING:-100}
+      MAX_TRADES_PER_DAY_CEILING: ${MAX_TRADES_PER_DAY_CEILING:-50}
       CLAUDE_UNAVAILABLE_MODE: ${CLAUDE_UNAVAILABLE_MODE:-hold}
       EVALUATION_INTERVAL_HOURS: ${EVALUATION_INTERVAL_HOURS:-168}
       LIVE_TRADING_ACK: ${LIVE_TRADING_ACK:-false}
@@ -68,6 +74,9 @@ services:
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
       SESSION_SECRET: ${SESSION_SECRET:-}
       AUTH_SESSION_HOURS: ${AUTH_SESSION_HOURS:-24}
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+      TRUSTED_ORIGINS: ${TRUSTED_ORIGINS:-}
+      API_DOCS_ENABLED: ${API_DOCS_ENABLED:-false}
       # Proxies allowed to set X-Forwarded-For/-Proto (read by uvicorn). Default: loopback and the
       # private ranges in which Coolify's Traefik reaches the container. Never use "*".
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
