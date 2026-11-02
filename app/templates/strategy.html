@@ -30,7 +30,7 @@
 {% block content %}
 <div class="page-header">
   <h1>Strategie</h1>
-  <p class="subtitle">Wanneer de bot koopt en verkoopt, op al je markten. Je handelt nu <strong class="strategy-mode {{ 'is-live' if mode == 'live' else 'is-paper' }}">{{ "live, met echt geld op Bitvavo" if mode == "live" else "in oefenmodus, met fictief geld" }}</strong>.</p>
+  <p class="subtitle">Wanneer de bot koopt en verkoopt, op al je markten. Je handelt nu <strong class="mode-text {{ 'is-live' if mode == 'live' else 'is-paper' }}">{{ "live, met echt geld op Bitvavo" if mode == "live" else "in oefenmodus, met fictief geld" }}</strong>.</p>
 </div>
 
 <div class="stack">
@@ -249,4 +249,4 @@
   </section>
 </div>
 {% endblock %}
-{% block scripts %}<script src="/static/analysis.js?v={{ asset_version }}"></script>{% endblock %}
+{% block scripts %}<script src="/static/strategy.js?v={{ asset_version }}"></script>{% endblock %}

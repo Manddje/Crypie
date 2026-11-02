@@ -44,7 +44,8 @@ def test_status_macro_renders_what_bot_health_returns(session):  # noqa: F811
     eng = engine_(session)
     html = _status(health(eng, session))
     assert "status-ok" in html and "pill-green" in html and "Actief" in html
-    assert "Laatste cyclus:" in html and "Volgende:" in html and "laatst gelukt" in html
+    assert "Laatste cyclus " in html and " · volgende " in html and "laatst gelukt" in html
+    assert "(elke " in html and "is-bad" not in html
 
     # Blocked: the one sentence is shown once, not again in the list of reasons.
     blocked = engine_(session, available=False)
@@ -60,6 +61,7 @@ def test_status_macro_renders_what_bot_health_returns(session):  # noqa: F811
     h = health(eng, session)
     html = _status(h)
     assert "status-error" in html and "pill-red" in html and "loopt achter" in html
+    assert '<span class="is-bad">Bewaking stop-loss/take-profit:' in html
     assert html.count(h["detail"]) == 1 and "Noodstop actief: kopen gepauzeerd." in html
 
     eng.exit_failing_since = eng.exit_error = None

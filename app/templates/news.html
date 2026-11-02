@@ -88,9 +88,9 @@
     {{ ui.card_header("Berichten", 2, meta=(n_total ~ (" nieuwsfeit" if n_total == 1 else " nieuwsfeiten") ~ " uit " ~ n_articles ~ (" bericht" if n_articles == 1 else " berichten") ~ " · laatste " ~ (hours ~ " uur" if hours != 72 else "3 dagen")), id="berichten-title") }}
     <div class="news-filters">
       <div class="segmented" role="group" aria-label="Telt mee in het sentiment">
-        <a href="{{ filter_urls[''] }}"{% if not telt %} class="active" aria-current="true"{% endif %}>Alles<span class="count-badge">{{ n_total }}</span></a>
-        <a href="{{ filter_urls['ja'] }}"{% if telt == "ja" %} class="active" aria-current="true"{% endif %}>Telt mee<span class="count-badge">{{ n_counted }}</span></a>
-        <a href="{{ filter_urls['nee'] }}"{% if telt == "nee" %} class="active" aria-current="true"{% endif %}>Telt niet mee<span class="count-badge">{{ n_total - n_counted }}</span></a>
+        <a href="{{ filter_urls[''] }}"{% if not telt %} class="active" aria-current="true"{% endif %}>Alles<span class="count">{{ n_total }}</span></a>
+        <a href="{{ filter_urls['ja'] }}"{% if telt == "ja" %} class="active" aria-current="true"{% endif %}>Telt mee<span class="count">{{ n_counted }}</span></a>
+        <a href="{{ filter_urls['nee'] }}"{% if telt == "nee" %} class="active" aria-current="true"{% endif %}>Telt niet mee<span class="count">{{ n_total - n_counted }}</span></a>
       </div>
       <div class="segmented" role="group" aria-label="Periode">
         {% for h, label in periods %}<a href="{{ period_urls[h] }}"{% if hours == h %} class="active" aria-current="true"{% endif %}>{{ label }}</a>{% endfor %}
@@ -135,10 +135,10 @@
     </article>
     {% endfor %}
     {% if pages > 1 %}
-    <nav class="news-pager" aria-label="Pagina's met berichten">
-      {% if newer_url %}<a class="btn btn-sm" href="{{ newer_url }}" rel="prev">‹ Nieuwer</a>{% else %}<span class="btn btn-sm" aria-disabled="true">‹ Nieuwer</span>{% endif %}
-      <span class="small muted">pagina {{ page }} van {{ pages }}</span>
-      {% if older_url %}<a class="btn btn-sm" href="{{ older_url }}" rel="next">Ouder ›</a>{% else %}<span class="btn btn-sm" aria-disabled="true">Ouder ›</span>{% endif %}
+    <nav class="pager" aria-label="Pagina's met berichten">
+      {% if newer_url %}<a class="btn btn-sm" href="{{ newer_url }}" rel="prev"><span aria-hidden="true">‹ </span>Nieuwer</a>{% endif %}
+      <span class="small muted">{{ first }}–{{ last }} van {{ n_shown }} · pagina {{ page }} van {{ pages }}</span>
+      {% if older_url %}<a class="btn btn-sm" href="{{ older_url }}" rel="next">Ouder<span aria-hidden="true"> ›</span></a>{% endif %}
     </nav>
     {% endif %}
     {% elif n_total == 0 %}
@@ -151,5 +151,4 @@
   </section>
 </div>
 {% endblock %}
-{% block scripts %}<script src="/static/analysis.js?v={{ asset_version }}"></script>{% endblock %}
 {% block footer %}<span>Nieuwsbeoordeling: {% if assessing %}{{ settings.claude_model_news }}{% else %}uit (geen Claude-sleutel){% endif %}</span>{% endblock %}

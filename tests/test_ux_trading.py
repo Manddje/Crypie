@@ -164,7 +164,7 @@ async def test_subtitle_names_the_mode_and_the_cycle_asks_in_live(api, monkeypat
     _add_evaluation(_proposal(name="Strakker", stop_loss_pct=3))
     monkeypatch.setattr(app.state.engine.broker, "mode", "live")
     page = (await api.get("/trading")).text
-    assert "live, met echt geld op Bitvavo" in page and "trading-mode is-live" in page
+    assert "live, met echt geld op Bitvavo" in page and "mode-text is-live" in page
     # Applying a proposal in live says so in its confirmation.
     assert "data-confirm=\"LIVE · echt geld: Strategie 'Strakker' activeren" in page
 

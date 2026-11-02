@@ -46,7 +46,7 @@
       <div class="nav-right">
         {{ ui.mode_pill(base_mode, base_paused) }}
         {% if request.state.user %}
-        <a class="icon-btn" href="/account" aria-label="Account ({{ request.state.user }})" title="Account ({{ request.state.user }})">{{ ui.icon("user") }}</a>
+        <a class="icon-btn{{ ' active' if path.startswith('/account') }}" href="/account" aria-label="Account ({{ request.state.user }})" title="Account ({{ request.state.user }})"{% if path.startswith("/account") %} aria-current="page"{% endif %}>{{ ui.icon("user") }}</a>
         <form method="post" action="/logout" class="inline">
           <button class="icon-btn" type="submit" aria-label="Uitloggen" title="Uitloggen">{{ ui.icon("logout") }}</button>
         </form>
@@ -71,7 +71,9 @@
 
   <footer class="site">
     {% if base_cfg %}
-    <span>Markten: {{ base_cfg.markets|join(", ") }} · <a href="/settings">instellingen</a></span>
+    {#- A long list of markets would fill the footer (20 are allowed): name a few and count the rest. -#}
+    {%- set base_markets = base_cfg.markets or [] %}
+    <span>Markten: {% if base_markets|length > 4 %}{{ base_markets[:3]|join(", ") }} en {{ base_markets|length - 3 }} andere{% elif base_markets %}{{ base_markets|join(", ") }}{% else %}geen{% endif %} · <a href="/settings#trading">aanpassen</a></span>
     {%- set base_key = bitvavo_key_state(request) if bitvavo_key_state is defined else none %}
     {% if base_key and base_key.state in ("rejected", "no_trading") %}
     <span class="footer-alert">Bitvavo-sleutel {{ base_key.label }}: {{ base_key.reason }} · <a href="/settings#omgeving">bekijken</a></span>

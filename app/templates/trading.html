@@ -81,7 +81,7 @@
 
 <div class="page-header">
   <h1>Handelen</h1>
-  <p class="subtitle">Wat de bot doet en waarom, en waar je hem bedient. De bot handelt nu <strong class="trading-mode {{ 'is-live' if live else 'is-paper' }}">{% if live %}live, met echt geld op Bitvavo{% else %}in oefenmodus, met fictief geld{% endif %}</strong>.</p>
+  <p class="subtitle">Wat de bot doet en waarom, en waar je hem bedient. De bot handelt nu <strong class="mode-text {{ 'is-live' if live else 'is-paper' }}">{% if live %}live, met echt geld op Bitvavo{% else %}in oefenmodus, met fictief geld{% endif %}</strong>.</p>
 </div>
 
 <div class="stack">
@@ -93,13 +93,7 @@
     <div class="hero-row">
       <div class="trading-status">
         <h2 class="big-label" id="status-title">Status van de bot</h2>
-        {{ ui.status(h, details=false) }}
-        {% set more_reasons = (h.reasons or [])|reject("equalto", h.detail)|list %}
-        {% if more_reasons %}<ul class="status-reasons">{% for r in more_reasons %}<li>{{ r }}</li>{% endfor %}</ul>{% endif %}
-        <p class="status-meta">
-          <span{% if h.stale %} class="is-late"{% endif %}>Laatste cyclus {{ h.last_cycle|ago }}{% if h.next_cycle %} · volgende {{ h.next_cycle|dt }} ({{ h.next_cycle|ago }}){% elif not h.enabled %} · alleen als je er zelf een start{% endif %}</span>
-          <span class="{{ 'is-bad' if not h.exits_ok else '' }}">Bewaking stop-loss/take-profit: {% if h.last_exit_ok %}laatst gelukt {{ h.last_exit_ok|ago }}{% else %}nog niet gelukt{% endif %} (elke {{ h.exit_interval_min }} min){% if not h.exits_ok %} · loopt achter{% endif %}</span>
-        </p>
+        {{ ui.status(h) }}
         {% if not h.claude_available %}<p class="small"><a href="/settings#trading">Kies wat de bot zonder Claude doet</a></p>{% endif %}
         <p class="status-update" data-status-note role="status"></p>
       </div>

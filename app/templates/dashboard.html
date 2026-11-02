@@ -32,9 +32,11 @@
   {% endcall %}
   {% endif %}
 
-  {# -- Hero: what it is worth, and whether the bot runs (status first on a phone) -- #}
+  {# -- Hero: whether the bot runs (first in the page; right of the money on a wide screen) and
+        what it is worth -- #}
   <section class="hero dash-hero" aria-label="Portefeuille en status van de bot">
     <div class="dash-hero-grid">
+      <div class="dash-status" id="dash-status">{% include "_dashboard_status.html" %}</div>
       <div class="dash-hero-money">
         <div class="hero-row">
           <div>
@@ -71,7 +73,6 @@
         </p>
         {% endif %}
       </div>
-      <div class="dash-status" id="dash-status">{% include "_dashboard_status.html" %}</div>
     </div>
     <p class="visually-hidden" role="status" id="dash-status-announce"></p>
   </section>

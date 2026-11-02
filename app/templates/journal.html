@@ -15,7 +15,7 @@
   </details>
   {% if mode_links %}
   <div class="segmented journal-modes" role="group" aria-label="Trades uit welke modus">
-    {% for m in mode_links %}<a href="{{ m.href }}"{% if m.mode == mode %} class="active" aria-current="true"{% endif %}>{{ modes_nl[m.mode].label }} <span class="count-badge">{{ m.count }}</span></a>{% endfor %}
+    {% for m in mode_links %}<a href="{{ m.href }}"{% if m.mode == mode %} class="active" aria-current="true"{% endif %}>{{ modes_nl[m.mode].label }} <span class="count">{{ m.count }}</span></a>{% endfor %}
   </div>
   {% endif %}
 </div>
@@ -174,7 +174,7 @@
         <div>
           <div class="title">
             <h3 class="trade-title" id="trade-{{ p.id }}-title">{{ p.market }}<span class="visually-hidden">, geopend {{ p.opened_at|dt_text }}</span></h3>
-            {% if e.is_open %}<span class="pill pill-blue"><span class="dot" aria-hidden="true"></span>Open</span>
+            {% if e.is_open %}<span class="pill"><span class="dot" aria-hidden="true"></span>Open</span>
             {% elif e.result == "win" %}<span class="pill pill-green">Winst</span>
             {% elif e.result == "loss" %}<span class="pill pill-red">Verlies</span>
             {% else %}<span class="pill">Break-even</span>{% endif %}
@@ -280,4 +280,3 @@
 </div>
 {% endblock %}
 {% block footer %}<span><a href="/api/journal">Journaal als JSON</a></span>{% endblock %}
-{% block scripts %}<script src="/static/analysis.js?v={{ asset_version }}"></script>{% endblock %}

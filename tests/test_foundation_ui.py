@@ -221,11 +221,12 @@ async def test_navigation_shows_the_kill_switch_on_every_page(api):
     assert "mode-extra" not in (await api.get("/news")).text
 
 
-def test_templates_do_not_gain_inline_styles():
-    """Use the classes in app.css (utilities, .field, .metric, …) instead of style=. This count
-    may only go down."""
-    count = sum(
-        path.read_text(encoding="utf-8").count('style="')
+def test_templates_have_no_inline_styles():
+    """Use the classes in app.css (utilities, .field, .metric, …) instead of style=. Every
+    template is free of them now; keep it that way (UX-92)."""
+    offenders = [
+        path.name
         for path in (STATIC_DIR.parent / "templates").rglob("*.html")
-    )
-    assert count <= 60, count
+        if re.search(r"\sstyle\s*=", path.read_text(encoding="utf-8"))
+    ]
+    assert offenders == []

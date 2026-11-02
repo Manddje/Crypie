@@ -218,8 +218,8 @@ async def test_active_filters_are_summed_up_with_remove_links(api):
     }
     assert "Resultaat van de selectie" in r.text and "Alle filters wissen" in r.text
     assert '<span class="pill">3 actief</span>' in r.text
-    # The filter block folds away on a phone (analysis.js) and the note form returns here.
-    assert "data-collapse-mobile" in r.text and "/static/analysis.js" in r.text
+    # The filter block folds away on a phone (app.js) and the note form returns here.
+    assert "data-collapse-mobile" in r.text and "/static/app.js" in r.text
     assert 'name="back" value="/journal?market=ETH-EUR&amp;result=win&amp;days=30"' in r.text
 
 
@@ -324,8 +324,8 @@ async def test_news_list_has_no_silent_cap(api):
     r = await api.get("/news")
     assert "201 nieuwsfeiten uit 201 berichten" in r.text
     assert "1–30 van 201 · pagina 1 van 7" in r.text
-    assert re.search(r'Telt mee<span class="count-badge">1</span>', r.text)
-    assert re.search(r'Telt niet mee<span class="count-badge">200</span>', r.text)
+    assert re.search(r'Telt mee<span class="count">1</span>', r.text)
+    assert re.search(r'Telt niet mee<span class="count">200</span>', r.text)
     assert 'rel="next"' in r.text and r.text.count('class="news-item') == 30
     r = await api.get("/news?telt=ja")
     assert "Exchange hack drains" in r.text and "1–1 van 1" in r.text
@@ -590,7 +590,7 @@ async def test_strategy_save_confirms_when_the_backtest_gives_reason(api, monkey
     monkeypatch.setattr(app.state, "settings", live)
     page = (await api.post("/strategy", data=body)).text
     assert 'data-confirm="LIVE · echt geld: Strategie &#39;RSI zigzag&#39; opslaan' in page
-    assert 'Je handelt nu <strong class="strategy-mode is-live">live, met echt geld' in page
+    assert 'Je handelt nu <strong class="mode-text is-live">live, met echt geld' in page
 
 
 def test_save_confirm_reasons():

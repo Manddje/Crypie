@@ -431,6 +431,8 @@ abbr[title] { text-decoration: underline dotted; text-underline-offset: 0.15em; 
   transition: background 0.15s ease;
 }
 .icon-btn:hover { background: var(--fill-2); }
+/* The account icon on /account, marked like the current page in the navigation. */
+.icon-btn.active, .icon-btn[aria-current="page"] { background: var(--text); color: var(--bg); }
 .icon-btn svg { width: 16px; height: 16px; }
 /* The theme button shows the current choice: automatic, light or dark. */
 .theme-toggle svg { display: none; }
@@ -506,9 +508,12 @@ abbr[title] { text-decoration: underline dotted; text-underline-offset: 0.15em; 
 /* -- Status of the bot (ui.status) and the kill switch (ui.kill_switch) -- */
 .status { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; min-width: 0; }
 .status-detail { color: var(--text-2); font-size: var(--fs-help); max-width: 60ch; }
-.status-reasons { margin: 0; padding-left: 1.2em; color: var(--text-2); font-size: var(--fs-detail); }
+.status-reasons { margin: 0; padding-left: 1.2em; color: var(--text-2); font-size: var(--fs-detail); max-width: 60ch; }
 .status-meta { display: flex; flex-wrap: wrap; gap: 2px 14px; color: var(--text-2); font-size: var(--fs-detail); }
+/* The planner is behind (orange); the stop-loss watch is behind (red: positions are not guarded). */
 .status-meta .is-late { color: var(--orange); font-weight: 600; }
+.status-meta .is-bad { color: var(--red); font-weight: 600; }
+.status-meta time { white-space: nowrap; }
 .kill-switch { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; min-width: 0; }
 .kill-switch form { margin: 0; }
 .kill-switch-state { font-weight: 600; color: var(--orange); }
@@ -629,7 +634,6 @@ tr.dim td strong { color: var(--text); }
  * (no colour class) for neutral counts and states. */
 .pill-green { background: var(--green-tint); color: var(--green); }
 .pill-red { background: var(--red-tint); color: var(--red); }
-.pill-blue { background: var(--accent-tint); color: var(--accent); }
 .pill-orange { background: var(--orange-tint); color: var(--orange); }
 .pill-paper { background: var(--paper-tint); color: var(--paper); }
 .pill-live { background: var(--red-fill); color: var(--on-red); }
@@ -868,6 +872,54 @@ textarea.code { font-family: var(--mono); font-size: 13px; min-height: 24rem; }
 @media (max-width: 480px) {
   .segmented a, .segmented button { padding: 5px 10px; font-size: var(--fs-detail); }
 }
+/* A number inside a segmented button: 'Telt mee 3', 'Alles 63'. --text, because --text-2 on
+ * the grey badge stays under 4.5:1 in dark mode. */
+.segmented .count {
+  display: inline-block;
+  min-width: 1.6em;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--fill-2);
+  color: var(--text);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* -- Pages of a long list: '‹ Nieuwer', '1–25 van 63 · pagina 1 van 3', 'Ouder ›' -- */
+.pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--hairline); }
+.pager > span:only-child, .pager > span:first-child { margin-right: auto; }
+
+/* -- Filters: active filters as labels that each remove their own filter -- */
+.filter-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: -4px 0 14px; }
+.filter-chips ul { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.chip-remove {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--control-border);
+  background: var(--card);
+  color: var(--text);
+  font-size: var(--fs-detail);
+  text-decoration: none;
+}
+.chip-remove:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
+.chip-remove .chip-x { margin-left: 6px; color: var(--text-2); font-weight: 600; }
+@media (pointer: coarse) { .chip-remove { min-height: 36px; } }
+
+/* -- 'Hoe werkt dit?' under a page title: the long explanation, folded away -- */
+.page-help { margin-top: 10px; max-width: 70ch; color: var(--text-2); font-size: var(--fs-help); }
+.page-help summary { color: var(--accent); font-weight: 500; }
+.page-help > :not(summary) { margin-top: 8px; }
+
+/* -- The mode in running text ('in oefenmodus, met fictief geld'), in the colour of its pill -- */
+.mode-text { font-weight: 600; }
+.mode-text.is-paper { color: var(--paper); }
+.mode-text.is-live { color: var(--red); }
 
 /* -- Disclosure: every <details> gets the same turning chevron -- */
 summary {
@@ -1054,6 +1106,8 @@ footer.site {
   gap: 8px 18px;
   flex-wrap: wrap;
 }
+/* A refused Bitvavo key: said in red on every page. */
+footer.site .footer-alert { color: var(--red); font-weight: 500; }
 
 /* ==== 8. Pagina's ==== */
 
@@ -1070,13 +1124,16 @@ footer.site {
 }
 .dash-hero .hero-row { align-items: flex-start; }
 .dash-hero-positions { margin-top: 16px; color: var(--text-2); font-size: var(--fs-help); }
-.dash-status { min-width: 0; }
+/* The status comes first in the page (and so for the keyboard and screen readers: 'does the
+ * bot run?'); on a wide screen it stands to the right of the money. */
+.dash-status { min-width: 0; grid-column: 2; grid-row: 1; }
+.dash-hero-money { grid-column: 1; grid-row: 1; min-width: 0; }
 .dash-status-help { margin-top: 8px; color: var(--text-2); font-size: var(--fs-detail); max-width: 60ch; }
 .dash-status .kill-switch { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--hairline); }
 @media (max-width: 760px) {
   .dash-hero-grid { grid-template-columns: minmax(0, 1fr); }
-  /* On a phone the answer to 'does the bot run?' comes first. */
-  .dash-status { order: -1; padding-bottom: 18px; border-bottom: 1px solid var(--hairline); }
+  .dash-status, .dash-hero-money { grid-column: 1; grid-row: auto; }
+  .dash-status { padding-bottom: 18px; border-bottom: 1px solid var(--hairline); }
 }
 
 /* -- 'Aan de slag': numbered steps, done ones ticked -- */
@@ -1229,14 +1286,9 @@ footer.site {
 /* Regels die alleen trading.html gebruikt: de hero met status en bediening, het voorstel van
  * Claude, de cycli per markt, de limietmeters, het logboek 'Alle cycli' en de evaluaties. */
 
-.trading-mode.is-paper { color: var(--paper); }
-.trading-mode.is-live { color: var(--red); }
-
 /* Hero: status (left) and the controls (right; below it on narrow screens). */
 .trading-hero .hero-row { align-items: flex-start; }
 .trading-status { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
-.trading-status .status-reasons { max-width: 60ch; }
-.trading-status .status-meta .is-bad { color: var(--red); font-weight: 600; }
 .trading-controls { flex: 0 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
 .trading-controls form { margin: 0; }
 .status-update { padding: 8px 12px; border-radius: var(--radius-control); background: var(--accent-tint); font-size: var(--fs-help); }
@@ -1278,8 +1330,6 @@ footer.site {
 
 /* 'Alle cycli': filters, one tbody per decision (a row plus its explanation), pages. */
 .cycles-filters { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 12px; }
-.segmented .count { margin-left: 6px; color: var(--text-2); font-weight: 400; font-variant-numeric: tabular-nums; }
-.segmented .active .count { color: inherit; }
 .cycles td.decision { min-width: 16rem; }
 .cycles td.decision .decision-line { margin-bottom: 2px; }
 .cycles tbody tr:first-child td { border-bottom: 0; padding-bottom: 4px; }
@@ -1290,8 +1340,6 @@ footer.site {
 .cycle-checks { margin-top: 4px; }
 .cycle-checks > summary { font-size: var(--fs-detail); font-weight: 500; color: var(--accent); }
 .cycle-checks > .checks { margin-top: 2px; }
-.pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 16px; }
-.pager > span:only-child, .pager > span:first-child { margin-right: auto; }
 @media (max-width: 640px) {
   .cycles, .cycles tbody, .cycles tr, .cycles td { display: block; }
   .cycles thead { display: none; }
@@ -1320,47 +1368,9 @@ footer.site {
 .evaluation-proposal { font-size: var(--fs-body); margin-top: 18px; }
 
 /* ==== Pagina: Journaal ==== */
-/* Regels die alleen journal.html gebruikt: de filters, de trades en de notities.
- * .page-help, .count-badge en .filter-chips gebruiken ook Nieuws, Tradingplan en Strategie. */
+/* Regels die alleen journal.html gebruikt: de filters, de trades en de notities. */
 
-/* 'Hoe werkt dit?' under a page title: the long explanation, folded away. */
-.page-help { margin-top: 10px; max-width: 70ch; color: var(--text-2); font-size: var(--fs-help); }
-.page-help summary { color: var(--accent); font-weight: 500; }
-.page-help > :not(summary) { margin-top: 8px; }
-/* A number inside a filter button: 'Telt mee 3'. */
-.segmented .count-badge {
-  display: inline-block;
-  min-width: 1.6em;
-  margin-left: 6px;
-  padding: 0 6px;
-  border-radius: var(--radius-pill);
-  background: var(--fill-2);
-  /* --text: --text-2 on the grey badge stays under 4.5:1 in dark mode. */
-  color: var(--text);
-  font-size: var(--fs-caption);
-  font-weight: 600;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
 .journal-modes { margin-top: 14px; }
-/* Active filters as labels that each remove their own filter. */
-.filter-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: -4px 0 14px; }
-.filter-chips ul { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.chip-remove {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  padding: 2px 10px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--control-border);
-  background: var(--card);
-  color: var(--text);
-  font-size: var(--fs-detail);
-  text-decoration: none;
-}
-.chip-remove:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
-.chip-remove .chip-x { margin-left: 6px; color: var(--text-2); font-weight: 600; }
-@media (pointer: coarse) { .chip-remove { min-height: 36px; } }
 
 .journal-filter-box > summary { display: flex; align-items: center; gap: 10px; min-height: 32px; }
 .journal-filter-box > summary .card-title { flex: 0 1 auto; margin: 0; }
@@ -1460,9 +1470,6 @@ footer.site {
 /* Regels die alleen strategy.html gebruikt: de regels, het resultaat van een test of voorstel
  * met de backtest, de editor en de fouten ernaast. */
 
-.strategy-mode { font-weight: 600; }
-.strategy-mode.is-paper { color: var(--paper); }
-.strategy-mode.is-live { color: var(--red); }
 .strategy-name { font-size: var(--fs-lead); margin: 0 0 4px; }
 .strategy-scope { color: var(--text-2); font-size: var(--fs-help); margin: 0 0 14px; }
 .strategy-rules { display: grid; gap: 16px 24px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1529,9 +1536,7 @@ footer.site {
 .score-bar .fill.w-50 { width: 50%; }
 
 .news-filters { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 6px; }
-.news-filters .segmented .count-badge { margin-left: 6px; }
 .news-range { margin: 8px 0 0; }
-.news-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding-top: 14px; border-top: 1px solid var(--hairline); }
 
 .news-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 20px; padding: 14px 0; border-bottom: 1px solid var(--hairline); }
 .news-item:last-of-type { border-bottom: 0; }
@@ -1698,9 +1703,6 @@ form.is-dirty .settings-actions {
 .env-text { color: var(--text-2); font-size: var(--fs-detail); flex: 1 1 240px; min-width: 0; }
 .env-name { flex-basis: 100%; }
 .env-action { margin: 0; flex-basis: 100%; }
-/* The footer line about a refused Bitvavo key (base.html, every page; the sweep may move it to
- * section 7). */
-footer.site .footer-alert { color: var(--red); font-weight: 500; }
 
 @media (max-width: 640px) {
   .setting, .setting--group { grid-template-columns: minmax(0, 1fr); }
@@ -1801,7 +1803,8 @@ footer.site .footer-alert { color: var(--red); font-weight: 500; }
   .switch .track { display: none; }
   .seg-radio label { align-items: center; padding-left: 8px; }
   .seg-radio input:checked + span, .segmented a.active, .segmented button.active,
-  .segmented [aria-pressed="true"], .nav-links a.active, .nav-links a[aria-current="page"] {
+  .segmented [aria-pressed="true"], .nav-links a.active, .nav-links a[aria-current="page"],
+  .icon-btn[aria-current="page"] {
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }

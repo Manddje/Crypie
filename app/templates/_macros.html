@@ -100,7 +100,7 @@
 {%- set m = modes_nl.get(mode, modes_nl.paper) -%}
 {%- set cls = "pill-live" if mode == "live" else "pill-paper" -%}
 {%- if link -%}
-<a class="pill mode-pill {{ cls }}{{ ' is-paused' if paused }}" href="{{ '/trading' if paused else '/settings#trading' }}"><span class="dot" aria-hidden="true"></span>{{ m.label }}{% if paused %}<span class="mode-extra">· noodstop</span>{% endif %}<span class="visually-hidden">. {{ m.explain }}{% if paused %} {{ kill_switch_text.state }}.{% endif %}</span></a>
+<a class="pill mode-pill {{ cls }}{{ ' is-paused' if paused }}" href="{{ '/trading' if paused else '/settings#trading' }}" data-paused-text="{{ kill_switch_text.state }}"><span class="dot" aria-hidden="true"></span>{{ m.label }}{% if paused %}<span class="mode-extra">· noodstop</span>{% endif %}<span class="visually-hidden">. {{ m.explain }}{% if paused %} {{ kill_switch_text.state }}.{% endif %}</span></a>
 {%- else -%}
 <span class="pill {{ cls }}"><span class="dot" aria-hidden="true"></span>{{ m.label }}{% if paused %} · noodstop{% endif %}</span>
 {%- endif -%}
@@ -121,14 +121,11 @@
   {#- reasons lists every applicable reason, the one in detail too: show that one only once. -#}
   {% set more_reasons = (health.reasons or [])|reject("equalto", health.detail)|list %}
   {% if more_reasons %}<ul class="status-reasons">{% for r in more_reasons %}<li>{{ r }}</li>{% endfor %}</ul>{% endif %}
+  {#- The planner (orange when it seems stalled) and the stop-loss watch (red when it is
+      behind: open positions are not guarded then). -#}
   <p class="status-meta">
-    <span>Laatste cyclus: {{ health.last_cycle|ago }}</span>
-    {% if health.next_cycle %}<span>Volgende: {{ health.next_cycle|dt }} ({{ health.next_cycle|ago }})</span>{% endif %}
-    {% if health.exits_ok %}
-    <span>Bewaking van stop-loss en take-profit: {% if health.last_exit_ok %}laatst gelukt {{ health.last_exit_ok|ago }}{% else %}draait{% endif %}</span>
-    {% else %}
-    <span class="is-late">Bewaking van stop-loss en take-profit loopt achter: {% if health.last_exit_ok %}laatst gelukt {{ health.last_exit_ok|ago }}{% else %}nog niet gelukt{% endif %}{% if health.exit_interval_min %} (hoort elke {{ health.exit_interval_min }} min){% endif %}</span>
-    {% endif %}
+    <span{% if health.stale %} class="is-late"{% endif %}>Laatste cyclus {{ health.last_cycle|ago }}{% if health.next_cycle %} · volgende {{ health.next_cycle|dt }} ({{ health.next_cycle|ago }}){% elif health.enabled is defined and not health.enabled %} · alleen als je er zelf een start{% endif %}</span>
+    <span{% if not health.exits_ok %} class="is-bad"{% endif %}>Bewaking stop-loss/take-profit: {% if health.last_exit_ok %}laatst gelukt {{ health.last_exit_ok|ago }}{% elif health.exits_ok %}wacht op de eerste controle{% else %}nog niet gelukt{% endif %}{% if health.exit_interval_min %} (elke {{ health.exit_interval_min }} min){% endif %}{% if not health.exits_ok %} · loopt achter{% endif %}</span>
   </p>
   {% endif %}
 </div>

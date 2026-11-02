@@ -15,6 +15,14 @@
  *   <time datetime="…Z" data-ts>            relative time ('4 min geleden'), kept up to date
  *   .table-wrap[data-region="Naam"]         an overflowing table becomes a named, focusable
  *                                           region; <table class="table-stack"> gets labels
+ *   <details open data-collapse-mobile>     closed on load on a phone, unless the address
+ *                                           points into it or it holds an error
+ *   <textarea maxlength="…" data-char-count="id">
+ *                                           keeps '120 van 2.000 tekens' in #id up to date
+ *
+ * While the tab is visible it asks /api/status every minute (light: no Bitvavo calls). When
+ * the kill switch was switched elsewhere, the navigation pill, the tab title and the tab icon
+ * follow; pages listen to the 'crypie:status' event on document for the full answer.
  *
  * On load it also: removes one-off query parameters (?saved=, ?flash=) from the address,
  * brings the first field with an error into view and focuses it, scrolls the current page into
@@ -344,6 +352,92 @@
       box.classList.toggle("is-changed", isChanged(field));
     });
   });
+
+  // -- Long blocks fold on a phone -----------------------------------------------------------
+  if (window.matchMedia && window.matchMedia("(max-width: 640px)").matches) {
+    var hash = window.location.hash.slice(1);
+    each("details[data-collapse-mobile][open]", function (box) {
+      var target = hash ? document.getElementById(hash) : null;
+      if (target && box.contains(target)) return;
+      if (box.querySelector('[aria-invalid="true"], .field-error')) return;
+      box.removeAttribute("open");
+    });
+  }
+
+  // -- Character counters --------------------------------------------------------------------
+  function numberNl(n) {
+    return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  }
+  each("textarea[data-char-count]", function (field) {
+    var counter = document.getElementById(field.getAttribute("data-char-count"));
+    var max = parseInt(field.getAttribute("maxlength"), 10);
+    if (!counter || !max) return;
+    function update() {
+      var used = field.value.length;
+      counter.textContent = numberNl(used) + " van " + numberNl(max) + " tekens";
+      counter.classList.toggle("is-near", used >= max * 0.9);
+      counter.classList.toggle("is-full", used >= max);
+    }
+    field.addEventListener("input", update);
+    update();
+  });
+
+  // -- The kill switch may change in another tab: keep the navigation honest -----------------
+  var modePill = document.querySelector("a.mode-pill");
+  function applyPaused(paused) {
+    if (!modePill || !document.body) return;
+    var was = document.body.hasAttribute("data-paused");
+    if (paused === was) return;
+    if (paused) document.body.setAttribute("data-paused", "true");
+    else document.body.removeAttribute("data-paused");
+    modePill.classList.toggle("is-paused", paused);
+    modePill.setAttribute("href", paused ? "/trading" : "/settings#trading");
+    var extra = modePill.querySelector(".mode-extra");
+    var hidden = modePill.querySelector(".visually-hidden");
+    var stateText = modePill.getAttribute("data-paused-text") || "";
+    if (paused && !extra) {
+      extra = document.createElement("span");
+      extra.className = "mode-extra";
+      extra.textContent = "· noodstop";
+      modePill.insertBefore(extra, hidden);
+      if (hidden && stateText) hidden.textContent += " " + stateText + ".";
+    } else if (!paused && extra) {
+      extra.parentNode.removeChild(extra);
+      if (hidden && stateText) hidden.textContent = hidden.textContent.replace(" " + stateText + ".", "");
+    }
+    var title = document.title.replace("Noodstop · ", "");
+    if (paused) title = title.indexOf("LIVE · ") === 0 ? "LIVE · Noodstop · " + title.slice(7) : "Noodstop · " + title;
+    document.title = title;
+    var icon = document.querySelector('link[rel="icon"]');
+    if (icon && document.body.getAttribute("data-mode") !== "live") {
+      var href = icon.getAttribute("href") || "";
+      icon.setAttribute("href", paused ? href.replace("/favicon.svg", "/favicon-paused.svg") : href.replace("/favicon-paused.svg", "/favicon.svg"));
+    }
+  }
+  var statusBusy = false;
+  function pollStatus() {
+    if (statusBusy || document.hidden || !window.fetch) return;
+    statusBusy = true;
+    fetch("/api/status", { credentials: "same-origin", cache: "no-store", headers: { Accept: "application/json" } })
+      .then(function (r) {
+        var type = r.headers.get("content-type") || "";
+        // Logged out (a redirect to the login page) or an error: change nothing.
+        return r.ok && type.indexOf("json") >= 0 ? r.json() : null;
+      })
+      .then(function (body) {
+        if (!body || !body.health) return;
+        if (typeof body.health.paused === "boolean") applyPaused(body.health.paused);
+        var ev;
+        try { ev = new CustomEvent("crypie:status", { detail: body }); } catch (e) { return; }
+        document.dispatchEvent(ev);
+      })
+      .catch(function () {})
+      .then(function () { statusBusy = false; });
+  }
+  if (modePill) {
+    setInterval(pollStatus, 60000);
+    document.addEventListener("visibilitychange", function () { if (!document.hidden) pollStatus(); });
+  }
 
   // -- Settings: the on/off label next to a switch follows the checkbox ----------------------
   each(".switch input", function (box) {

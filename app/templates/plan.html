@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% import "_macros.html" as ui %}
 {% block title %}Crypie · Tradingplan{% endblock %}
-{# A derived card: open on a wide screen, folded on a phone (analysis.js). #}
+{# A derived card: open on a wide screen, folded on a phone (app.js). #}
 {% macro derived(id, title) -%}
 <section class="card plan-card" id="{{ id }}" aria-labelledby="{{ id }}-title">
   <details open data-collapse-mobile>
@@ -160,4 +160,3 @@
   </section>
 </div>
 {% endblock %}
-{% block scripts %}<script src="/static/analysis.js?v={{ asset_version }}"></script>{% endblock %}
