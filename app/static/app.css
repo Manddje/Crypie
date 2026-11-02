@@ -1118,10 +1118,93 @@ footer.site {
 }
 
 /* ==== Pagina: Handelen ==== */
-/* Regels die alleen trading.html gebruikt: de cycli per markt en de evaluaties. */
+/* Regels die alleen trading.html gebruikt: de hero met status en bediening, het voorstel van
+ * Claude, de cycli per markt, de limietmeters, het logboek 'Alle cycli' en de evaluaties. */
 
+.trading-mode.is-paper { color: var(--paper); }
+.trading-mode.is-live { color: var(--red); }
+
+/* Hero: status (left) and the controls (right; below it on narrow screens). */
+.trading-hero .hero-row { align-items: flex-start; }
+.trading-status { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.trading-status .status-reasons { max-width: 60ch; }
+.trading-status .status-meta .is-bad { color: var(--red); font-weight: 600; }
+.trading-controls { flex: 0 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
+.trading-controls form { margin: 0; }
+.status-update { padding: 8px 12px; border-radius: var(--radius-control); background: var(--accent-tint); font-size: var(--fs-help); }
+@media (max-width: 700px) {
+  .trading-controls { flex-basis: 100%; }
+}
+
+/* A proposal of Claude that waits for the owner (or was just applied), at the top. */
+.proposal-card { border-color: var(--accent); box-shadow: var(--shadow), 0 0 0 1px var(--accent); }
+
+/* Last cycle per market. */
 .cycle { padding: 14px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); }
-.cycle-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.cycle-head { display: flex; justify-content: space-between; align-items: baseline; gap: 4px 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.cycle-market { font-size: var(--fs-lead); }
+.decision-line { line-height: 1.8; }
+.decision-summary { color: var(--text-2); font-size: var(--fs-help); }
+.decision-news { margin-top: 8px; }
+.decision-why { margin-top: 6px; max-width: 80ch; }
+.dip-watch { padding: 12px 14px; margin-bottom: 14px; border-radius: var(--radius-sm); background: var(--orange-tint); }
+.dip-watch > * + * { margin-top: 4px; }
+
+/* Limits as meters. */
+.limit-meters { display: grid; gap: 12px 16px; grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); }
+.limit-meters .stat { display: block; }
+.limit-meters .stat .value .metric-sub { font-size: var(--fs-help); }
+.limit-meters .meter { margin: 10px 0 6px; background: var(--card); }
+.limit-meters .meter::-webkit-progress-bar { background: var(--card); }
+.context-more { margin-top: 18px; }
+.context-more > summary { font-weight: 500; color: var(--accent); }
+.context-grid { display: grid; gap: 28px 36px; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); margin-top: 18px; align-items: start; }
+.context-grid > section { min-width: 0; }
+.context-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; margin-bottom: 10px; }
+.context-title { font-size: var(--fs-lead); }
+.context-grid > section > .context-title { margin-bottom: 10px; }
+
+/* 'Alle cycli': filters, one tbody per decision (a row plus its explanation), pages. */
+.cycles-filters { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 12px; }
+.segmented .count { margin-left: 6px; color: var(--text-2); font-weight: 400; font-variant-numeric: tabular-nums; }
+.cycles td.decision { min-width: 16rem; }
+.cycles td.decision .decision-line { margin-bottom: 2px; }
+.cycles tbody tr:first-child td { border-bottom: 0; padding-bottom: 4px; }
+.cycles .cycle-detail td { padding-top: 0; font-size: var(--fs-detail); color: var(--text-2); border-bottom: 1px solid var(--hairline); }
+.cycles tbody:last-child .cycle-detail td { border-bottom: 0; }
+.cycles .cycle-detail .decision-why { color: var(--text); font-size: var(--fs-help); margin-top: 0; }
+.cycles .cycle-detail .neg { margin-top: 4px; }
+.cycle-checks { margin-top: 4px; }
+.cycle-checks > summary { font-size: var(--fs-detail); font-weight: 500; color: var(--accent); }
+.cycle-checks > .checks { margin-top: 2px; }
+.pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 16px; }
+.pager > span:only-child, .pager > span:first-child { margin-right: auto; }
+@media (max-width: 640px) {
+  .cycles, .cycles tbody, .cycles tr, .cycles td { display: block; }
+  .cycles thead { display: none; }
+  .cycles tbody { padding: 12px 0; border-bottom: 1px solid var(--hairline); }
+  .cycles tbody:last-child { border-bottom: 0; }
+  .cycles td, .cycles tbody tr:first-child td, .cycles .cycle-detail td { padding: 0; border: 0; text-align: left; }
+  .cycles tbody tr:first-child { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; }
+  .cycles td.market { order: -1; }
+  .cycles td.market .sub { display: inline; margin-left: 6px; }
+  .cycles td.when { color: var(--text-2); font-size: var(--fs-detail); }
+  .cycles td.decision { flex-basis: 100%; min-width: 0; margin: 4px 0 2px; }
+  .cycles td.decision .sub { white-space: normal; }
+  .cycles td[data-label] { font-size: var(--fs-detail); }
+  .cycles td[data-label]::before { content: attr(data-label) " "; color: var(--text-2); }
+  .cycles .cycle-detail td { margin-top: 6px; }
+}
+
+/* Open and closed positions: amount and its detail stay together in the narrow layout. */
+.table-stack td .cell { display: inline-block; }
+@media (max-width: 640px) {
+  .table-stack td .cell .sub { text-align: right; }
+}
+
+/* Evaluations. */
+.evaluation-title { font-size: var(--fs-lead); }
+.evaluation-proposal { font-size: var(--fs-body); margin-top: 18px; }
 
 /* ==== Pagina: Journaal ==== */
 /* Regels die alleen journal.html gebruikt: de filters, de trades en de notities. */
