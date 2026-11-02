@@ -113,8 +113,8 @@ Het dashboard is Nederlandstalig en werkt ook zonder JavaScript; JavaScript maak
   grafieken tonen lokale tijd, dagcandles zijn UTC-dagen. De agenda voer je in UTC in, en de
   dagtellers (dagverlies, orders per dag) beginnen om 00:00 UTC.
 - **Na een actie** (opslaan, noodstop, cyclus, order, strategie, nieuws verversen) stuurt de app je
-  terug naar de pagina (Post/Redirect/Get), met één melding bovenaan of in het blok of de kaart waar het
-  om ging. De melding verschijnt één keer: vernieuwen herhaalt de actie niet en toont de melding niet
+  terug naar de pagina (Post/Redirect/Get), met één melding in het blok, de kaart of het deel van de
+  pagina waar je terechtkomt (zoals *Berichten* na *Nu verversen*), anders bovenaan. De melding verschijnt één keer: vernieuwen herhaalt de actie niet en toont de melding niet
   opnieuw. Een formulier is na de eerste klik even vergrendeld, met een tekst op de knop zoals
   "Cyclus loopt…", zodat een dubbele klik niets twee keer doet. Een GET op een adres dat alleen
   formulieren ontvangt (bijvoorbeeld `/orders` of `/trading/action`) gaat naar de bijbehorende pagina.
@@ -140,24 +140,33 @@ Het dashboard is Nederlandstalig en werkt ook zonder JavaScript; JavaScript maak
   en `/trading/action` met `revert:<id>`. `POST /orders` neemt ook `sell_all` en `order_token`;
   `POST /api/backtest` geeft ook `first_time`, `last_time`, `wins` en `curve`.
 - **Toegankelijkheid**: de pagina's zijn met axe-core gecontroleerd op de regels van WCAG 2.2 AA (licht
-  en donker, op 1440 en 390 px), met een link *Naar de inhoud*, zichtbare focus, tekst bij ✓/✗/~ voor
-  schermlezers en een tabel onder de koersgrafiek. Op 320 px breed scrolt geen pagina zijwaarts.
+  en donker, op 1440 en 390 px), met een link *Naar de inhoud*, zichtbare focus, tekst bij de tekens
+  voor gehaald, niet gehaald en zacht filter voor schermlezers en een tabel onder de koersgrafiek. Op 320 px breed scrolt geen pagina zijwaarts.
 
 ## Instellingen
 
 Alles wat met handelen te maken heeft stel je in het portaal in, op de pagina **Instellingen**
-(`/settings`). De pagina heeft een lijst met links naar de blokken (vanaf 1100 px breed een vaste kolom
-links) en per blok een eigen opslaanknop (bijvoorbeeld *Handelen opslaan*); opslaan geldt alleen voor
-dat blok:
+(`/settings`). De pagina begint als overzicht: elk blok toont zijn titel en één regel met de
+belangrijkste waarden ("Oefenmodus · BTC-EUR, ETH-EUR · elke 60 minuten · automatisch handelen aan") tot
+je het opent met *Openen*, via de lijst met onderdelen, via een link of adres naar een veld erin, of met
+zoeken in de pagina. *Alles openklappen* opent ze allemaal. Het blok dat je net opsloeg, een blok met een
+fout en een blok met niet-opgeslagen wijzigingen staan open. Zonder JavaScript staan alle blokken open.
+De lijst met onderdelen staat vanaf 1100 px breed in een vaste kolom links; smaller is het één rij die
+onder de kop blijft staan en het blok in beeld markeert. Elk blok heeft een eigen opslaanknop
+(bijvoorbeeld *Handelen opslaan*); opslaan geldt alleen voor dat blok:
 
 - **Handelen**, in delen: *Modus en markten* (modus, automatisch handelen, markten, interval), *Kopen*
-  (gedrag zonder Claude, lange-termijntrend, dipbewaking), *Bescherming* (exit-controle, risk-off,
-  schok-pauze, agenda) en *Weergave* (hoeveel dagen beslissingen op Handelen staan);
+  (gedrag zonder Claude, lange-termijntrend, dipbewaking) en *Bescherming* (exit-controle, risk-off,
+  schok-pauze, agenda). Bescherming blijft in dit formulier: het wachtwoordveld van Handelen beschermt
+  ook die velden;
 - **Harde limieten**;
 - **Kosten**: handelskosten per order en handelskosten in backtests;
 - **Claude**: maandbudget, model per taak en evaluatie-interval;
 - **Nieuws**: ophalen, beoordelen en bronnen;
-- **Oefenportefeuille**: het startbedrag, dat samen met de reset wordt opgeslagen;
+- **Weergave**: hoeveel dagen beslissingen op Handelen staan, met een eigen formulier (het stuurt
+  `group=trading` en `part=weergave`), zodat je dit opslaat zonder de modus en de markten;
+- **Oefenportefeuille**: het startbedrag, dat samen met de reset wordt opgeslagen. In live kun je hier
+  ook resetten (met je wachtwoord): zo sluit je oefenposities die de bot nog bewaakt;
 - **Uit de omgeving**: alleen ter informatie (zie hieronder).
 
 Wat je opslaat:
@@ -170,8 +179,11 @@ Wat je opslaat:
   standaard in; daarna opslaan). Per blok zet *Standaard herstellen* alles in één keer terug; de
   bevestiging noemt elke instelling die verandert, en de knop staat uit als er niets is aangepast;
 - wordt na het opslaan per instelling als oud → nieuw in het blok gemeld ("Dagverlieslimiet: 5% →
-  2,5%"). Bewerkte maar niet opgeslagen velden zijn oranje gemarkeerd; een balk onderaan noemt ze, met
-  *Wijzigingen terugdraaien*, en de browser waarschuwt als je de pagina verlaat.
+  2,5%"); was er niets gewijzigd, dan staat er "Niets gewijzigd in …" als neutrale melding. Bewerkte
+  maar niet opgeslagen velden zijn oranje gemarkeerd; een balk onderaan noemt ze, met *Wijzigingen
+  terugdraaien*, en de browser waarschuwt als je de pagina verlaat. Sla je één blok op terwijl een ander
+  blok ook wijzigingen heeft, dan vraagt de pagina eerst; die andere wijzigingen staan na het opslaan
+  weer in hun blok, nog als niet opgeslagen gemarkeerd.
 
 Niet in het portaal, met opzet: de sleutels (`BITVAVO_API_KEY`, `BITVAVO_API_SECRET`,
 `ANTHROPIC_API_KEY`, `CRYPTOPANIC_TOKEN`), `DATABASE_URL`, `LIVE_TRADING_ACK` en de plafonds van de
@@ -222,7 +234,9 @@ Grenzen bij het opslaan:
 - **Markten** die nieuw in de lijst komen worden gecontroleerd tegen de marktlijst van Bitvavo (als die
   binnen 3 seconden antwoordt; de lijst wordt een uur bewaard). Een onbekende markt wordt geweigerd met
   een suggestie ("BTCC-EUR bestaat niet op Bitvavo. Bedoel je BTC-EUR?"); is Bitvavo niet bereikbaar,
-  dan wordt zonder controle opgeslagen.
+  dan wordt zonder controle opgeslagen. Staat er al een markt in de lijst die Bitvavo niet kent (uit
+  `MARKETS`, of opgeslagen terwijl Bitvavo onbereikbaar was), dan staat er een waarschuwing bij het
+  veld; het overzicht toont bij Koersen "geen koers" met de reden.
 - **Claude-model**: een naam die de app niet kent, wordt wel opgeslagen, maar met een waarschuwing bij
   het veld (waarschijnlijk een typfout). `GET /api/settings` geeft die waarschuwingen in `warnings`.
 - **Standaard herstellen** zet nooit de modus terug. Een reset die de app naar live zou laten schakelen
@@ -286,8 +300,11 @@ als de regels veranderen maar de omschrijving niet. De strategie geldt voor al j
 - **Fouten** in de JSON staan in gewoon Nederlands onder de editor, met de plek ("Koopregel 1 →
   vergelijking") en bij een syntaxfout de regels eromheen.
 - **De backtest** noemt de periode, vergelijkt het netto resultaat met kopen en vasthouden (met een
-  grafiek en een oordeel), waarschuwt bij minder dan 5 trades en toont het tradelog bruto.
-  *Winnende trades* telt daar trades met bruto winst.
+  grafiek en een oordeel), waarschuwt bij minder dan 5 trades en toont het tradelog netto.
+  *Winnende trades* telt daar, net als in het journaal, trades met netto winst (na de kosten van aan-
+  en verkoop). De markt die je bij *Testen* kiest, bepaalt alleen waar de test draait: hij verandert de
+  strategie niet. Veranderen de regels maar niet de omschrijving, dan waarschuwt elk verschiloverzicht
+  (ook het voorstel op Handelen).
 
 De backtest is long-only, rekent de kosten van Bitvavo mee (`BACKTEST_FEE_PCT`), vult stop-loss, trailing stop en
 take-profit op de drempelprijs en vergelijkt met kopen-en-houden. Hij toont ook **Koopsignaal live**: hoe
@@ -391,7 +408,7 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    de actuele Bitvavo-koers, en sluit een positie die zo'n drempel raakt. De trailing stop schuift mee met
    het hoogste punt sinds instap (`Position.high_price`). Daar komt Claude niet aan. De exit-lus loopt ook
    als `TRADING_ENABLED` uit staat, de noodstop aan staat of de markt uit `MARKETS` is gehaald; de
-   noodstop stopt alleen nieuwe aankopen. Bitvavo kent geen stop-orders aan de beurskant: de bescherming
+   noodstop stopt nieuwe aankopen (en een verkoop op nieuws alleen), nooit de exit-lus. Bitvavo kent geen stop-orders aan de beurskant: de bescherming
    werkt alleen zolang de app draait, en met een interval van 2 minuten kan een snelle crash ruim voorbij
    de stop gaan. Lukt een verkoop niet (geen coins op het account, door Bitvavo geweigerd, of onuitgevoerd
    geannuleerd), dan blijft de positie open met zijn stop en probeert de volgende controle het opnieuw.
@@ -514,7 +531,9 @@ positie van de bot in die markt. In het formulier:
   geweigerd, of Bitvavo weigert de order). Is de uitkomst nog onbekend, dan zegt de kaart dat: plaats
   hem dan niet opnieuw. Na een weigering houdt het formulier je markt, richting en bedrag;
 - plaatst hetzelfde formulier twee keer versturen (Terug en opnieuw versturen) de order niet nog een
-  keer (een eenmalig `order_token`, 30 minuten in het geheugen).
+  keer (een eenmalig `order_token`, 30 minuten in het geheugen). Weigert Crypie de order vóór er iets
+  naar Bitvavo ging (eigen regels, geen positie), dan kun je hetzelfde formulier na een correctie
+  gewoon opnieuw versturen.
 
 Zolang de bot live handelt vraagt een handmatige order om je huidige wachtwoord.
 
@@ -546,7 +565,9 @@ Daaronder:
   eerste order zijn, of tot je *Deze kaart verbergen* kiest.
 - **Open posities** met het **netto** resultaat als je nu verkoopt: waarde × (1 − kosten) − inleg
   (de inleg bevat de kosten van de aankoop). In live staat er ook een regel als er nog open
-  oefenposities zijn: die bewaakt de bot nog, maar verkopen of resetten kan alleen in oefenmodus.
+  oefenposities zijn: die bewaakt de bot nog. Handelen toont ze apart onder *Ook open in Oefenmodus*
+  (en omgekeerd live posities in oefenmodus), `GET /api/positions?mode=paper` geeft ze, en een reset
+  van de oefenportefeuille in Instellingen sluit ze, ook in live.
 - **Koersen** met het tijdstip van de koersen, en het **saldo**.
 - De grafieken, de strategie, **Gesloten trades · 30 dagen** (alleen afgeronde trades, netto;
   *Winnende trades* is het deel met netto winst, bijvoorbeeld "0% · 0 van 1 met netto winst") en het
@@ -562,7 +583,10 @@ zichtbaar is (`GET /api/dashboard/status`).
 **Als Bitvavo hapert** wacht het overzicht hoogstens 3 seconden op koersen en saldo (parallel). Daarna
 toont het de laatst bekende koersen met hun tijdstip en een melding waarom; een mislukte poging wordt
 15 seconden onthouden, zodat volgende bezoeken niet opnieuw wachten. Het oefensaldo staat in de app zelf
-en is er altijd; een munt zonder koers telt mee tegen de instapkoers van zijn positie ("geschat").
+en is er altijd; een munt zonder koers telt mee tegen de instapkoers van zijn positie ("geschat"). De
+grafieken wachten hoogstens 5 seconden en vragen het binnen die 15 seconden ook niet opnieuw: ze tonen
+dan meteen waarom er geen grafiek is. Weigert Bitvavo een markt (bijvoorbeeld een die niet bestaat), dan
+zegt de grafiek dat, met *Markten controleren* in plaats van *Opnieuw proberen*.
 
 ### De pagina Handelen
 

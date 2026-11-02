@@ -850,9 +850,10 @@ def _unreachable(exc: BaseException) -> bool:
     )
 
 
-def _note_outage(client: object, exc: BaseException) -> None:
+def _note_outage(client: object, exc: BaseException, message: str | None = None) -> None:
+    """Remember that Bitvavo did not answer (``message``: how the caller put it)."""
     if _unreachable(exc):
-        _bitvavo_outages[client] = (time.monotonic(), _chart_problem(exc).message)
+        _bitvavo_outages[client] = (time.monotonic(), message or _chart_problem(exc).message)
 
 
 def _recent_outage(client: object) -> str | None:
@@ -3911,7 +3912,7 @@ async def _dashboard_prices(
         log.warning("overview: prices not fetched (%s): %s", type(exc).__name__, exc)
         problem = _bitvavo_problem(exc)
         _price_failures[client] = (time.monotonic(), problem)
-        _note_outage(client, exc)  # the charts that load next need not wait again
+        _note_outage(client, exc, problem)  # the charts that load next need not wait again
         return last_known, at, problem
     _price_failures.pop(client, None)
     engine.remember_prices(fresh)
