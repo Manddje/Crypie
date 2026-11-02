@@ -11,6 +11,7 @@
   {% if message %}{{ ui.notice("ok", message) }}{% endif %}
   {% if config_warning %}{{ ui.notice("warn", config_warning) }}{% endif %}
   {% if errors %}{{ ui.notice("error", "Niet opgeslagen. Kijk naar de gemarkeerde velden en probeer het opnieuw.") }}{% endif %}
+  {% if password_error %}{{ ui.notice("error", "Niet opgeslagen: " ~ password_error[1]) }}{% endif %}
 
   <nav class="segmented settings-nav" aria-label="Onderdelen">
     {% for g in groups %}<a href="#{{ g.key }}">{{ g.title }}</a>{% endfor %}
@@ -86,6 +87,21 @@
         {% endfor %}
       </div>
 
+      {% if step_up and g.key in sensitive_groups %}
+      {% set pwid = "pw-" ~ g.key %}
+      {% set pw_failed = password_error and password_error[0] == g.key %}
+      <div class="setting{% if pw_failed %} has-error{% endif %}">
+        <div class="setting-text">
+          <label for="{{ pwid }}">Huidig wachtwoord</label>
+          <div class="setting-help">Alleen nodig als je de modus, markten, limieten, risk-off, het Claude-budget, het gedrag zonder Claude of de nieuwsfeeds wijzigt of terugzet.</div>
+          {% if pw_failed %}<div class="setting-error" role="alert">{{ password_error[1] }}</div>{% endif %}
+        </div>
+        <div class="setting-control">
+          <input type="password" id="{{ pwid }}" name="current_password" autocomplete="current-password" maxlength="1024">
+        </div>
+      </div>
+      {% endif %}
+
       <div class="actions" style="margin-top: 18px">
         <button class="btn btn-primary" type="submit" name="action" value="save">Opslaan</button>
         <button class="btn" type="submit" name="action" value="reset" {% if not changed %}disabled{% endif %} formnovalidate data-confirm="Alle instellingen in dit blok terugzetten naar de waarden uit de serveromgeving?">Standaard herstellen</button>
@@ -113,6 +129,14 @@
       <p class="card-desc">Zet het oefensaldo terug op het startbedrag ({{ settings.paper_start_eur|eur(0) }}) en sluit open oefenposities zonder resultaat. Het logboek met beslissingen en orders blijft bewaard.</p>
       <form method="post" action="/settings" data-confirm="Oefenportefeuille resetten? Het saldo gaat terug naar het startbedrag en open oefenposities worden gesloten.">
         <input type="hidden" name="group" value="trading">
+        {% if step_up %}
+        <div class="form-row">
+          <label>Huidig wachtwoord
+            <input type="password" name="current_password" autocomplete="current-password" maxlength="1024" required>
+          </label>
+        </div>
+        {% if password_error and password_error[0] == "paper" %}<div class="setting-error" role="alert">{{ password_error[1] }}</div>{% endif %}
+        {% endif %}
         <button class="btn btn-danger" type="submit" name="action" value="reset_paper">Oefenportefeuille resetten</button>
       </form>
       {% else %}

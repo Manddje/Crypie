@@ -500,6 +500,29 @@ SPECS: tuple[Spec, ...] = (
 SPEC_BY_KEY: dict[str, Spec] = {s.key: s for s in SPECS}
 EDITABLE_KEYS = tuple(SPEC_BY_KEY)
 
+# Changing (or resetting) these asks for the current password again: they decide whether real
+# money is traded, how much, in which markets, and which outside text reaches Claude.
+SENSITIVE_KEYS: frozenset[str] = frozenset(
+    {
+        "trading_mode",
+        "markets",
+        "claude_unavailable_mode",
+        "risk_off_enabled",
+        "news_rss_feeds",
+        "claude_monthly_budget_usd",
+    }
+    | {s.key for s in SPECS if s.group == "limits"}
+)
+
+
+def sensitive_changes(old: Settings, new: Settings) -> list[str]:
+    """The sensitive settings whose effective value differs between ``old`` and ``new``."""
+    return [k for k in EDITABLE_KEYS if k in SENSITIVE_KEYS and getattr(old, k) != getattr(new, k)]
+
+
+def group_has_sensitive(group: str) -> bool:
+    return any(s.group == group and s.key in SENSITIVE_KEYS for s in SPECS)
+
 
 class SettingsError(ValueError):
     """Validation failed; ``errors`` maps setting key -> Dutch message."""

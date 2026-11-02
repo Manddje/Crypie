@@ -23,7 +23,12 @@ from app.ai.decision_maker import DecisionMaker
 from app.ai.evaluator import Evaluator
 from app.ai.news_analyst import NewsAnalyst
 from app.ai.strategy_assistant import StrategyAssistant
-from app.auth.routes import require_login
+from app.auth.routes import (
+    StepUpError,
+    require_current_password,
+    require_login,
+    step_up_enabled,
+)
 from app.auth.routes import router as auth_router
 from app.auth.service import (
     AuthService,
@@ -710,6 +715,10 @@ async def balance(broker: Broker = Depends(get_broker), session: Session = Depen
         raise HTTPException(502, str(exc)) from exc
 
 
+# Step-up over the API: the current password in a header, for calls without a JSON body.
+PASSWORD_HEADER = "x-current-password"
+
+
 class OrderIn(BaseModel):
     market: str = Field(max_length=32)
     side: Literal["buy", "sell"]
@@ -717,6 +726,8 @@ class OrderIn(BaseModel):
     # pydantic error would echo a NaN input back and fail to serialise.
     amount_quote: float = Field(description="Amount in EUR")
     reason: str | None = Field(default=None, max_length=200)
+    # Needed while the bot trades live (step-up, like the /account page).
+    current_password: str | None = Field(default=None, max_length=1024)
 
 
 @app.get("/api/orders")
@@ -742,10 +753,20 @@ async def list_orders(session: Session = Depends(get_session)):
 @app.post("/api/orders", status_code=201)
 async def create_order(
     order: OrderIn,
+    request: Request,
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
-    """A manual order under the bot's rules: see ``TradingEngine.manual_order``."""
+    """A manual order under the bot's rules: see ``TradingEngine.manual_order``.
+
+    While the bot trades live the current password is needed as well.
+    """
+    if engine.mode == "live":
+        password = order.current_password or request.headers.get(PASSWORD_HEADER)
+        try:
+            await require_current_password(request, session, password)
+        except StepUpError as exc:
+            raise HTTPException(exc.status, exc.message) from exc
     try:
         o = await engine.manual_order(
             session, order.market, order.side, order.amount_quote, order.reason
@@ -1613,8 +1634,11 @@ def _settings_payload(request: Request, session: Session) -> dict:
     }
 
 
-def _save_settings(request: Request, session: Session, raw: dict) -> Settings:
-    """Parse, validate, store and apply; raises SettingsError with per-field messages."""
+async def _save_settings(
+    request: Request, session: Session, raw: dict, password: str | None = None
+) -> Settings:
+    """Parse, validate, store and apply; raises SettingsError with per-field messages, or
+    StepUpError when a sensitive setting changes without the right current password."""
     app_ = request.app
     values = cfg.parse_values(raw)
     candidate = cfg.preview(session, values, app_.state.env)
@@ -1622,6 +1646,8 @@ def _save_settings(request: Request, session: Session, raw: dict) -> Settings:
         blocker = live_blocker(app_.state.env, app_.state.client)
         if blocker:
             raise SettingsError({"trading_mode": f"live handelen kan nog niet: {blocker}"})
+    if cfg.sensitive_changes(app_.state.settings, candidate):
+        await require_current_password(request, session, password)
     cfg.save_overrides(session, values, app_.state.env)
     _log_setting_changes(app_.state.settings, candidate)
     apply_settings(app_, candidate)
@@ -1644,15 +1670,43 @@ def _log_setting_changes(old: Settings, new: Settings) -> None:
             log.info("setting %s changed in the portal: %r -> %r", key, before, after)
 
 
-def _reset_settings(request: Request, session: Session, keys: list[str] | None) -> int:
+def _resets_sensitive(session: Session, keys: list[str] | None) -> bool:
+    """Whether forgetting ``keys`` (None: all) removes a stored value of a sensitive setting."""
+    stored = cfg.load_overrides(session)
+    return any(k in cfg.SENSITIVE_KEYS and (keys is None or k in keys) for k in stored)
+
+
+async def _reset_settings(
+    request: Request, session: Session, keys: list[str] | None, password: str | None = None
+) -> int:
+    if _resets_sensitive(session, keys):
+        await require_current_password(request, session, password)
+    old: Settings = request.app.state.settings
     removed = cfg.reset_overrides(session, keys)
     new = cfg.effective_settings(session, request.app.state.env)
     if new.trading_mode == "live" and live_blocker(request.app.state.env, request.app.state.client):
         # The environment itself says live but live is not possible: stay in paper mode.
         new = new.model_copy(update={"trading_mode": "paper"})
+    _log_setting_changes(old, new)
     apply_settings(request.app, new)
     _drop_disabled_mood(session, new)
     return removed
+
+
+async def _api_password(request: Request, body: dict | None = None) -> str | None:
+    """The current password of an API call: the JSON field current_password, or the
+    X-Current-Password header (handy for DELETE, which usually has no body)."""
+    if body is None:
+        raw = await request.body()
+        if raw:
+            try:
+                body = json.loads(raw)
+            except ValueError:
+                raise HTTPException(400, "ongeldige JSON") from None
+    value = body.get("current_password") if isinstance(body, dict) else None
+    if value is not None and not isinstance(value, str):
+        raise HTTPException(422, {"current_password": "moet tekst zijn"})
+    return value or request.headers.get(PASSWORD_HEADER)
 
 
 @app.get("/api/settings")
@@ -1664,17 +1718,26 @@ async def api_settings(request: Request, session: Session = Depends(get_session)
 async def api_update_settings(
     body: dict, request: Request, session: Session = Depends(get_session)
 ):
+    """Changes to sensitive settings need ``current_password`` in the body (step-up)."""
+    password = await _api_password(request, body)
+    values = {k: v for k, v in body.items() if k != "current_password"}
     try:
-        _save_settings(request, session, body)
+        await _save_settings(request, session, values, password)
     except SettingsError as exc:
         raise HTTPException(422, exc.errors) from exc
+    except StepUpError as exc:
+        raise HTTPException(exc.status, exc.message) from exc
     return _settings_payload(request, session)
 
 
 @app.delete("/api/settings")
 async def api_reset_settings(request: Request, session: Session = Depends(get_session)):
     """Forget every value saved in the portal; the environment applies again."""
-    _reset_settings(request, session, None)
+    password = await _api_password(request)
+    try:
+        await _reset_settings(request, session, None, password)
+    except StepUpError as exc:
+        raise HTTPException(exc.status, exc.message) from exc
     return _settings_payload(request, session)
 
 
@@ -1682,7 +1745,11 @@ async def api_reset_settings(request: Request, session: Session = Depends(get_se
 async def api_reset_setting(key: str, request: Request, session: Session = Depends(get_session)):
     if key not in cfg.SPEC_BY_KEY:
         raise HTTPException(404, f"{key} is geen aanpasbare instelling")
-    _reset_settings(request, session, [key])
+    password = await _api_password(request)
+    try:
+        await _reset_settings(request, session, [key], password)
+    except StepUpError as exc:
+        raise HTTPException(exc.status, exc.message) from exc
     return _settings_payload(request, session)
 
 
@@ -1711,7 +1778,10 @@ def _settings_context(
     errors: dict[str, str] | None = None,
     submitted: dict | None = None,
     message: str | None = None,
+    password_error: tuple[str, str] | None = None,
 ) -> dict:
+    """``password_error`` is (form, message): the form ("trading", ..., or "paper") whose
+    current-password field gets the message."""
     payload = _settings_payload(request, session)
     if submitted:
         for group in payload["groups"]:
@@ -1730,6 +1800,9 @@ def _settings_context(
         "config_warning": payload["warning"],
         "errors": errors or {},
         "message": message,
+        "password_error": password_error,
+        "step_up": step_up_enabled(request),
+        "sensitive_groups": [g for g in cfg.GROUPS if cfg.group_has_sensitive(g)],
         "model_choices": [m for m, _ in cfg.MODEL_CHOICES],
         "environment": {
             "bitvavo_key": env.has_bitvavo_credentials,
@@ -1764,15 +1837,31 @@ async def settings_save(request: Request, session: Session = Depends(get_session
     form = await request.form()
     group = str(form.get("group") or "")
     action = str(form.get("action") or "save")
+    password = str(form.get("current_password") or "")
+
+    def step_up_failed(form_key: str, exc: StepUpError, submitted: dict | None = None):
+        ctx = _settings_context(
+            request, session, submitted=submitted, password_error=(form_key, exc.message)
+        )
+        return templates.TemplateResponse(request, "settings.html", ctx, status_code=exc.status)
+
     if action == "reset_paper":
         if request.app.state.broker.mode != "paper":
             raise HTTPException(400, "alleen mogelijk in oefenmodus")
+        try:
+            await require_current_password(request, session, password)
+        except StepUpError as exc:
+            return step_up_failed("paper", exc)
         _reset_paper_portfolio(session)
+        log.info("paper portfolio reset in the portal")
         return RedirectResponse("/settings?saved=paper", status_code=303)
     if group not in cfg.GROUPS:
         raise HTTPException(400, "onbekende groep")
     if action == "reset":
-        _reset_settings(request, session, cfg.keys_in_group(group))
+        try:
+            await _reset_settings(request, session, cfg.keys_in_group(group), password)
+        except StepUpError as exc:
+            return step_up_failed(group, exc)
         return RedirectResponse(f"/settings?saved=reset#{group}", status_code=303)
     raw: dict[str, str] = {}
     for key in cfg.keys_in_group(group):
@@ -1782,10 +1871,12 @@ async def settings_save(request: Request, session: Session = Depends(get_session
         elif cfg.SPEC_BY_KEY[key].kind == "bool":
             raw[key] = "false"
     try:
-        _save_settings(request, session, raw)
+        await _save_settings(request, session, raw, password)
     except SettingsError as exc:
         ctx = _settings_context(request, session, errors=exc.errors, submitted=raw)
         return templates.TemplateResponse(request, "settings.html", ctx, status_code=400)
+    except StepUpError as exc:
+        return step_up_failed(group, exc, submitted=raw)
     return RedirectResponse(f"/settings?saved={group}#{group}", status_code=303)
 
 
@@ -1848,6 +1939,7 @@ async def _dashboard_context(
         "unprotected_positions": engine.unprotected,
         "session_secret_weak": getattr(request.app.state, "session_secret_weak", False),
         "chart_periods": list(PERIODS),
+        "order_needs_password": mode == "live" and step_up_enabled(request),
     }
 
 
@@ -1869,6 +1961,7 @@ async def dashboard_order(
     market: str = Form(...),
     side: str = Form(...),
     amount_quote: float = Form(...),
+    current_password: str = Form(""),
     client: BitvavoClient = Depends(get_client),
     broker: Broker = Depends(get_broker),
     budget: BudgetGuard = Depends(get_budget),
@@ -1876,7 +1969,15 @@ async def dashboard_order(
     session: Session = Depends(get_session),
 ):
     try:
+        if engine.mode == "live":
+            # Real money: ask for the current password again (step-up).
+            await require_current_password(request, session, current_password)
         await engine.manual_order(session, market, side, amount_quote)
+    except StepUpError as exc:
+        ctx = await _dashboard_context(
+            request, client, broker, budget, session, error=f"Order niet geplaatst: {exc.message}"
+        )
+        return templates.TemplateResponse(request, "dashboard.html", ctx, status_code=exc.status)
     except (ValueError, BitvavoError) as exc:
         ctx = await _dashboard_context(
             request, client, broker, budget, session, error=f"Order niet geplaatst: {exc}"

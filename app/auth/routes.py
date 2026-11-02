@@ -685,6 +685,55 @@ async def account_action(
     return RedirectResponse("/account", status_code=303)
 
 
+# -- step-up for sensitive changes elsewhere in the app ----------------------------------------
+
+STEP_UP_MISSING = "Vul je huidige wachtwoord in om deze wijziging te bevestigen."
+STEP_UP_WRONG = "Het wachtwoord klopt niet."
+
+
+class StepUpError(Exception):
+    """The current password was missing, wrong, or cannot be checked right now."""
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+def step_up_enabled(request: Request) -> bool:
+    """Without the login (AUTH_ENABLED=false) there is no password to ask for."""
+    return getattr(request.app.state, "auth", None) is not None
+
+
+async def require_current_password(request: Request, db: Session, password: str | None) -> None:
+    """Ask for the current password again before a sensitive change, like /account does.
+
+    Raises StepUpError (403 missing or wrong, 429 throttled or busy). Wrong passwords count
+    for the client's throttle, the same one as the login and /account use.
+    """
+    auth: AuthService | None = getattr(request.app.state, "auth", None)
+    if auth is None:
+        return
+    user = auth.account(db)
+    if user is None:
+        raise StepUpError(401, "Niet ingelogd")
+    key = _client_key(request)
+    wait = auth.throttle.blocked_for(db, key)
+    if wait:
+        raise StepUpError(429, _wait_message(wait))
+    if not password:
+        raise StepUpError(403, STEP_UP_MISSING)
+    try:
+        ok = await _hashing(verify_password, password, user.password_hash)
+    except _Busy as exc:
+        raise StepUpError(429, BUSY) from exc
+    if not ok:
+        auth.throttle.record_failure(db, key)
+        log.warning("wrong password for a sensitive change on %s from %s", request.url.path, key)
+        raise StepUpError(403, STEP_UP_WRONG)
+    auth.throttle.reset(db, key)
+
+
 def _reauth_ok(request: Request, auth: AuthService, user: AuthUser) -> bool:
     data = auth.signer.decode(_read_cookie(request, REAUTH_COOKIE), purpose=REAUTH)
     return auth.session_valid(user, data)

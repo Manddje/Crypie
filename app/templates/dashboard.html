@@ -219,10 +219,15 @@
           <label>Bedrag in euro
             <input type="number" name="amount_quote" min="{{ settings.min_trade_eur|int }}" step="0.01" value="25" required inputmode="decimal">
           </label>
+          {% if order_needs_password %}
+          <label>Huidig wachtwoord
+            <input type="password" name="current_password" autocomplete="current-password" maxlength="1024" required>
+          </label>
+          {% endif %}
           <button class="btn btn-primary" type="submit">Order plaatsen</button>
         </div>
       </form>
-      <p class="form-help">Minimaal {{ settings.min_trade_eur|eur(0) }} per order. Handmatige orders tellen niet mee voor de daglimiet van de bot.</p>
+      <p class="form-help">Minimaal {{ settings.min_trade_eur|eur(0) }} per order. Handmatige orders tellen niet mee voor de daglimiet van de bot.{% if order_needs_password %} Omdat de bot live handelt, vraagt een order om je huidige wachtwoord.{% endif %}</p>
     </section>
 
     <section class="card">
