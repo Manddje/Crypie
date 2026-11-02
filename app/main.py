@@ -10,14 +10,14 @@ import time
 import weakref
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Path, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, BeforeValidator, Field, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.datastructures import MutableHeaders
@@ -55,18 +55,25 @@ from app.bitvavo.broker import (
 from app.bitvavo.client import BitvavoClient, BitvavoError, InvalidMarketError
 from app.config import Settings, get_settings
 from app.db import Evaluation, Order, Position, SessionLocal, Setting, get_session, init_db
+from app.labels import daily_loss_rule_nl, max_orders_rule_nl
 from app.news.service import (
+    FEAR_GREED_NL,
     NEWS_RETENTION_DAYS,
+    SENTIMENT_WINDOW_H,
     NewsService,
     annotate_groups,
     clamp_future_items,
     clear_market_mood,
+    count_items,
     count_status,
+    event_key_for,
+    fact_anchor,
     group_items,
     load_market_mood,
     market_sentiment,
     recent_items,
     requeue_items_without_event_key,
+    text_lang,
 )
 from app.news.sources import NewsFetcher
 from app.notify import Notifier, notify_configured
@@ -83,13 +90,32 @@ from app.strategy.model import (
     check_for_use,
     use_problems,
 )
-from app.strategy.store import STRATEGY_KEY, load_strategy, load_strategy_checked, save_strategy
+from app.strategy.page import (
+    RESULT_TOKEN,
+    RESULTS,
+    StrategyInputError,
+    backtest_view,
+    curve_svg,
+    description_outdated,
+    equity_curves,
+    parse_strategy_json,
+    save_confirm,
+)
+from app.strategy.store import (
+    STRATEGY_KEY,
+    load_previous,
+    load_strategy,
+    load_strategy_checked,
+    save_strategy,
+    strategy_version,
+)
 from app.trading import display, risk
 from app.trading.engine import (
     EXCHANGE_MIN_ORDER_EUR,
     NEWS_ENTRY_MIN_SCORE,
     NEWS_ENTRY_SIZE_FACTOR,
     NEWS_EXIT_MAX_SCORE,
+    NEWS_MIN_SOURCES,
     EvaluationBusy,
     TradingEngine,
     closed_positions,
@@ -111,12 +137,16 @@ from app.trading.history import (
     trade_actions,
 )
 from app.trading.journal import (
+    BY_NL as JOURNAL_SOURCES_NL,
+)
+from app.trading.journal import (
     EXIT_NL,
     JournalFilter,
     all_tags,
     journal_entries,
     journal_entry,
     journal_totals,
+    mode_counts,
     save_note,
     unlinked_orders,
 )
@@ -948,10 +978,16 @@ async def _run_backtest(
 ) -> dict:
     candles = await client.candles(strategy.market, strategy.interval, limit)
     result = backtest(strategy, candles, start_eur, request.app.state.settings.backtest_fee_pct)
+    strategy_curve, hold_curve = equity_curves(candles, result, strategy.position_size_pct)
     return {
         **result.summary(),
         "market": strategy.market,
         "interval": strategy.interval,
+        "first_time": int(candles[0][0]) if candles else None,
+        "last_time": int(candles[-1][0]) if candles else None,
+        "wins": sum(1 for t in result.closed_trades if (t.pnl_pct or 0) > 0),
+        # The value of the test account per candle (sampled), for the chart on the page.
+        "curve": curve_svg(strategy_curve, hold_curve),
         "latest": latest_snapshot(strategy, candles),
         "trade_log": [
             {
@@ -1031,30 +1067,174 @@ async def run_backtest(
         raise HTTPException(422, f"backtest failed: {exc}") from exc
 
 
+def _waiting_proposal(session: Session, settings: Settings, current: Strategy) -> dict | None:
+    """The newest proposal from an evaluation that waits on Handelen and could be applied as
+    it is (UX-15), so the strategy page can point to it."""
+    for ev in session.scalars(select(Evaluation).order_by(Evaluation.id.desc()).limit(5)):
+        if not ev.proposed_strategy or ev.applied:
+            continue
+        proposal = _proposal(ev)
+        if proposal is None or proposal.market not in settings.markets:
+            continue
+        if use_problems(proposal) or _proposal_guard_problems(current, proposal, ev):
+            continue
+        return {"name": proposal.name, "created_at": ev.created_at, "id": ev.id}
+    return None
+
+
+def _strategy_context(
+    request: Request,
+    session: Session,
+    assistant: StrategyAssistant,
+    state: dict | None = None,
+) -> dict:
+    """The strategy page. ``state`` is the outcome of a form (a test, a proposal, refused
+    input or a conflict), from the result store or straight from the POST."""
+    settings: Settings = request.app.state.settings
+    current, load_warning = load_strategy_checked(session)
+    state = state or {}
+    live = settings.trading_mode == "live"
+    previous = load_previous(session)
+    ctx: dict = {
+        "settings": settings,
+        "mode": settings.trading_mode,
+        "strategy": current,
+        "strategy_json": state.get("strategy_json") or current.model_dump_json(indent=2),
+        "version": strategy_version(session),
+        "load_warning": load_warning,
+        "assistant_available": assistant.available,
+        "assistant_model": settings.claude_model_strategy,
+        "waiting": _waiting_proposal(session, settings, current),
+        "previous": previous[0] if previous else None,
+        "previous_at": previous[1] if previous else None,
+        "previous_confirm": None,
+        "result_missing": state.get("missing", False),
+        "kind": state.get("kind"),
+        "description": state.get("description", ""),
+        "limit": state.get("limit", 500),
+        "test_market": state.get("market", ""),
+        "errors": state.get("errors", []),
+        "error_title": state.get("error_title"),
+        "json_context": state.get("json_context", []),
+        "claude_error": state.get("claude_error"),
+        "message": state.get("message"),
+        "proposal": None,
+        "proposal_json": None,
+        "proposal_diff": None,
+        "description_outdated": False,
+        "problems": [],
+        "explanation": state.get("explanation"),
+        "backtest": state.get("backtest"),
+        "bt": backtest_view(state["backtest"]) if state.get("backtest") else None,
+        "save_confirm": None,
+        "conflict": None,
+        "backtest_error": state.get("backtest_error"),
+        "editor_confirm": ("LIVE · echt geld: " if live else "")
+        + "Opslaan zonder test? De strategie in de editor wordt meteen actief op "
+        + ", ".join(settings.markets)
+        + ", zonder backtest.",
+        "reset_confirm": (
+            ("LIVE · echt geld: " if live else "")
+            + f"De actieve strategie wordt vervangen door de standaardstrategie "
+            f"'{DEFAULT_STRATEGY.name}' van Crypie, op {', '.join(settings.markets)}. De huidige "
+            "blijft bewaard als vorige strategie. Doorgaan?"
+        ),
+    }
+    if ctx["previous"] is not None:
+        ctx["previous_confirm"] = (
+            ("LIVE · echt geld: " if live else "")
+            + f"Vorige strategie '{ctx['previous'].name}' terugzetten en meteen actief maken "
+            f"op {', '.join(settings.markets)}? De huidige wordt dan de vorige."
+        )
+    if state.get("proposal"):
+        proposal = Strategy.model_validate(state["proposal"])
+        ctx["proposal"] = proposal
+        ctx["proposal_json"] = proposal.model_dump_json(indent=2)
+        ctx["proposal_diff"] = strategy_diff(current, proposal)
+        ctx["description_outdated"] = description_outdated(ctx["proposal_diff"])
+        problems = use_problems(proposal)
+        if proposal.market not in settings.markets:
+            problems.append(f"{proposal.market} staat niet in je markten (MARKETS)")
+        ctx["problems"] = problems
+        ctx["save_confirm"] = save_confirm(
+            proposal.name,
+            settings.markets,
+            state.get("backtest"),
+            live,
+            tested=bool(state.get("backtest")),
+        )
+    if state.get("conflict"):
+        yours = Strategy.model_validate(state["conflict"])
+        ctx["conflict"] = {
+            "strategy": yours,
+            "json": yours.model_dump_json(indent=2),
+            "diff": strategy_diff(current, yours),
+            "confirm": ("LIVE · echt geld: " if live else "")
+            + f"Toch overschrijven? De strategie '{current.name}' die nu actief is, wordt "
+            f"vervangen door jouw versie '{yours.name}'.",
+        }
+    return ctx
+
+
+async def _try_backtest(
+    request: Request, client: BitvavoClient, strategy: Strategy, limit: int, state: dict
+) -> None:
+    """Run the backtest into ``state``; a failure is said on the page, not lost with the
+    strategy (a proposal from Claude cost money)."""
+    try:
+        state["backtest"] = await _run_backtest(request, client, strategy, limit, 1000)
+    except BitvavoError as exc:
+        state["backtest_error"] = "De backtest kon niet draaien: " + errors.bitvavo_text(exc)
+    except (ValueError, ArithmeticError) as exc:
+        state["backtest_error"] = f"De backtest kon niet draaien: {exc}"
+
+
+def _strategy_input(strategy_json: str, settings: Settings) -> Strategy:
+    """The editor's strategy, or StrategyInputError with Dutch errors next to the editor."""
+    if len(strategy_json) > STRATEGY_JSON_MAX:
+        limit = f"{STRATEGY_JSON_MAX:,}".replace(",", ".")
+        raise StrategyInputError(
+            [
+                {
+                    "where": "Strategie",
+                    "path": "",
+                    "message": f"de JSON is te lang (maximaal {limit} tekens)",
+                }
+            ]
+        )
+    candidate = parse_strategy_json(strategy_json)
+    if candidate.market not in settings.markets:
+        raise StrategyInputError(
+            [
+                {
+                    "where": "Backtest-markt",
+                    "path": "market",
+                    "message": f"{candidate.market} staat niet in je markten (MARKETS: "
+                    f"{', '.join(settings.markets)}). Dit veld bepaalt alleen op welke markt de "
+                    "backtest draait; de strategie geldt voor al je markten",
+                }
+            ]
+        )
+    return candidate
+
+
 @app.get("/strategy", response_class=HTMLResponse)
 async def strategy_page(
     request: Request,
+    result: str | None = Query(None, max_length=64),
     assistant: StrategyAssistant = Depends(get_assistant),
     session: Session = Depends(get_session),
 ):
-    strategy, load_warning = load_strategy_checked(session)
-    return templates.TemplateResponse(
-        request,
-        "strategy.html",
-        {
-            "settings": request.app.state.settings,
-            "strategy_json": strategy.model_dump_json(indent=2),
-            "strategy": strategy,
-            "load_warning": load_warning,
-            "assistant_available": assistant.available,
-            "proposal": None,
-            "proposal_diff": None,
-            "explanation": None,
-            "backtest": None,
-            "error": None,
-            "message": None,
-        },
-    )
+    state = None
+    if result:
+        state = RESULTS.get(result) if RESULT_TOKEN.match(result) else None
+        state = state or {"missing": True}
+    ctx = _strategy_context(request, session, assistant, state)
+    return templates.TemplateResponse(request, "strategy.html", ctx)
+
+
+# Where each outcome lands on the page.
+STRATEGY_ANCHORS = {"invalid": "editor", "claude": "claude", "conflict": "conflict"}
 
 
 @app.post("/strategy", response_class=HTMLResponse)
@@ -1064,85 +1244,133 @@ async def strategy_action(
     strategy_json: str = Form(""),
     description: str = Form(""),
     limit: int = Form(500, ge=50, le=MAX_CANDLES),
+    market: str = Form("", max_length=16),
+    base_version: str = Form("", max_length=64),
     client: BitvavoClient = Depends(get_client),
     assistant: StrategyAssistant = Depends(get_assistant),
     session: Session = Depends(get_session),
 ):
+    """Test, propose, save, reset or put back the previous strategy.
+
+    Browsers always get a redirect (Post/Redirect/Get): a success to the page with a message, a
+    test or proposal to ``/strategy?result=<id>``, so a reload never runs a test or a paid
+    Claude call again. Other clients get the page itself, with 400 for refused input.
+    """
     settings: Settings = request.app.state.settings
-    current, load_warning = load_strategy_checked(session)
-    ctx: dict = {
-        "settings": settings,
-        "strategy_json": strategy_json[:STRATEGY_JSON_MAX],
-        "strategy": current,
-        "load_warning": load_warning,
-        "assistant_available": assistant.available,
-        "proposal": None,
-        "proposal_diff": None,
-        "explanation": None,
-        "backtest": None,
-        "error": None,
-        "message": None,
-    }
+    html = errors.wants_html(request)
+    state: dict = {"limit": limit, "market": market if market in settings.markets else ""}
+    done: str | None = None  # the message after a change that went through
     status = 200
     try:
         if action == "propose":
+            state.update(kind="claude", description=description[:DESCRIPTION_MAX])
             if not assistant.available:
-                raise RuntimeError("ANTHROPIC_API_KEY is niet ingesteld")
+                raise RuntimeError("Voorstellen via Claude staan uit: er is geen Claude-sleutel.")
             # Same bounds as POST /api/strategy/propose.
-            ProposalIn(description=description)
-            proposal = await assistant.propose(
-                session, description, ctx["strategy"], settings.markets
+            try:
+                ProposalIn(description=description)
+            except ValidationError as exc:
+                raise RuntimeError(
+                    f"schrijf je wens in minstens 5 en hoogstens {DESCRIPTION_MAX} tekens."
+                ) from exc
+            current = load_strategy(session)
+            proposal = await assistant.propose(session, description, current, settings.markets)
+            state.update(
+                kind="propose",
+                proposal=proposal.strategy.model_dump(mode="json"),
+                strategy_json=proposal.strategy.model_dump_json(indent=2),
+                explanation=proposal.explanation,
             )
-            ctx["strategy_json"] = proposal.strategy.model_dump_json(indent=2)
-            ctx["proposal"] = proposal.strategy
-            ctx["proposal_diff"] = strategy_diff(current, proposal.strategy)
-            ctx["explanation"] = proposal.explanation
-            ctx["description"] = description
-            ctx["backtest"] = await _run_backtest(request, client, proposal.strategy, limit, 1000)
-            ctx["message"] = (
-                "Claude heeft een voorstel gemaakt. "
-                "Bekijk het hieronder en sla het op als je het goed vindt."
-            )
-            problems = use_problems(proposal.strategy)
-            if problems:
-                ctx["error"] = (
-                    "Dit voorstel kan zo niet worden opgeslagen: " + "; ".join(problems) + "."
-                )
+            await _try_backtest(request, client, proposal.strategy, limit, state)
         elif action == "reset":
             save_strategy(session, DEFAULT_STRATEGY)
-            ctx["strategy"] = DEFAULT_STRATEGY
-            ctx["load_warning"] = None
-            ctx["strategy_json"] = DEFAULT_STRATEGY.model_dump_json(indent=2)
-            ctx["message"] = f"Standaardstrategie '{DEFAULT_STRATEGY.name}' hersteld en actief."
-        else:
-            if len(strategy_json) > STRATEGY_JSON_MAX:
+            done = (
+                f"Standaardstrategie '{DEFAULT_STRATEGY.name}' hersteld en actief op "
+                f"{', '.join(settings.markets)}. De vorige strategie is bewaard."
+            )
+        elif action == "restore_previous":
+            previous = load_previous(session)
+            if previous is None:
+                raise ValueError("Er is geen vorige strategie bewaard.")
+            if base_version and base_version != strategy_version(session):
                 raise ValueError(
-                    f"De strategie-JSON is te lang (maximaal {STRATEGY_JSON_MAX} tekens)."
+                    "De strategie is intussen gewijzigd; terugzetten zou die wijziging ongedaan "
+                    "maken. Bekijk de pagina opnieuw en kies dan."
                 )
-            candidate = Strategy.model_validate_json(strategy_json)
-            if candidate.market not in settings.markets:
-                raise ValueError(f"{candidate.market} staat niet in MARKETS")
+            strategy = previous[0]
+            if strategy.market not in settings.markets:
+                raise ValueError(f"{strategy.market} staat niet meer in je markten (MARKETS).")
+            check_for_use(strategy)
+            save_strategy(session, strategy)
+            done = (
+                f"Vorige strategie '{strategy.name}' teruggezet en actief op "
+                f"{', '.join(settings.markets)}. De strategie die er stond, is nu de vorige."
+            )
+        elif action in ("backtest", "save"):
+            state.update(kind="invalid", strategy_json=strategy_json[:STRATEGY_JSON_MAX])
+            candidate = _strategy_input(strategy_json, settings)
             if action == "backtest":
-                ctx["proposal"] = candidate
-                ctx["proposal_diff"] = strategy_diff(current, candidate)
-                ctx["backtest"] = await _run_backtest(request, client, candidate, limit, 1000)
-            elif action == "save":
-                check_for_use(candidate)
-                save_strategy(session, candidate)
-                ctx["strategy"] = candidate
-                ctx["load_warning"] = None
-                ctx["message"] = f"Strategie '{candidate.name}' opgeslagen en actief."
+                if state["market"]:
+                    candidate = candidate.model_copy(update={"market": state["market"]})
+                state.update(
+                    kind="backtest",
+                    proposal=candidate.model_dump(mode="json"),
+                    strategy_json=candidate.model_dump_json(indent=2),
+                )
+                await _try_backtest(request, client, candidate, limit, state)
             else:
-                raise ValueError(f"Onbekende actie {action!r}")
-    except ValidationError as exc:
-        what = "Ongeldige omschrijving" if action == "propose" else "Ongeldige strategie"
-        ctx["error"] = f"{what}: " + "; ".join(
-            f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()
+                try:
+                    check_for_use(candidate)
+                except ValueError as exc:
+                    raise StrategyInputError(
+                        [{"where": "Strategie", "path": "", "message": str(exc)}]
+                    ) from exc
+                if base_version and base_version != strategy_version(session):
+                    # Changed since this page was loaded (another tab, an applied proposal):
+                    # show what saving would undo instead of overwriting it silently.
+                    state.update(kind="conflict", conflict=candidate.model_dump(mode="json"))
+                    status = 409
+                else:
+                    save_strategy(session, candidate)
+                    done = (
+                        f"Strategie '{candidate.name}' opgeslagen en actief op "
+                        f"{', '.join(settings.markets)}. De vorige strategie is bewaard."
+                    )
+        else:
+            raise ValueError(f"Onbekende actie {action!r}")
+    except StrategyInputError as exc:
+        state.update(
+            kind="invalid",
+            error_title="Ongeldige strategie, niet opgeslagen:"
+            if action == "save"
+            else "Ongeldige strategie, niet getest:",
+            errors=exc.errors,
+            json_context=exc.context,
         )
         status = 400
-    except (ValueError, RuntimeError, ArithmeticError, BitvavoError) as exc:
-        ctx["error"] = str(exc)
+    except (BudgetExceeded, RuntimeError, ValueError) as exc:
+        # Claude could not make a proposal (no key, budget, an unusable answer), or a reset,
+        # a restore or an unknown action was refused.
         status = 400
+        if action == "propose":
+            state.update(kind="claude", claude_error=f"Geen voorstel gemaakt: {exc}")
+        elif html:
+            return flash.redirect_with_flash("/strategy#actief", "error", str(exc))
+        else:
+            state = {"message_error": str(exc)}
+    if done is not None:
+        if html:
+            return flash.redirect_with_flash("/strategy#actief", "ok", done)
+        state = {"message": done}
+    elif html:
+        token = RESULTS.put(state)
+        anchor = STRATEGY_ANCHORS.get(state.get("kind") or "", "resultaat")
+        if state.get("kind") in ("backtest", "propose") and status == 400:
+            anchor = "editor"
+        return RedirectResponse(f"/strategy?result={token}#{anchor}", status_code=303)
+    ctx = _strategy_context(request, session, assistant, state)
+    if state.get("message_error"):
+        ctx["error_title"] = state["message_error"]
     return templates.TemplateResponse(request, "strategy.html", ctx, status_code=status)
 
 
@@ -1209,32 +1437,134 @@ async def news_sentiment(
     }
 
 
+# The news page groups every article of the chosen period (no silent cap): 30 news facts per
+# page, counted over the whole period. Only a period with more articles than this is cut, and
+# the page then says so.
+NEWS_PAGE_SIZE = 30
+NEWS_PAGE_MAX_ITEMS = 5000
+NEWS_PERIODS = ((6, "6 uur"), (24, "24 uur"), (48, "48 uur"), (72, "3 dagen"))
+NEWS_DEFAULT_HOURS = SENTIMENT_WINDOW_H  # the window the sentiment and 'telt mee' use
+
+
+def _news_url(hours: int, telt: str = "", page: int = 1, anchor: str = "") -> str:
+    params = {"hours": hours}
+    if telt:
+        params["telt"] = telt
+    if page > 1:
+        params["page"] = page
+    return f"/news?{urlencode(params)}" + (f"#{anchor}" if anchor else "")
+
+
+def _news_groups(session: Session, settings: Settings, hours: int) -> tuple[list, int, bool]:
+    """Every news fact of the last ``hours`` with its status, the number of articles in that
+    window, and whether the window had more articles than the page groups."""
+    items = recent_items(session, hours, NEWS_PAGE_MAX_ITEMS)
+    total = count_items(session, hours)
+    groups = annotate_groups(group_items(items), settings.coins)
+    return groups, total, total > len(items)
+
+
+def _news_refresh_flash(result: dict) -> tuple[str, str]:
+    """One message after 'Nu verversen': what came in and what Claude did with it."""
+    n = int(result.get("inserted") or 0)
+    new = (
+        "geen nieuwe berichten"
+        if n == 0
+        else ("1 nieuw bericht" if n == 1 else f"{n} nieuwe berichten")
+    )
+    if result.get("error"):
+        return "warn", f"Nieuws ververst: {new}. Niet alles lukte; zie de melding op de pagina."
+    if not result.get("assessing"):
+        return "info", f"Nieuws ververst: {new} (niet beoordeeld: geen Claude-sleutel)."
+    assessed = int(result.get("assessed") or 0)
+    text = f"Nieuws ververst: {new}, {assessed} beoordeeld door Claude"
+    pending = int(result.get("pending") or 0)
+    if pending:
+        text += f"; nog {pending} te beoordelen bij de volgende ronde"
+    return "ok", text + "."
+
+
 @app.get("/news", response_class=HTMLResponse)
 async def news_page(
     request: Request,
-    hours: int = Query(24, ge=1, le=NEWS_HOURS_MAX),
+    hours: int = Query(NEWS_DEFAULT_HOURS, ge=1, le=NEWS_HOURS_MAX),
     # "ja" = only facts that weigh in the sentiment, "nee" = only the rest
     telt: str = Query("", max_length=8),
+    page: int = Query(1, ge=1, le=10_000),
     news: NewsService = Depends(get_news),
     session: Session = Depends(get_session),
 ):
     settings: Settings = request.app.state.settings
     counted = {"ja": True, "nee": False}.get(telt)
-    groups = annotate_groups(group_items(recent_items(session, hours, 150)), settings.coins)
+    telt = telt if counted is not None else ""
+    groups, n_articles, truncated = _news_groups(session, settings, hours)
+    n_counted = sum(1 for g in groups if g.status.counts)
+    shown = [g for g in groups if counted is None or g.status.counts == counted]
+    pages = max(1, -(-len(shown) // NEWS_PAGE_SIZE))
+    page = min(page, pages)
+    first = (page - 1) * NEWS_PAGE_SIZE
+    page_groups = shown[first : first + NEWS_PAGE_SIZE]
+
+    # The coin cards link their top facts to the fact in the list of facts that count (48 hours,
+    # the sentiment's own window), on the page where it stands.
+    if hours == SENTIMENT_WINDOW_H and counted is True:
+        counting = shown
+    else:
+        counting = [
+            g
+            for g in (
+                groups
+                if hours == SENTIMENT_WINDOW_H
+                else _news_groups(session, settings, SENTIMENT_WINDOW_H)[0]
+            )
+            if g.status.counts
+        ]
+    where = {g.key: i for i, g in enumerate(counting)}
+    sentiments = [market_sentiment(session, c, SENTIMENT_WINDOW_H) for c in settings.coins]
+    for s in sentiments:
+        for t in s.top:
+            key = event_key_for(t)
+            index = where.get(key)
+            t.list_url = (  # type: ignore[attr-defined]
+                _news_url(SENTIMENT_WINDOW_H, "ja", index // NEWS_PAGE_SIZE + 1, fact_anchor(key))
+                if index is not None
+                else None
+            )
+            t.lang = text_lang(t.title)  # type: ignore[attr-defined]
     return templates.TemplateResponse(
         request,
         "news.html",
         {
             "settings": settings,
             "hours": hours,
-            "telt": telt if counted is not None else "",
-            "groups": [g for g in groups if counted is None or g.status.counts == counted],
-            "n_counted": sum(1 for g in groups if g.status.counts),
+            "periods": NEWS_PERIODS,
+            "telt": telt,
+            "groups": page_groups,
             "n_total": len(groups),
-            "sentiments": [market_sentiment(session, c, 48) for c in settings.coins],
+            "n_counted": n_counted,
+            "n_shown": len(shown),
+            "n_articles": n_articles,
+            "truncated": truncated,
+            "max_items": NEWS_PAGE_MAX_ITEMS,
+            "page": page,
+            "pages": pages,
+            "first": first + 1 if page_groups else 0,
+            "last": first + len(page_groups),
+            "newer_url": _news_url(hours, telt, page - 1, "berichten") if page > 1 else None,
+            "older_url": _news_url(hours, telt, page + 1, "berichten") if page < pages else None,
+            "filter_urls": {
+                "": _news_url(hours, "", 1, "berichten"),
+                "ja": _news_url(hours, "ja", 1, "berichten"),
+                "nee": _news_url(hours, "nee", 1, "berichten"),
+            },
+            "period_urls": {h: _news_url(h, telt, 1, "berichten") for h, _ in NEWS_PERIODS},
+            "sentiments": sentiments,
+            "sentiment_hours": SENTIMENT_WINDOW_H,
             "market_mood": load_market_mood(session) if settings.fear_greed_enabled else None,
+            "fear_greed_nl": FEAR_GREED_NL,
             "last_run": news.last_run,
             "last_error": news.last_error,
+            "assessing": news.analyst.available,
             "analyst_available": news.analyst.available,
         },
     )
@@ -1242,10 +1572,15 @@ async def news_page(
 
 @app.post("/news/refresh")
 async def news_refresh_form(
-    news: NewsService = Depends(get_news), session: Session = Depends(get_session)
+    hours: int = Form(NEWS_DEFAULT_HOURS, ge=1, le=NEWS_HOURS_MAX),
+    telt: str = Form("", max_length=8),
+    news: NewsService = Depends(get_news),
+    session: Session = Depends(get_session),
 ):
-    await news.refresh(session)
-    return RedirectResponse("/news", status_code=303)
+    result = await news.refresh(session)
+    kind, text = _news_refresh_flash(result)
+    back = _news_url(hours, telt if telt in ("ja", "nee") else "", 1, "berichten")
+    return flash.redirect_with_flash(back, kind, text)
 
 
 # -- Trading --------------------------------------------------------------------------
@@ -1906,10 +2241,34 @@ async def trading_action(
 # -- Trading plan ---------------------------------------------------------------------
 
 
+def _plan_claude(settings: Settings, available: bool, budget: dict) -> dict:
+    """Whether Claude applies the plan right now, in one honest sentence (UX-11): the owner's
+    rules are instructions for Claude, so without Claude they are not applied at all."""
+    if available and not budget.get("exhausted"):
+        return {
+            "active": True,
+            "text": "Claude leest dit plan bij elke beslissing en elke evaluatie.",
+        }
+    why = "er is geen Claude-sleutel" if not available else "het Claude-budget van deze maand is op"
+    if settings.claude_unavailable_mode == "indicators":
+        text = (
+            f"Claude is nu niet beschikbaar ({why}). De bot volgt dan alleen het koopsignaal van "
+            "de strategie, met de halve inzet: je eigen regels hieronder worden nu niet "
+            "toegepast, ook niet een regel als 'niet kopen in het weekend'."
+        )
+    else:
+        text = (
+            f"Claude is nu niet beschikbaar ({why}). De bot koopt daarom niets tot Claude terug "
+            "is; een verkoopsignaal volgt hij wel. Je plan wordt nu dus niet gebruikt."
+        )
+    return {"active": False, "text": text}
+
+
 def _plan_context(request: Request, engine: TradingEngine, session: Session) -> dict:
     """Everything the plan page shows: the owner's own text plus the rules the code follows."""
     settings: Settings = request.app.state.settings
     strategy = load_strategy(session)
+    budget = request.app.state.budget.status(session)
     return {
         "settings": settings,
         "plan": load_plan(session),
@@ -1922,11 +2281,15 @@ def _plan_context(request: Request, engine: TradingEngine, session: Session) -> 
         "news_entry_min_score": NEWS_ENTRY_MIN_SCORE,
         "news_exit_max_score": NEWS_EXIT_MAX_SCORE,
         "half_order_pct": int(NEWS_ENTRY_SIZE_FACTOR * 100),
-        "budget": request.app.state.budget.status(session),
+        "budget": budget,
         "paused": risk.is_paused(session),
         "claude_available": engine.decision_maker.available,
+        "claude": _plan_claude(settings, engine.decision_maker.available, budget),
+        "daily_loss_rule": daily_loss_rule_nl(engine.limits.daily_loss_limit_pct),
+        "max_orders_rule": max_orders_rule_nl(engine.limits.max_trades_per_day),
+        "news_min_sources": NEWS_MIN_SOURCES,
         "error": None,
-        "message": None,
+        "field_errors": {},
     }
 
 
@@ -1941,6 +2304,11 @@ async def api_put_plan(plan: TradingPlan, session: Session = Depends(get_session
 
 
 PLAN_SAVED = "Tradingplan opgeslagen. Claude krijgt het vanaf de volgende beslissing mee."
+# Without Claude the plan is stored but not applied: the message must not promise otherwise.
+PLAN_SAVED_IDLE = (
+    "Tradingplan opgeslagen. Claude is nu niet beschikbaar, dus de bot gebruikt het plan pas "
+    "als Claude terug is."
+)
 
 
 @app.get("/plan", response_class=HTMLResponse)
@@ -1966,17 +2334,40 @@ async def plan_save(
     except ValidationError as exc:
         ctx = _plan_context(request, engine, session)
         ctx["plan"] = TradingPlan.model_construct(**raw)
+        errors: dict[str, str] = {}
+        for e in exc.errors():
+            key = str(e["loc"][0]) if e.get("loc") else ""
+            if key in PLAN_MAX_LENGTH and str(e.get("type", "")).startswith("string_too_long"):
+                errors[key] = (
+                    f"te lang: {len(raw[key])} tekens, maximaal {PLAN_MAX_LENGTH[key]}. "
+                    "Kort de tekst in."
+                )
+            else:
+                errors[key] = "deze tekst kan niet worden opgeslagen"
+        ctx["field_errors"] = errors
         ctx["error"] = "Niet opgeslagen: " + "; ".join(
-            f"{PLAN_FIELDS.get(str(e['loc'][0]), (str(e['loc'][0]),))[0]}: {e['msg']}"
-            for e in exc.errors()
+            f"{PLAN_FIELDS.get(key, (key,))[0]} is {msg}" for key, msg in errors.items()
         )
         return templates.TemplateResponse(request, "plan.html", ctx, status_code=400)
     save_plan(session, plan)
-    # A one-time message (not ?saved=1): a reload or a restored tab shows no stale "saved".
-    return flash.redirect_with_flash("/plan", "ok", PLAN_SAVED)
+    # A one-time message (not ?saved=1): a reload or a restored tab shows no stale "saved". It
+    # only promises that Claude uses the plan when Claude is there to use it.
+    claude = _plan_claude(
+        request.app.state.settings,
+        engine.decision_maker.available,
+        request.app.state.budget.status(session),
+    )
+    return flash.redirect_with_flash(
+        "/plan#eigen", "ok", PLAN_SAVED if claude["active"] else PLAN_SAVED_IDLE
+    )
 
 
 # -- Trade journal --------------------------------------------------------------------
+
+JOURNAL_STATUS_NL = {"open": "open", "closed": "gesloten"}
+JOURNAL_RESULT_NL = {"win": "winst", "loss": "verlies"}
+JOURNAL_BY_NL = {"bot": "de bot", "manual": "jij, handmatig"}
+JOURNAL_DAYS = (7, 30, 90, 365)
 
 
 def _journal_filter(
@@ -1987,29 +2378,105 @@ def _journal_filter(
     tag: str | None,
     days: int | None,
     q: str | None,
-) -> JournalFilter:
-    return JournalFilter(
-        market=(market or "").upper() or None,
-        status=status if status in ("open", "closed") else None,
-        result=result if result in ("win", "loss") else None,
-        reason=reason if reason in EXIT_NL else None,
+    by: str | None = None,
+) -> tuple[JournalFilter, list[str]]:
+    """The filter, plus a Dutch line per value that was not understood and is ignored (a link
+    with ?reason=xyz must not silently show the unfiltered list as if it were filtered)."""
+    ignored: list[str] = []
+
+    def pick(value: str | None, allowed, label: str) -> str | None:
+        value = (value or "").strip()
+        if not value:
+            return None
+        if value in allowed:
+            return value
+        ignored.append(f"{label} '{value}'")
+        return None
+
+    flt = JournalFilter(
+        market=(market or "").strip().upper() or None,
+        status=pick(status, JOURNAL_STATUS_NL, "status"),
+        result=pick(result, JOURNAL_RESULT_NL, "resultaat"),
+        reason=pick(reason, EXIT_NL, "hoe gesloten"),
         tag=(tag or "").strip() or None,
         days=days if days and days > 0 else None,
         query=(q or "").strip() or None,
+        opened_by=pick(by, JOURNAL_BY_NL, "geopend door"),
     )
+    return flt, ignored
+
+
+def _blank_to_none(value: object) -> object:
+    """An empty form field ('days=') means 'no filter', not an invalid number."""
+    return None if isinstance(value, str) and not value.strip() else value
 
 
 # Journal filters: free text is short, days stay within what timedelta and the database
-# handle.
+# handle. An empty 'days' (the 'alles' option of older pages) is no filter.
+JournalDays = Annotated[
+    Annotated[int, Field(ge=0, le=3650)] | None, BeforeValidator(_blank_to_none), Query()
+]
 JOURNAL_FILTERS = {
     "market": Query(None, max_length=16),
     "status": Query(None, max_length=16),
     "result": Query(None, max_length=16),
     "reason": Query(None, max_length=32),
     "tag": Query(None, max_length=64),
-    "days": Query(None, ge=0, le=3650),
     "q": Query(None, max_length=200),
+    "by": Query(None, max_length=16),
+    "mode": Query(None, max_length=8),
 }
+
+
+def _journal_mode(engine: TradingEngine, mode: str | None) -> str:
+    return mode if mode in ("paper", "live") else engine.mode
+
+
+def _journal_params(flt: JournalFilter, mode: str, engine_mode: str) -> dict[str, str]:
+    """The query parameters of a journal view, in a fixed order (the same URL every time)."""
+    params = {
+        "mode": mode if mode != engine_mode else "",
+        "market": flt.market or "",
+        "status": flt.status or "",
+        "result": flt.result or "",
+        "reason": flt.reason or "",
+        "by": flt.opened_by or "",
+        "days": str(flt.days) if flt.days else "",
+        "tag": flt.tag or "",
+        "q": flt.query or "",
+    }
+    return {k: v for k, v in params.items() if v}
+
+
+def _journal_url(params: dict[str, str], **changes: str) -> str:
+    merged = {k: v for k, v in {**params, **changes}.items() if v}
+    return "/journal" + (f"?{urlencode(merged)}" if merged else "")
+
+
+def _journal_chips(flt: JournalFilter, params: dict[str, str]) -> list[dict[str, str]]:
+    """The active filters as removable labels ('Markt: ETH-EUR ×' -> the view without it)."""
+    chips = []
+
+    def add(key: str, text: str) -> None:
+        chips.append({"text": text, "href": _journal_url(params, **{key: ""})})
+
+    if flt.market:
+        add("market", f"Markt: {flt.market}")
+    if flt.status:
+        add("status", f"Status: {JOURNAL_STATUS_NL[flt.status]}")
+    if flt.result:
+        add("result", f"Resultaat: {JOURNAL_RESULT_NL[flt.result]}")
+    if flt.reason:
+        add("reason", f"Hoe gesloten: {EXIT_NL[flt.reason]}")
+    if flt.opened_by:
+        add("by", f"Geopend door: {JOURNAL_BY_NL[flt.opened_by]}")
+    if flt.days:
+        add("days", f"Periode: laatste {flt.days} dagen")
+    if flt.tag:
+        add("tag", f"Label: {flt.tag}")
+    if flt.query:
+        add("q", f"Zoekterm: '{flt.query}'")
+    return chips
 
 
 @app.get("/api/journal")
@@ -2019,16 +2486,20 @@ async def api_journal(
     result: str | None = JOURNAL_FILTERS["result"],
     reason: str | None = JOURNAL_FILTERS["reason"],
     tag: str | None = JOURNAL_FILTERS["tag"],
-    days: int | None = JOURNAL_FILTERS["days"],
+    days: JournalDays = None,
     q: str | None = JOURNAL_FILTERS["q"],
+    by: str | None = JOURNAL_FILTERS["by"],
+    mode: str | None = JOURNAL_FILTERS["mode"],
     limit: int = Query(200, ge=1, le=1000),
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
-    flt = _journal_filter(market, status, result, reason, tag, days, q)
-    entries = journal_entries(session, engine.mode, flt, limit)
+    flt, ignored = _journal_filter(market, status, result, reason, tag, days, q, by)
+    shown = _journal_mode(engine, mode)
+    entries = journal_entries(session, shown, flt, limit)
     return {
-        "mode": engine.mode,
+        "mode": shown,
+        "ignored_filters": ignored,
         "totals": journal_totals(entries),
         "entries": [e.as_dict() for e in entries],
     }
@@ -2064,31 +2535,56 @@ async def journal_page(
     result: str | None = JOURNAL_FILTERS["result"],
     reason: str | None = JOURNAL_FILTERS["reason"],
     tag: str | None = JOURNAL_FILTERS["tag"],
-    days: int | None = JOURNAL_FILTERS["days"],
+    days: JournalDays = None,
     q: str | None = JOURNAL_FILTERS["q"],
+    by: str | None = JOURNAL_FILTERS["by"],
+    mode: str | None = JOURNAL_FILTERS["mode"],
     saved: int | None = Query(None, ge=0, le=DB_ID_MAX),
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
     settings: Settings = request.app.state.settings
-    flt = _journal_filter(market, status, result, reason, tag, days, q)
-    entries = journal_entries(session, engine.mode, flt)
+    flt, ignored = _journal_filter(market, status, result, reason, tag, days, q, by)
+    if mode and mode not in ("paper", "live"):
+        ignored.append(f"modus '{mode}'")
+    shown = _journal_mode(engine, mode)
+    entries = journal_entries(session, shown, flt)
+    params = _journal_params(flt, shown, engine.mode)
+    counts = mode_counts(session)
+    other = "live" if shown == "paper" else "paper"
     return templates.TemplateResponse(
         request,
         "journal.html",
         {
             "settings": settings,
-            "mode": engine.mode,
+            "mode": shown,  # the mode whose trades are shown
+            "engine_mode": engine.mode,  # the mode the bot trades in now
+            "mode_counts": counts,
+            # Offer the other mode only when it has trades (or is the one being shown).
+            "mode_links": [
+                {
+                    "mode": m,
+                    "count": counts[m],
+                    "href": _journal_url(params, mode=m if m != engine.mode else ""),
+                }
+                for m in ("paper", "live")
+            ]
+            if counts[other] or shown != engine.mode
+            else [],
             "filter": flt,
+            "filter_count": len(_journal_chips(flt, params)),
+            "chips": _journal_chips(flt, params),
+            "ignored": ignored,
             "entries": entries,
             "totals": journal_totals(entries),
-            "tags": all_tags(session, engine.mode),
+            "tags": all_tags(session, shown),
             "exit_reasons": EXIT_NL,
-            "other_orders": unlinked_orders(session, engine.mode) if not flt.active else [],
+            "by_nl": JOURNAL_SOURCES_NL,
+            "days_options": JOURNAL_DAYS,
+            "other_orders": unlinked_orders(session, shown) if not flt.active else [],
             "saved": saved,
-            # Where the note form returns to: this page with its filters, minus "saved".
-            "back_url": request.url.remove_query_params("saved").path
-            + (f"?{request.url.remove_query_params('saved').query}" if request.url.query else ""),
+            # Where the note form returns to: this view with its filters, minus "saved".
+            "back_url": _journal_url(params),
         },
     )
 

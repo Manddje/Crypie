@@ -1318,41 +1318,126 @@ footer.site {
 .evaluation-proposal { font-size: var(--fs-body); margin-top: 18px; }
 
 /* ==== Pagina: Journaal ==== */
-/* Regels die alleen journal.html gebruikt: de filters, de trades en de notities. */
+/* Regels die alleen journal.html gebruikt: de filters, de trades en de notities.
+ * .page-help, .count-badge en .filter-chips gebruiken ook Nieuws, Tradingplan en Strategie. */
 
-.filters { display: grid; gap: 10px 12px; grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr)); align-items: end; }
-.filters label { display: block; font-size: var(--fs-caption); color: var(--text-2); font-weight: 500; margin-bottom: 4px; }
+/* 'Hoe werkt dit?' under a page title: the long explanation, folded away. */
+.page-help { margin-top: 10px; max-width: 70ch; color: var(--text-2); font-size: var(--fs-help); }
+.page-help summary { color: var(--accent); font-weight: 500; }
+.page-help > :not(summary) { margin-top: 8px; }
+/* A number inside a filter button: 'Telt mee 3'. */
+.segmented .count-badge {
+  display: inline-block;
+  min-width: 1.6em;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--fill-2);
+  color: var(--text-2);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.journal-modes { margin-top: 14px; }
+/* Active filters as labels that each remove their own filter. */
+.filter-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: -4px 0 14px; }
+.filter-chips ul { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.chip-remove {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--control-border);
+  background: var(--card);
+  color: var(--text);
+  font-size: var(--fs-detail);
+  text-decoration: none;
+}
+.chip-remove:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
+.chip-remove .chip-x { margin-left: 6px; color: var(--text-2); font-weight: 600; }
+@media (pointer: coarse) { .chip-remove { min-height: 36px; } }
+
+.journal-filter-box > summary { display: flex; align-items: center; gap: 10px; min-height: 32px; }
+.journal-filter-box > summary .card-title { flex: 0 1 auto; margin: 0; }
+.journal-filter-box[open] > summary { margin-bottom: 14px; }
+.filters { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); align-items: end; }
 .filters input, .filters select { width: 100%; }
+.filters .journal-search { grid-column: span 2; }
 .filters .actions { display: flex; gap: 8px; }
+@media (max-width: 480px) {
+  .filters .journal-search { grid-column: auto; }
+  .journal-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .journal-stats .stat { padding: 12px 14px; }
+}
+.journal-breakdown .grid-2 { margin-top: 10px; }
+@media (max-width: 700px) { .journal-breakdown .grid-2 { grid-template-columns: minmax(0, 1fr); } }
+
 .trade { padding: 16px 18px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); }
 .trade + .trade { margin-top: 12px; }
 .trade:target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint-2); }
+.trade > .notice { margin-bottom: 12px; }
 .trade-head { display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap; }
 .trade-head .title { font-size: var(--fs-lead); font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.trade-head .trade-title { margin: 0; font-size: inherit; font-weight: inherit; line-height: 1.3; }
 .trade-head .pnl { font-size: var(--fs-h2); font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; text-align: right; }
 .trade-head .pnl .sub { display: block; font-size: var(--fs-caption); font-weight: 500; color: var(--text-2); }
+.trade-head .pnl .pnl-open { color: var(--text-2); font-size: var(--fs-help); font-weight: 500; letter-spacing: 0; }
 .trade-meta { color: var(--text-2); font-size: var(--fs-detail); margin-top: 4px; display: flex; gap: 6px 14px; flex-wrap: wrap; }
 .trade-grid { display: grid; gap: 14px 24px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 14px; }
 .trade-grid h4 { margin: 0 0 6px; font-size: var(--fs-detail); font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; }
 .trade-grid .kv { font-size: var(--fs-detail); gap: 4px 14px; }
-.trade-grid .why { font-size: var(--fs-detail); margin: 8px 0 0; line-height: 1.5; }
+.trade-grid .why { font-size: var(--fs-detail); margin: 8px 0 0; line-height: 1.5; overflow-wrap: anywhere; }
 .trade-note { --surface: var(--card); margin-top: 14px; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--fill); font-size: var(--fs-help); }
 .trade-note .prose { margin-top: 6px; }
 .trade-note .meta { font-size: var(--fs-caption); color: var(--text-2); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.trade-note .meta strong { color: var(--text); }
 .trade-note form { margin-top: 10px; display: grid; gap: 8px; }
 .trade-note textarea { min-height: 5rem; }
 @media (max-width: 600px) {
+  .trade { padding: 14px; }
   .trade-grid { grid-template-columns: minmax(0, 1fr); }
   .trade-head .pnl { text-align: left; }
 }
 
 /* ==== Pagina: Tradingplan ==== */
-/* Regels die alleen plan.html gebruikt: de planvelden en de regels van de strategie. */
+/* Regels die alleen plan.html gebruikt: jouw plan (bewerkbaar) en wat de bot afdwingt
+ * (automatisch, vlakke kaarten die op een telefoon inklappen). */
 
-.plan-fields { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); }
+.plan-tag { margin-left: 6px; vertical-align: middle; font-size: var(--fs-caption); }
+.plan-claude { display: flex; gap: 10px; align-items: flex-start; margin: 0 0 14px; padding: 10px 14px; border-radius: var(--radius-sm); font-size: var(--fs-help); }
+.plan-claude .icon { margin-top: 2px; }
+.plan-claude p { margin: 0; }
+.plan-claude.is-active { background: var(--green-tint); }
+.plan-claude.is-active .icon { color: var(--green); }
+.plan-claude.is-idle { background: var(--orange-tint); }
+.plan-claude.is-idle .icon { color: var(--orange); }
+
+.plan-fields { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); align-items: start; }
+.plan-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+/* Label, field, help and counter line up across the two columns, even when a label wraps. */
+@supports (grid-template-rows: subgrid) {
+  .plan-field { display: grid; grid-row: span 4; grid-template-rows: subgrid; row-gap: 6px; }
+  .plan-field label { align-self: end; }
+}
 .plan-field label { display: block; font-weight: 600; font-size: var(--fs-body); color: var(--text); }
-.plan-field .setting-help { margin: 2px 0 8px; }
 .plan-field textarea { min-height: 7rem; }
+.plan-field .setting-help { margin: 0; }
+.plan-field .field-error { margin: 0; }
+.char-count { margin: 0; color: var(--text-2); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.char-count.is-near { color: var(--orange); font-weight: 600; }
+.char-count.is-full { color: var(--red); }
+
+.plan-derived-head h2 { font-size: var(--fs-card-title); line-height: 1.3; }
+.plan-derived-head .card-desc { margin: 4px 0 14px; }
+.plan-derived > .grid-2 + .grid-2 { margin-top: 20px; }
+/* Read-only: flat and a shade darker than the editable card above. */
+.plan-card { --surface: var(--card-2); background: var(--card-2); box-shadow: none; }
+.plan-card > details > summary { display: flex; min-height: 32px; }
+.plan-card > details > summary .card-title { margin: 0; }
+.plan-card-body { margin-top: 12px; }
+.plan-change { margin: 14px 0 0; }
 .plan-h { margin: 16px 0 6px; font-size: var(--fs-detail); font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; }
 .plan-h:first-of-type { margin-top: 4px; }
 .rules { list-style: none; margin: 0; padding: 0; font-size: var(--fs-help); }
@@ -1362,19 +1447,99 @@ footer.site {
 .steps { margin: 0; padding-left: 22px; font-size: var(--fs-help); line-height: 1.55; }
 .steps li { margin: 6px 0; }
 .steps li::marker { color: var(--accent); font-weight: 600; }
+@media (max-width: 700px) {
+  .plan-derived .grid-2 { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .plan-derived > .grid-2 + .grid-2 { margin-top: 10px; }
+  .plan-card { padding: 14px 18px; }
+}
 
 /* ==== Pagina: Strategie ==== */
-/* Regels die alleen strategy.html gebruikt: editor, voorstel en backtest. */
+/* Regels die alleen strategy.html gebruikt: de regels, het resultaat van een test of voorstel
+ * met de backtest, de editor en de fouten ernaast. */
+
+.strategy-mode { font-weight: 600; }
+.strategy-mode.is-paper { color: var(--paper); }
+.strategy-mode.is-live { color: var(--red); }
+.strategy-name { font-size: var(--fs-lead); margin: 0 0 4px; }
+.strategy-scope { color: var(--text-2); font-size: var(--fs-help); margin: 0 0 14px; }
+.strategy-rules { display: grid; gap: 16px 24px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.strategy-rules .eyebrow { margin: 0 0 6px; }
+.strategy-chips { margin: 14px 0 0; align-items: center; }
+.strategy-note { margin-top: 14px; padding: 10px 14px; border-left: 3px solid var(--hairline-strong); color: var(--text-2); font-size: var(--fs-detail); }
+.strategy-note p { margin: 4px 0 0; white-space: pre-line; overflow-wrap: anywhere; }
+.strategy-previous { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--hairline); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.strategy-previous p { margin: 0; }
+.strategy-conflict { border-color: var(--orange); }
+.strategy-conflict > .notice { margin-bottom: 4px; }
+
+.strategy-backtest { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--hairline); }
+.strategy-backtest > * + * { margin-top: 14px; }
+.strategy-verdict { font-size: var(--fs-help); line-height: 1.6; }
+.strategy-verdict .pill { margin-right: 6px; }
+.strategy-curve { margin: 14px 0 0; }
+.strategy-curve svg { display: block; width: 100%; height: 120px; overflow: visible; }
+.strategy-curve polyline { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.strategy-curve .curve-strategy { stroke: var(--accent); }
+.strategy-curve .curve-hold { stroke: var(--text-3); stroke-dasharray: 4 3; }
+.strategy-curve figcaption { margin-top: 6px; color: var(--text-2); font-size: var(--fs-detail); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.strategy-curve .legend-strategy, .strategy-curve .legend-hold { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--accent); }
+.strategy-curve .legend-hold { border-top: 2px dashed var(--text-3); }
+.strategy-curve .legend-item { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; }
+.strategy-save { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--hairline); }
+.strategy-save > * + * { margin-top: 10px; }
+
+.strategy-editor > #json-form { margin-top: 14px; display: grid; gap: 8px; }
+.strategy-errors { padding: 12px 14px; border-radius: var(--radius-sm); background: var(--red-tint); font-size: var(--fs-help); }
+.strategy-errors ul { margin: 6px 0 0; padding-left: 20px; }
+.strategy-errors li { margin: 3px 0; overflow-wrap: anywhere; }
+.json-context { margin: 10px 0 0; padding: 8px 10px; border-radius: var(--radius-xs); background: var(--card); font-family: var(--mono); font-size: 12px; line-height: 1.5; overflow-x: auto; white-space: pre; }
+.json-context .here { font-weight: 600; color: var(--text); }
+.json-context .caret { color: var(--red); font-weight: 700; }
+.strategy-test-controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+.strategy-test-controls select { min-width: 9rem; }
+.strategy-reset { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--hairline); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+@media (max-width: 640px) {
+  .strategy-rules { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* ==== Pagina: Nieuws ==== */
-/* Regels die alleen news.html gebruikt: de berichten en hun bronnen. */
+/* Regels die alleen news.html gebruikt: sentiment per coin, de berichten en hun bronnen. */
+
+.news-section-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin-bottom: 12px; }
+.news-section-head h2 { font-size: var(--fs-card-title); line-height: 1.3; }
+.news-coin .card-header { margin-bottom: 6px; }
+.news-top-box { margin-top: 10px; font-size: var(--fs-detail); }
+.news-top-box > summary { color: var(--text-2); font-weight: 500; }
+.news-top { margin-top: 6px; }
+.news-top li { padding: 8px 0; }
+/* The bar of a score: the filled part as a class (no inline styles), 0-50% in steps of 5. */
+.score-bar .fill.w-0 { width: 0; }
+.score-bar .fill.w-5 { width: 5%; }
+.score-bar .fill.w-10 { width: 10%; }
+.score-bar .fill.w-15 { width: 15%; }
+.score-bar .fill.w-20 { width: 20%; }
+.score-bar .fill.w-25 { width: 25%; }
+.score-bar .fill.w-30 { width: 30%; }
+.score-bar .fill.w-35 { width: 35%; }
+.score-bar .fill.w-40 { width: 40%; }
+.score-bar .fill.w-45 { width: 45%; }
+.score-bar .fill.w-50 { width: 50%; }
+
+.news-filters { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 6px; }
+.news-filters .segmented .count-badge { margin-left: 6px; }
+.news-range { margin: 8px 0 0; }
+.news-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding-top: 14px; border-top: 1px solid var(--hairline); }
 
 .news-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 20px; padding: 14px 0; border-bottom: 1px solid var(--hairline); }
-.news-item:last-child { border-bottom: 0; }
-.news-item .meta { color: var(--text-2); font-size: var(--fs-detail); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.news-item .title { font-weight: 600; font-size: var(--fs-body); color: var(--text); overflow-wrap: anywhere; }
-.news-item .title:hover { color: var(--accent); }
-.news-item .summary { color: var(--text-2); font-size: var(--fs-help); margin-top: 4px; overflow-wrap: anywhere; }
+.news-item:last-of-type { border-bottom: 0; }
+.news-item:target { box-shadow: -10px 0 0 var(--card), -13px 0 0 var(--accent); }
+.news-item .meta { color: var(--text-2); font-size: var(--fs-detail); display: flex; gap: 6px 8px; flex-wrap: wrap; align-items: center; }
+.news-item .title { margin: 4px 0 0; font-weight: 600; font-size: var(--fs-body); line-height: 1.4; color: var(--text); overflow-wrap: anywhere; }
+.news-item .title a { color: inherit; text-decoration: none; }
+.news-item .title a:hover { color: var(--accent); text-decoration: underline; }
+.ext-icon { width: 0.85em; height: 0.85em; margin-left: 0.3em; vertical-align: -0.05em; color: var(--text-2); }
+.news-item .summary { color: var(--text-2); font-size: var(--fs-help); margin: 4px 0 0; overflow-wrap: anywhere; }
+.news-item .count-line { margin: 6px 0 0; font-size: var(--fs-detail); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .news-item .count-reason { color: var(--text-2); }
 /* A message that does not count: quieter title, everything still readable (no opacity). */
 .news-item.dim .title { color: var(--text-2); font-weight: 500; }
@@ -1382,12 +1547,14 @@ footer.site {
 .news-others summary { color: var(--text-2); }
 .news-others summary:hover { color: var(--accent); }
 .news-others ul { margin: 6px 0 0; padding-left: 18px; color: var(--text-2); }
-.news-others li { margin: 3px 0; }
+.news-others li { margin: 3px 0; overflow-wrap: anywhere; }
 .news-others a { color: var(--text); }
 .news-item .side { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; text-align: right; white-space: nowrap; }
 @media (max-width: 600px) {
   .news-item { grid-template-columns: minmax(0, 1fr); }
-  .news-item .side { flex-direction: row; align-items: center; flex-wrap: wrap; white-space: normal; }
+  .news-item .side { flex-direction: row; align-items: center; flex-wrap: wrap; white-space: normal; text-align: left; }
+  .news-coin { padding: 16px; }
+  .news-top li { padding: 6px 0; }
 }
 
 /* ==== Pagina: Instellingen ==== */

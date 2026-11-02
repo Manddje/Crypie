@@ -1,134 +1,163 @@
 {% extends "base.html" %}
 {% import "_macros.html" as ui %}
 {% block title %}Crypie · Tradingplan{% endblock %}
+{# A derived card: open on a wide screen, folded on a phone (analysis.js). #}
+{% macro derived(id, title) -%}
+<section class="card plan-card" id="{{ id }}" aria-labelledby="{{ id }}-title">
+  <details open data-collapse-mobile>
+    <summary><h3 class="card-title" id="{{ id }}-title">{{ title }}</h3></summary>
+    <div class="plan-card-body">{{ caller() }}</div>
+  </details>
+</section>
+{%- endmacro %}
+{% macro change_link(href, text) -%}
+<p class="plan-change"><a class="card-link" href="{{ href }}">{{ text }}<span aria-hidden="true"> ›</span></a></p>
+{%- endmacro %}
 {% block content %}
 <div class="page-header">
   <h1>Tradingplan</h1>
-  <p class="subtitle">Het plan waar de bot zich aan houdt: jouw doel en eigen regels, plus de regels die de strategie, de limieten en de code afdwingen. Wat je hier schrijft krijgt Claude bij elke beslissing en elke evaluatie mee.</p>
+  <p class="subtitle">Jouw doel en regels voor Claude, plus wat de code altijd afdwingt.</p>
 </div>
 
 <div class="stack">
-  {% if message %}{{ ui.notice("ok", message) }}{% endif %}
-  {% if error %}{{ ui.notice("error", error) }}{% endif %}
-  {% if paused %}{{ ui.notice("warn", "De bot is gepauzeerd: er wordt niets gekocht totdat je op Handelen hervat.") }}{% endif %}
+  {% if error %}{{ ui.notice("error", error, live=true) }}{% endif %}
+  {% if paused %}
+  {% call ui.notice("warn", kill_switch_text.state ~ ". " ~ kill_switch_text.help, live=false) %}
+  <a href="/trading#noodstop">Hervatten op Handelen</a>
+  {% endcall %}
+  {% endif %}
 
-  <section class="card" id="eigen">
+  <section class="card plan-own" id="eigen" aria-labelledby="eigen-title">
     <form method="post" action="/plan">
       <div class="card-header">
-        <h2>Jouw plan</h2>
-        {% if plan.updated_at %}<span class="more muted small">laatst gewijzigd {{ plan.updated_at|dt(true) }}</span>{% else %}<span class="pill">nog leeg</span>{% endif %}
+        <h2 class="card-title" id="eigen-title">Jouw plan <span class="eyebrow plan-tag">bewerkbaar</span></h2>
+        {% if plan.is_empty() %}<span class="pill">nog leeg</span>{% elif plan.updated_at %}<span class="card-meta">laatst gewijzigd {{ plan.updated_at|dt(true) }}</span>{% endif %}
       </div>
-      <p class="card-desc">Schrijf in gewone taal. Claude leest dit als instructie van de eigenaar: eigen regels kunnen hem voorzichtiger maken of laten afwachten, maar nooit de spelregels of de harde limieten omzeilen. Laat een veld leeg als je er nog niets over wilt vastleggen.</p>
+      <div class="plan-claude {{ 'is-active' if claude.active else 'is-idle' }}">
+        {{ ui.icon("ok" if claude.active else "warn") }}
+        <p>{{ claude.text }}</p>
+      </div>
+      <p class="card-desc">Schrijf in gewone taal. Claude leest dit als instructie van de eigenaar: je regels kunnen hem voorzichtiger maken of laten afwachten, maar nooit de harde limieten hieronder omzeilen. Laat een veld leeg als je er nog niets over wilt vastleggen.</p>
       <div class="plan-fields">
         {% for key, (label, help, placeholder) in fields.items() %}
-        <div class="plan-field">
+        {% set err = field_errors.get(key) %}
+        <div class="plan-field{{ ' has-error' if err }}">
           <label for="plan-{{ key }}">{{ label }}</label>
-          <div class="setting-help">{{ help }}</div>
-          <textarea id="plan-{{ key }}" name="{{ key }}" rows="4" maxlength="{{ max_length[key] }}" placeholder="{{ placeholder }}">{{ plan[key] }}</textarea>
+          <textarea id="plan-{{ key }}" name="{{ key }}" rows="4" maxlength="{{ max_length[key] }}" placeholder="{{ placeholder }}" data-char-count="plan-{{ key }}-count" aria-describedby="{% if err %}plan-{{ key }}-error {% endif %}plan-{{ key }}-help plan-{{ key }}-count"{% if err %} aria-invalid="true"{% endif %}>{{ plan[key] }}</textarea>
+          {% if err %}<p class="field-error" id="plan-{{ key }}-error">{{ label }} is {{ err }}</p>{% endif %}
+          <p class="setting-help" id="plan-{{ key }}-help">{{ help }}</p>
+          <p class="char-count" id="plan-{{ key }}-count">{{ plan[key]|length }} van {{ max_length[key]|num(0) }} tekens</p>
         </div>
         {% endfor %}
       </div>
-      <div class="actions" style="margin-top: 18px">
-        <button class="btn btn-primary" type="submit">Plan opslaan</button>
+      <div class="actions mt-5">
+        <button class="btn btn-primary" type="submit" data-busy="Opslaan…">Plan opslaan</button>
         <a class="btn" href="/journal">Naar het journaal</a>
       </div>
     </form>
   </section>
 
-  <div class="grid-2">
-    <section class="card">
-      <div class="card-header"><h3>Markten en modus</h3><a class="more" href="/settings#trading">Aanpassen ›</a></div>
+  <section class="plan-derived" aria-labelledby="afgedwongen-title">
+    <div class="plan-derived-head">
+      <h2 id="afgedwongen-title">Wat de bot afdwingt <span class="eyebrow plan-tag">automatisch</span></h2>
+      <p class="card-desc">Opgebouwd uit je instellingen, de strategie en de code. Dit pas je hier niet aan, maar op de pagina die bij elk blok staat.</p>
+    </div>
+
+    <div class="grid-2">
+      {% call derived("markten", "Markten en modus") %}
       <dl class="kv">
-        <dt>Modus</dt><dd>{% if mode == "live" %}<span class="pill pill-red"><span class="dot"></span>Live</span> echte orders op Bitvavo{% else %}<span class="pill pill-blue"><span class="dot"></span>Oefenmodus</span> fictief geld, start {{ settings.paper_start_eur|eur(0) }}{% endif %}</dd>
+        <dt>Modus</dt><dd>{{ ui.mode_pill(mode, link=false) }} {{ "echte orders met echt geld op Bitvavo" if mode == "live" else "fictief geld, start " ~ settings.paper_start_eur|eur(0) }}</dd>
         <dt>Markten</dt><dd>{{ settings.markets|join(", ") }}</dd>
         <dt>Richting</dt><dd>alleen long: kopen in euro's, later weer verkopen; nooit short, nooit hefboom</dd>
         <dt>Cyclus</dt><dd>{% if settings.trading_enabled %}elke {{ settings.trade_interval_min }} minuten per markt{% else %}automatisch handelen staat uit{% endif %}</dd>
         <dt>Candles</dt><dd>{{ strategy.interval|nl }}</dd>
         <dt>Per markt</dt><dd>hoogstens één open positie tegelijk; bijkopen in een open positie doet de bot niet</dd>
       </dl>
-    </section>
+      {{ change_link("/settings#trading", "Markten en modus aanpassen") }}
+      {% endcall %}
 
-    <section class="card">
-      <div class="card-header"><h3>Harde limieten</h3><a class="more" href="/settings#limits">Aanpassen ›</a></div>
+      {% call derived("limieten", "Harde limieten") %}
       <dl class="kv">
         <dt>Per order</dt><dd>minimaal {{ limits.min_trade_eur|eur(0) }}, maximaal {{ limits.max_trade_eur|eur(0) }}</dd>
         <dt>In crypto</dt><dd>maximaal {{ limits.max_exposure_pct|num(0) }}% van de portefeuille</dd>
-        <dt>Dagverlies</dt><dd>bij {{ limits.daily_loss_limit_pct|num(0) }}% gerealiseerd verlies koopt de bot die dag niets meer</dd>
-        <dt>Trades per dag</dt><dd>maximaal {{ limits.max_trades_per_day }}</dd>
+        <dt>Dagverlies</dt><dd>{{ daily_loss_rule }}</dd>
+        <dt>Orders per dag</dt><dd>{{ max_orders_rule }}</dd>
         <dt>Na stop-loss</dt><dd>{{ limits.cooldown_min_after_stop }} minuten niet opnieuw kopen in die markt</dd>
-        <dt>Kosten</dt><dd>{{ fee_pct|num(2) }}% per order; een rondje kopen en verkopen kost {{ (fee_pct * 2)|num(2) }}%</dd>
-        <dt>Kill switch</dt><dd>pauzeren op <a href="/trading">Handelen</a>: niets kopen, open posities wel sluiten</dd>
+        <dt>Kosten</dt><dd>{{ fee_pct|num(2) }}% per order; kopen en verkopen samen kost {{ (fee_pct * 2)|num(2) }}%</dd>
+        <dt>{{ kill_switch_text.name }}</dt><dd>{{ kill_switch_text.help }} Te bedienen op <a href="/trading#noodstop">Handelen</a>.</dd>
       </dl>
-      <p class="form-help">Deze grenzen staan in code en gelden altijd, wat Claude of jouw eigen regels ook zeggen.</p>
-    </section>
-  </div>
+      <p class="form-help">Deze grenzen staan in de code en gelden altijd, wat Claude of jouw eigen regels ook zeggen.</p>
+      {{ change_link("/settings#limits", "Limieten aanpassen") }}
+      {% endcall %}
+    </div>
 
-  <div class="grid-2">
-    <section class="card">
-      <div class="card-header"><h3>Instappen</h3><a class="more" href="/strategy">Strategie ›</a></div>
-      <p class="card-desc"><strong>{{ strategy.name }}</strong>{% if strategy.description %} · {{ strategy.description }}{% endif %}</p>
+    <div class="grid-2">
+      {% call derived("instappen", "Instappen") %}
+      <p class="small">Strategie <strong>{{ strategy.name }}</strong></p>
       <h4 class="plan-h">Koopsignaal: alle harde voorwaarden gelden</h4>
       <ul class="rules">
         {% for c in strategy.buy %}
-        <li class="{{ 'soft' if c.soft else 'hard' }}"><span class="mark">{{ "~" if c.soft else "•" }}</span>{{ c|condition_nl }}</li>
+        <li class="{{ 'soft' if c.soft else 'hard' }}"><span class="mark" aria-hidden="true">{{ "~" if c.soft else "•" }}</span>{{ c|condition_nl }}</li>
         {% endfor %}
       </ul>
       {% if strategy.buy|selectattr("soft")|list %}
       <p class="form-help">Een <strong>zacht filter</strong> (~) hoeft niet te gelden. Geldt het niet, dan weegt Claude dat af tegen het nieuws en koopt hij hoogstens {{ half_order_pct }}% van het maximum, alleen bij neutraal tot positief nieuws.</p>
       {% endif %}
       <h4 class="plan-h">Dipbewaking</h4>
-      <p class="small">{% if settings.watch_interval_min > 0 %}Gelden de dip-voorwaarden maar de draai nog niet, dan kijkt de bot elke {{ settings.watch_interval_min }} minuten opnieuw, maximaal {{ settings.watch_max_min }} minuten. Zodra de draai er is gaat de situatie naar Claude.{% else %}Uit: de bot kijkt alleen in de gewone cyclus.{% endif %}</p>
+      <p class="small">{% if settings.watch_interval_min > 0 %}Gelden de dip-voorwaarden maar de draai nog niet, dan kijkt de bot elke {{ settings.watch_interval_min }} minuten opnieuw, maximaal {{ settings.watch_max_min }} minuten. Zodra de draai er is, gaat de situatie naar Claude.{% else %}Uit: de bot kijkt alleen in de gewone cyclus.{% endif %}</p>
       <h4 class="plan-h">Instappen op nieuws</h4>
-      <p class="small">Zonder koopsignaal mag Claude alleen kopen als het nieuws voor de coin sterk positief is (score ≥ {{ news_entry_min_score|num(1) }}) met minstens één bericht van hoge impact, en dan hoogstens {{ half_order_pct }}% van het maximum. Slecht nieuws is nooit een reden om de dip te kopen.</p>
+      <p class="small">Zonder koopsignaal mag Claude alleen kopen als het nieuws voor de coin sterk positief is (score {{ news_entry_min_score|num(1) }} of hoger) met minstens één nieuwsfeit van impact middel of groot, gemeld door minstens {{ news_min_sources }} bronnen, en dan hoogstens {{ half_order_pct }}% van het maximum. Slecht nieuws is nooit een reden om de dip te kopen.</p>
       <h4 class="plan-h">Risk-off</h4>
-      <p class="small">{% if settings.risk_off_enabled %}Rond agendamomenten (FOMC, CPI en wat jij in de <a href="/settings#trading">agenda</a> zet) koopt de bot niet van {{ settings.risk_off_before_min }} minuten ervoor tot {{ settings.risk_off_after_min }} minuten erna.{% if settings.shock_pause_hours %} Na een nieuwsschok (grote impact, sterk negatief) koopt hij {{ settings.shock_pause_hours }} uur niet in de geraakte coins.{% endif %} Verkopen en de stop-loss blijven werken.{% else %}Uit: de bot koopt ook rond agendamomenten en na nieuwsschokken.{% endif %}</p>
+      <p class="small">{% if settings.risk_off_enabled %}Rond agendamomenten (FOMC, CPI en wat jij in de <a href="/settings#trading">agenda</a> zet) koopt de bot niet van {{ settings.risk_off_before_min }} minuten ervoor tot {{ settings.risk_off_after_min }} minuten erna.{% if settings.shock_pause_hours %} Na een nieuwsschok (impact groot, sterk negatief) koopt hij {{ settings.shock_pause_hours }} uur niet in de geraakte coins.{% endif %} Verkopen en de stop-loss blijven werken.{% else %}Uit: de bot koopt ook rond agendamomenten en na nieuwsschokken.{% endif %}</p>
       <h4 class="plan-h">Grootte van een order</h4>
-      <p class="small">Claude kiest het bedrag tot {{ limits.max_trade_eur|eur(0) }}; de code kapt af op de limieten. Bij een niet-gehaald zacht filter of een nieuwsaankoop: de helft.</p>
-    </section>
+      <p class="small">Claude kiest het bedrag tot {{ limits.max_trade_eur|eur(0) }}; de code kapt af op de limieten. Bij een niet-gehaald zacht filter of een aankoop op nieuws: de helft.</p>
+      {{ change_link("/strategy", "Strategie bekijken of aanpassen") }}
+      {% endcall %}
 
-    <section class="card">
-      <div class="card-header"><h3>Uitstappen</h3></div>
-      <h4 class="plan-h">Mechanisch, zonder Claude</h4>
+      {% call derived("uitstappen", "Uitstappen") %}
+      <h4 class="plan-h">Automatisch, zonder Claude</h4>
       <ul class="rules">
-        <li class="hard"><span class="mark">•</span>Stop-loss: {% if strategy.stop_loss_pct %}verkopen bij {{ strategy.stop_loss_pct|num(1) }}% onder de instapkoers{% else %}<span class="muted">niet ingesteld</span>{% endif %}</li>
-        <li class="hard"><span class="mark">•</span>Trailing stop: {% if strategy.trailing_stop_pct %}de stop schuift mee tot {{ strategy.trailing_stop_pct|num(1) }}% onder het hoogste punt sinds instap{% if strategy.trailing_start_pct %}, zodra de winst eerst {{ strategy.trailing_start_pct|num(1) }}% was{% endif %}; hij gaat nooit omlaag{% else %}<span class="muted">niet ingesteld</span>{% endif %}</li>
-        <li class="hard"><span class="mark">•</span>Take-profit: {% if strategy.take_profit_pct %}verkopen bij {{ strategy.take_profit_pct|num(1) }}% boven de instapkoers{% else %}<span class="muted">niet ingesteld; de verkoop volgt het signaal</span>{% endif %}</li>
+        <li class="hard"><span class="mark" aria-hidden="true">•</span>Stop-loss: {% if strategy.stop_loss_pct %}verkopen bij {{ strategy.stop_loss_pct|num(1) }}% onder de instapkoers{% else %}<span class="muted">niet ingesteld</span>{% endif %}</li>
+        <li class="hard"><span class="mark" aria-hidden="true">•</span>Trailing stop: {% if strategy.trailing_stop_pct %}de stop schuift mee tot {{ strategy.trailing_stop_pct|num(1) }}% onder het hoogste punt sinds instap{% if strategy.trailing_start_pct %}, zodra de winst eerst {{ strategy.trailing_start_pct|num(1) }}% was{% endif %}; hij gaat nooit omlaag{% else %}<span class="muted">niet ingesteld</span>{% endif %}</li>
+        <li class="hard"><span class="mark" aria-hidden="true">•</span>Take-profit: {% if strategy.take_profit_pct %}verkopen bij {{ strategy.take_profit_pct|num(1) }}% boven de instapkoers{% else %}<span class="muted">niet ingesteld; de verkoop volgt het signaal</span>{% endif %}</li>
       </ul>
       <h4 class="plan-h">Verkoopsignaal: alle voorwaarden gelden</h4>
       <ul class="rules">
         {% for c in strategy.sell %}
-        <li class="{{ 'soft' if c.soft else 'hard' }}"><span class="mark">{{ "~" if c.soft else "•" }}</span>{{ c|condition_nl }}</li>
+        <li class="{{ 'soft' if c.soft else 'hard' }}"><span class="mark" aria-hidden="true">{{ "~" if c.soft else "•" }}</span>{{ c|condition_nl }}</li>
         {% endfor %}
       </ul>
-      <p class="small">Bij een verkoopsignaal beslist Claude of hij verkoopt; de kill switch houdt een verkoop op signaal niet tegen.</p>
+      <p class="small">Bij een verkoopsignaal beslist Claude of hij verkoopt; zonder Claude volgt de bot het signaal. De noodstop houdt een verkoop op een verkoopsignaal niet tegen.</p>
       <h4 class="plan-h">Uitstappen op nieuws</h4>
-      <p class="small">Is het nieuws voor de coin duidelijk negatief (score ≤ {{ news_exit_max_score|num(1) }}) met minstens één bericht van hoge impact, dan mag Claude een open positie sluiten zonder signaal.</p>
-    </section>
-  </div>
+      <p class="small">Is het nieuws voor de coin duidelijk negatief (score {{ news_exit_max_score|num(1) }} of lager) met minstens één nieuwsfeit van impact middel of groot, gemeld door minstens {{ news_min_sources }} bronnen, dan mag Claude een open positie sluiten zonder signaal. Tijdens de noodstop wacht zo'n verkoop.</p>
+      {{ change_link("/strategy", "Strategie bekijken of aanpassen") }}
+      {% endcall %}
+    </div>
 
-  <div class="grid-2">
-    <section class="card">
-      <div class="card-header"><h3>Zo beslist de bot</h3></div>
+    <div class="grid-2">
+      {% call derived("beslissen", "Zo beslist de bot") %}
       <ol class="steps">
-        <li>Eerst de mechanische uitstap: raakt de koers de stop-loss of take-profit, dan wordt verkocht. Claude komt daar niet aan.</li>
-        <li>Niets te beslissen? Geen koopsignaal zonder positie, geen verkoopsignaal met positie en geen zwaar nieuws: dan wordt alleen "afwachten" gelogd en Claude niet gevraagd.</li>
+        <li>Eerst de automatische uitstap: raakt de koers de stop-loss, trailing stop of take-profit, dan wordt verkocht. Claude komt daar niet aan.</li>
+        <li>Niets te beslissen? Geen koopsignaal zonder positie, geen verkoopsignaal met positie en geen zwaar nieuws: dan wordt alleen 'afwachten' gelogd en Claude niet gevraagd.</li>
         <li>Anders beslist Claude met de strategie, de echte indicatorwaarden, de laatste candles, het nieuws, de Fear &amp; Greed-index, de lange-termijntrend, zijn eigen recente resultaten en jouw plan hierboven.</li>
         <li>De code toetst het besluit aan de spelregels en de harde limieten en plaatst dan pas de order.</li>
-        <li>Alles komt in het logboek op <a href="/trading">Handelen</a>; elke afgeronde trade staat in het <a href="/journal">journaal</a>, waar jij je notities toevoegt.</li>
+        <li>Alles komt in het logboek op <a href="/trading">Handelen</a>; elke trade staat in het <a href="/journal">journaal</a>, waar jij je notities toevoegt.</li>
       </ol>
-    </section>
+      {% endcall %}
 
-    <section class="card">
-      <div class="card-header"><h3>De rol van Claude</h3><a class="more" href="/settings#claude">Aanpassen ›</a></div>
+      {% call derived("claude", "De rol van Claude") %}
       <dl class="kv">
         <dt>Beslissingen</dt><dd>{{ settings.claude_model_decision }}{% if not claude_available %} <span class="pill pill-orange">sleutel ontbreekt</span>{% endif %}</dd>
         <dt>Nieuws</dt><dd>{{ settings.claude_model_news }}</dd>
         <dt>Evaluatie</dt><dd>{{ settings.claude_model_evaluation }}{% if settings.evaluation_interval_hours > 0 %}, elke {{ (settings.evaluation_interval_hours / 24)|num(0) }} dagen{% else %}, alleen handmatig{% endif %}</dd>
-        <dt>Budget</dt><dd>{{ budget.spent_usd|num(2) }} van {{ budget.limit_usd|num(0) }} dollar deze maand{% if budget.exhausted %} <span class="pill pill-red">op</span>{% endif %}</dd>
-        <dt>Zonder Claude</dt><dd>{{ "afwachten, niets doen" if settings.claude_unavailable_mode == "hold" else "het strategiesignaal volgen" }}</dd>
+        <dt>Budget</dt><dd><span class="money">$ {{ budget.spent_usd|num(2) }}</span> van <span class="money">$ {{ budget.limit_usd|num(0) }}</span> deze maand{% if budget.exhausted %} <span class="pill pill-red">op</span>{% endif %}</dd>
+        <dt>Zonder Claude</dt><dd>{{ "afwachten: niets kopen; een verkoopsignaal wordt wel gevolgd" if settings.claude_unavailable_mode == "hold" else "het koopsignaal van de strategie volgen met de halve inzet, niet tegen zwaar negatief nieuws in; een verkoopsignaal wordt gevolgd" }}</dd>
       </dl>
-      <p class="form-help">Claude kan het signaal volgen, afzwakken of vetoën, maar nooit kopen zonder signaal of sterk positief nieuws, en nooit boven de limieten. Strategievoorstellen uit de evaluatie worden pas actief als jij ze toepast.</p>
-    </section>
-  </div>
+      <p class="form-help">Claude kan het signaal volgen, afzwakken of tegenhouden, maar nooit kopen zonder signaal of sterk positief nieuws, en nooit boven de limieten. Strategievoorstellen uit de evaluatie worden pas actief als jij ze toepast.</p>
+      {{ change_link("/settings#claude", "Claude-instellingen aanpassen") }}
+      {% endcall %}
+    </div>
+  </section>
 </div>
 {% endblock %}
+{% block scripts %}<script src="/static/analysis.js?v={{ asset_version }}"></script>{% endblock %}

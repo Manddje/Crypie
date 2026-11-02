@@ -35,8 +35,8 @@ PLAN_FIELDS: dict[str, tuple[str, str, str]] = {
         "een dag niets; alleen een volle order bij positief nieuws én opwaartse lange trend.",
     ),
     "avoid": (
-        "Wat de bot niet doet",
-        "Situaties waarin je nooit wilt handelen. Claude kiest dan 'afwachten'.",
+        "Wanneer de bot nooit mag handelen",
+        "Situaties waarin je nooit wilt kopen of verkopen. Claude kiest dan 'afwachten'.",
         "Bijvoorbeeld: geen aankoop binnen 24 uur na een hack of rechtszaak rond de coin; "
         "nooit bijkopen in een positie die onder water staat.",
     ),
