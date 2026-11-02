@@ -118,12 +118,29 @@ async def test_the_getting_started_step_for_live_says_it_in_plain_words(api):  #
 
 
 def test_the_wins_say_netto_or_bruto():
-    """UX-106: 'Winnende trades' is netto for real trades and bruto for a backtest."""
-    for name in ("dashboard.html", "trading.html", "journal.html"):
+    """UX-106: 'Winnende trades' is netto everywhere, the backtest included (one meaning per
+    name)."""
+    for name in ("dashboard.html", "trading.html", "journal.html", "strategy.html"):
         source = templates.env.loader.get_source(templates.env, name)[0]
         assert "met netto winst" in source, name
-    strategy = templates.env.loader.get_source(templates.env, "strategy.html")[0]
-    assert "met bruto winst" in strategy
+        assert "met bruto winst" not in source, name
+
+
+def test_backtest_wins_are_net_of_fees():
+    from app.strategy.engine import BacktestResult, Trade
+
+    small_gain = Trade(entry_time=0, entry_price=100.0, exit_time=1, exit_price=100.4)
+    result = BacktestResult(
+        start_eur=1000,
+        final_eur=1000,
+        return_pct=0,
+        buy_hold_return_pct=0,
+        max_drawdown_pct=0,
+        trades=[small_gain],
+        fee_pct=0.25,
+    )
+    assert small_gain.pnl_pct > 0 and small_gain.net_pnl_pct(0.25) < 0
+    assert result.wins == 0 and result.win_rate_pct == 0
 
 
 def test_limits_and_intervals_have_one_notation():

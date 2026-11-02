@@ -31,7 +31,7 @@
   <header class="nav">
     <div class="nav-inner">
       <a class="brand" href="/">
-        <svg viewBox="0 0 32 32" aria-hidden="true" focusable="false"><defs><linearGradient id="brand-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0a84ff"/><stop offset="1" stop-color="#5e5ce6"/></linearGradient></defs><rect width="32" height="32" rx="8" fill="url(#brand-g)"/><path d="M8 20l5-6 4 4 7-9" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <svg viewBox="0 0 32 32" aria-hidden="true" focusable="false"><defs><linearGradient id="brand-g" x1="0" y1="0" x2="1" y2="1"><stop class="brand-stop-1" offset="0" stop-color="#0a84ff"/><stop class="brand-stop-2" offset="1" stop-color="#5e5ce6"/></linearGradient></defs><rect width="32" height="32" rx="8" fill="url(#brand-g)"/><path d="M8 20l5-6 4 4 7-9" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span class="brand-name">Crypie</span>
       </a>
       <nav class="nav-links" aria-label="Hoofdnavigatie">
@@ -61,12 +61,15 @@
   </header>
 
   <main class="page" id="main" tabindex="-1">
+    {#- The page first: a section with a place for its messages (ui.flashes_here) takes them,
+        so they show where the browser lands. -#}
+    {%- set page_body %}{% block content %}{% endblock %}{% endset -%}
     {#- One-off messages after an action (app/flash.py), announced to screen readers. -#}
     {% for f in request.state.flashes|default([]) %}{{ ui.notice(f.kind, f.text, live=true) }}{% endfor %}
     {% if login_disabled(request) %}
     {{ ui.notice("warn", "De login staat uit (AUTH_ENABLED=false). Iedereen die dit adres kan bereiken, kan instellingen wijzigen en in oefenmodus handelen; live handelen kan niet. Zet AUTH_ENABLED weer op true in de serveromgeving en herstart de app.", live=false) }}
     {% endif %}
-    {% block content %}{% endblock %}
+    {{ page_body }}
   </main>
 
   <footer class="site">

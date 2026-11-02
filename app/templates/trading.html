@@ -7,7 +7,7 @@
       <tbody>
       {% for v in positions %}{% set p = v.p %}
       <tr>
-        <td><strong>{{ p.market }}</strong></td>
+        <td class="nowrap"><strong>{{ p.market }}</strong></td>
         <td class="nowrap">{{ p.opened_at|dt }}</td>
         <td class="num">{{ p.amount|amount }}</td>
         <td class="num"><span class="cell">{{ p.entry_price|price_eur }}<span class="sub">{{ p.entry_quote|eur }} ingelegd</span></span></td>
@@ -250,7 +250,7 @@
         </section>
 
         <section aria-labelledby="agenda-title">
-          <div class="context-head"><h3 class="context-title" id="agenda-title">Agenda en risk-off</h3><a class="card-link" href="/settings#trading">Agenda aanpassen<span aria-hidden="true"> ›</span></a></div>
+          <div class="context-head"><h3 class="context-title" id="agenda-title">Agenda en risk-off</h3><a class="card-link" href="/settings#trading">Agenda aanpassen{{ ui.icon("chevron", "link-chevron") }}</a></div>
           {% if not agenda.enabled %}
           <p class="small muted">Risk-off staat uit: de bot koopt ook rond agendamomenten en na nieuwsschokken.</p>
           {% elif agenda.active_event %}
@@ -279,7 +279,7 @@
             <tbody>
             {% for t in status.trends %}
             <tr>
-              <td><strong>{{ t.market }}</strong></td>
+              <td class="nowrap"><strong>{{ t.market }}</strong></td>
               <td class="num">{% if t.wma200 is not none %}{{ t.wma200|price_eur }}{% else %}<span class="muted">te weinig historie ({{ t.weeks }} weken)</span>{% endif %}</td>
               <td class="num {{ ('pos' if t.above_wma200 else 'neg') if t.vs_wma200_pct is not none and t.above_wma200 is not none else '' }}">{% if t.vs_wma200_pct is not none %}{{ t.vs_wma200_pct|pct(1) }}{% else %}–{% endif %}</td>
               <td class="num {{ ('pos' if t.monthly_rsi_above_50 else 'neg') if t.monthly_rsi is not none and t.monthly_rsi_above_50 is not none else '' }}">{% if t.monthly_rsi is not none %}{{ t.monthly_rsi|num(0) }}{% else %}<span class="muted">te weinig maanden ({{ t.months }})</span>{% endif %}</td>
@@ -322,7 +322,7 @@
       <tbody>
       {% for p in closed_positions %}
       <tr>
-        <td><strong>{{ p.market }}</strong></td>
+        <td class="nowrap"><strong>{{ p.market }}</strong></td>
         <td class="nowrap">{{ p.opened_at|dt }}</td>
         <td class="nowrap">{{ p.closed_at|dt }}</td>
         <td class="num">{{ p.entry_price|price_eur }}</td>
@@ -433,9 +433,9 @@
     {% endcall %}
     {% if c.pages > 1 %}
     <nav class="pager" aria-label="Pagina's van Alle cycli">
-      {% if c.newer_url %}<a class="btn btn-sm" href="{{ c.newer_url }}" rel="prev"><span aria-hidden="true">‹ </span>Nieuwer</a>{% endif %}
+      {% if c.newer_url %}<a class="btn btn-sm" href="{{ c.newer_url }}" rel="prev">{{ ui.icon("chevron-left", "link-chevron") }}Nieuwer</a>{% endif %}
       <span class="small muted">{{ c.first }}–{{ c.last }} van {{ c.total }} · pagina {{ c.page }} van {{ c.pages }}</span>
-      {% if c.older_url %}<a class="btn btn-sm" href="{{ c.older_url }}" rel="next">Ouder<span aria-hidden="true"> ›</span></a>{% endif %}
+      {% if c.older_url %}<a class="btn btn-sm" href="{{ c.older_url }}" rel="next">Ouder{{ ui.icon("chevron", "link-chevron") }}</a>{% endif %}
     </nav>
     {% endif %}
     {% elif c.total_all == 0 and not c.market %}

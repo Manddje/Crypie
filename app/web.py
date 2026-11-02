@@ -10,6 +10,7 @@ from pathlib import Path
 
 from fastapi.templating import Jinja2Templates
 
+from app.flash import take_flashes
 from app.labels import CLOSE_REASONS_NL as _CLOSE_REASONS_NL
 from app.labels import (
     KILL_SWITCH_HELP_NL,
@@ -122,13 +123,12 @@ KILL_SWITCH_NL: dict[str, str] = {
     "state": "Noodstop actief: kopen gepauzeerd",
     "resume": "Kopen hervatten",
     "help": KILL_SWITCH_HELP_NL,
-    "detail": (
-        "De cycli lopen door, dus Claude kan nog worden gevraagd. Een verkoop alleen op "
-        "negatief nieuws wacht tot je hervat."
-    ),
+    "detail": "De cycli lopen door, dus Claude kan nog worden gevraagd (dat kost budget).",
     "confirm_pause": (
-        "Noodstop: kopen pauzeren? De bot koopt dan niets meer tot je hervat. Stop-loss, "
-        "trailing stop, take-profit en verkopen op een verkoopsignaal blijven werken."
+        "Noodstop: kopen pauzeren? Tot je hervat koopt niemand iets, de bot niet en jij niet. "
+        "Stop-loss, trailing stop, take-profit en verkopen op een verkoopsignaal blijven "
+        "werken; een verkoop alleen op negatief nieuws wacht. De cycli lopen door, dus Claude "
+        "kan nog worden gevraagd (dat kost budget)."
     ),
     "confirm_resume": "Kopen hervatten? De bot mag dan weer kopen.",
 }
@@ -491,29 +491,37 @@ def md(text: object, heading: int = 3) -> Html:
 
 # A web address in the owner's own text (journal notes): http(s) only, closing punctuation
 # stays outside the link. Runs on escaped text, so the address is already attribute-safe.
-_URL = re.compile(r"\bhttps?://[^\s<>\"']+", re.IGNORECASE)
-_URL_TAIL = ".,;:!?)]}'\""
+# An address in plain text: it ends at white space, a quote or an angle bracket. Matched on the
+# raw text (not on escaped text, where '&quot;' or '&gt;' would become part of the link).
+_URL = re.compile(r"\bhttps?://[^\s<>\"'`]+", re.IGNORECASE)
+_URL_TAIL = ".,;:!?)]}"
 
 
 def linkify(text: object) -> Html:
     """Escape ``text`` and make its http(s) addresses clickable (new tab, no referrer). Line
-    breaks stay as they are (use it inside .prose)."""
+    breaks stay as they are (use it inside .prose). Every piece is escaped, the link too."""
     if text is None:
         return Html("")
-    escaped = _esc(text)
-
-    def link(match: re.Match[str]) -> str:
-        url = match.group(0)
-        tail = ""
+    raw = str(text)
+    out: list[str] = []
+    pos = 0
+    for match in _URL.finditer(raw):
+        url, tail = match.group(0), ""
         while url and url[-1] in _URL_TAIL:
             tail = url[-1] + tail
             url = url[:-1]
-        if url.endswith(("&quot", "&#x27")):  # an escaped quote right after the address
-            cut = url.rfind("&")
-            url, tail = url[:cut], url[cut:] + tail
-        return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a>{tail}'
-
-    return Html(_URL.sub(link, escaped))
+        out.append(_esc(raw[pos : match.start()]))
+        if re.fullmatch(r"https?://", url, re.IGNORECASE):
+            out.append(_esc(url + tail))  # no host: nothing to link
+        else:
+            href = _esc(url)
+            out.append(
+                f'<a href="{href}" target="_blank" rel="noopener noreferrer">{href}</a>'
+                + _esc(tail)
+            )
+        pos = match.end()
+    out.append(_esc(raw[pos:]))
+    return Html("".join(out))
 
 
 def indicator_nl(ind: IndicatorSpec) -> str:
@@ -660,6 +668,8 @@ templates.env.globals.update(
         "orders_limit_nl": orders_limit_nl,
         # The rules change but the free description does not (UX-12): every diff says so.
         "description_outdated": description_outdated,
+        # Flashes for one section of the page (ui.flashes_here, UX-99).
+        "section_flashes": take_flashes,
     }
 )
 templates.env.filters.update(

@@ -23,6 +23,11 @@
 {%- elif name == "lock" -%}<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>
 {%- elif name == "external" -%}<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6M10 14L21 3"/>
 {%- elif name == "chevron" -%}<path d="M9 6l6 6-6 6"/>
+{%- elif name == "chevron-left" -%}<path d="M15 6l-6 6 6 6"/>
+{%- elif name == "check" -%}<path d="M5 12.5l4.5 4.5L19 7"/>
+{%- elif name == "cross" -%}<path d="M7 7l10 10M17 7L7 17"/>
+{%- elif name == "tilde" -%}<path d="M4 13.5c2.7-3.3 5.3-3.3 8 0s5.3 3.3 8 0"/>
+{%- elif name == "dot" -%}<circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none"/>
 {%- elif name == "user" -%}<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>
 {%- elif name == "logout" -%}<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>
 {%- elif name == "sun" -%}<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>
@@ -46,6 +51,12 @@
   {{ icon(kind) }}
   <div class="body">{% if title %}<span class="notice-title">{{ title }}</span> {% endif %}{{ text }}{{ caller() if caller is defined }}</div>
 </div>
+{%- endmacro %}
+
+{#- The one-off messages for section ``at`` (a redirect to ...#at), shown in that section where
+    the browser lands instead of at the top of the page (UX-99). -#}
+{% macro flashes_here(request, at) -%}
+{% for f in section_flashes(request, at) %}{{ notice(f.kind, f.text, live=true) }}{% endfor %}
 {%- endmacro %}
 
 {% macro stat(label, value, sub=None, cls="", sub_cls="") -%}
@@ -83,7 +94,7 @@
 <div class="card-header">
   <h{{ level }} class="card-title"{% if id %} id="{{ id }}"{% endif %}>{{ title }}</h{{ level }}>
   {% if meta %}<span class="card-meta">{{ meta }}</span>{% endif %}
-  {% if href and link %}<a class="card-link" href="{{ href }}">{{ link }}<span aria-hidden="true"> ›</span></a>{% endif %}
+  {% if href and link %}<a class="card-link" href="{{ href }}">{{ link }}{{ icon("chevron", "link-chevron") }}</a>{% endif %}
   {{ caller() if caller is defined }}
 </div>
 {%- endmacro %}
@@ -177,7 +188,7 @@
 <ul class="checks{{ ' compact' if compact else '' }}">
   {% for r in rules %}
   {% set state = "ok" if r.ok else ("soft" if r.soft else "nok") %}
-  <li class="{{ state }}"><span class="mark" aria-hidden="true">{{ {"ok": "✓", "soft": "~", "nok": "✗"}[state] }}</span><span class="visually-hidden">{{ {"ok": "gehaald", "soft": "zacht filter, niet gehaald", "nok": "niet gehaald"}[state] }}: </span>{{ r.text }}{% if r.left is not none and r.right is not none %} <span class="muted">({{ r.left|compact }} t.o.v. {{ r.right|compact }})</span>{% endif %}</li>
+  <li class="{{ state }}"><span class="mark">{{ icon({"ok": "check", "soft": "tilde", "nok": "cross"}[state]) }}</span><span class="visually-hidden">{{ {"ok": "gehaald", "soft": "zacht filter, niet gehaald", "nok": "niet gehaald"}[state] }}: </span>{{ r.text }}{% if r.left is not none and r.right is not none %} <span class="muted">({{ r.left|compact }} t.o.v. {{ r.right|compact }})</span>{% endif %}</li>
   {% endfor %}
 </ul>
 {% if legend %}{{ checks_legend() }}{% endif %}
@@ -185,7 +196,7 @@
 {%- endmacro %}
 
 {% macro checks_legend() -%}
-<p class="checks-legend"><span><span class="mark ok" aria-hidden="true">✓</span> gehaald</span><span><span class="mark nok" aria-hidden="true">✗</span> niet gehaald</span><span><span class="mark soft" aria-hidden="true">~</span> zacht filter niet gehaald: weegt mee, blokkeert niet</span></p>
+<p class="checks-legend"><span><span class="mark ok">{{ icon("check") }}</span> gehaald</span><span><span class="mark nok">{{ icon("cross") }}</span> niet gehaald</span><span><span class="mark soft">{{ icon("tilde") }}</span> zacht filter niet gehaald: weegt mee, blokkeert niet</span></p>
 {%- endmacro %}
 
 {# Field-level differences between the active strategy and a proposal (strategy_diff()).
@@ -216,10 +227,14 @@
    A lasting state, so no alert role; the red box and the list carry the urgency. #}
 {% macro unprotected_notice(positions) -%}
 {% if positions %}
-{% call notice("error", positions|length ~ (" positie wordt" if positions|length == 1 else " posities worden") ~ " NIET bewaakt door stop-loss, trailing stop of take-profit. De reden staat per positie hieronder. Los die op, of verkoop zelf op Bitvavo.", live=false) %}
+{#- Only a live position is on Bitvavo: selling it there yourself is a way out; a paper
+    position exists in Crypie only. -#}
+{%- set any_live = positions|selectattr("mode", "equalto", "live")|list|length > 0 -%}
+{%- set way_out = " Los die op, of verkoop zelf op Bitvavo." if any_live else " Los die op; een oefenpositie staat niet op Bitvavo en gebruikt fictief geld." -%}
+{% call notice("error", positions|length ~ (" positie wordt" if positions|length == 1 else " posities worden") ~ " NIET bewaakt door stop-loss, trailing stop of take-profit. De reden staat per positie hieronder." ~ way_out, live=false) %}
   <ul class="small">
     {% for u in positions %}
-    <li>{{ u.market }} ({{ "live" if u.mode == "live" else "oefenmodus" }}, positie #{{ u.id }}): {{ u.amount|compact }} stuks{% if u.stop_price %}, stop-loss op {{ u.stop_price|compact }}{% endif %}{% if u.price %}, koers nu {{ u.price|compact }}{% endif %}. Reden: {{ u.reason or "de modus kan nu niet handelen (live zonder Bitvavo-sleutel of LIVE_TRADING_ACK)" }}.</li>
+    <li>{{ u.market }} ({{ "live, echt geld" if u.mode == "live" else "oefenmodus, fictief geld" }}, positie #{{ u.id }}): {{ u.amount|compact }} stuks{% if u.stop_price %}, stop-loss op {{ u.stop_price|price_eur }}{% endif %}{% if u.price %}, koers nu {{ u.price|price_eur }}{% endif %}. Reden: {{ u.reason or "de modus kan nu niet handelen (live zonder Bitvavo-sleutel of LIVE_TRADING_ACK)" }}.</li>
     {% endfor %}
   </ul>
 {% endcall %}

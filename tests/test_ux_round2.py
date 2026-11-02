@@ -285,3 +285,135 @@ def test_textarea_line_ends_are_not_a_change():
     assert _form_text("a\r\nb\r\n") == _form_text("a\nb")
     assert _form_text("a  \nb") == "a\nb"
     assert _form_text("a\nc") != _form_text("a\nb")
+
+
+# -- UX-99: a message lands in the section the browser jumps to ----------------------------------
+
+
+async def test_flashes_show_in_the_section_the_redirect_points_to(api):
+    from app.flash import flashes_from_response
+
+    r = await api.post("/plan", data={"goal": "Rustig groeien"}, headers=HTML)
+    assert r.status_code == 303 and r.headers["location"] == "/plan#eigen"
+    (f,) = flashes_from_response(r, with_at=True)
+    assert f["at"] == "eigen"
+    page = (await api.get("/plan", headers=HTML)).text
+    section = page[page.index('id="eigen"') :]
+    assert f["text"] in section  # in the section, not above it
+    assert page.index(f["text"]) > page.index('id="eigen"')
+
+
+def test_flash_anchor_is_kept_only_when_it_is_a_plain_id():
+    from app.flash import _clean
+
+    assert _clean([{"kind": "ok", "text": "x", "at": "berichten"}])[0]["at"] == "berichten"
+    assert "at" not in _clean([{"kind": "ok", "text": "x", "at": "a b<script>"}])[0]
+
+
+async def test_the_500_page_leaves_pending_messages_for_the_next_page(api, monkeypatch):
+    from app import main as main_module
+
+    r = await api.post("/trading/action", data={"action": "pause"}, headers=HTML)
+    assert r.status_code == 303
+    r = await api.post("/trading/action", data={"action": "resume"}, headers=HTML)
+    cookie = r.headers["set-cookie"].split(";", 1)[0]
+    text = "Kopen hervat"
+
+    def crash(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(main_module, "_trading_context", crash)
+    page = await api.get("/trading", headers=HTML | {"cookie": cookie})
+    assert page.status_code == 500 and "mogelijk niet uitgevoerd" in page.text
+    assert text not in page.text
+    monkeypatch.undo()
+    page = await api.get("/trading", headers=HTML | {"cookie": cookie})
+    assert text in page.text
+
+
+# -- Review: the manual order form ----------------------------------------------------------------
+
+
+async def test_a_refused_amount_comes_back_as_typed(api):
+    from urllib.parse import parse_qs, urlsplit
+
+    for typed in ("1e3", "inf", "-5"):
+        form = {"market": "BTC-EUR", "side": "buy", "amount_quote": typed}
+        r = await api.post("/orders", data=form, headers=HTML)
+        assert r.status_code == 303
+        query = parse_qs(urlsplit(r.headers["location"]).query)
+        assert query["amount"] == [typed], typed
+    form = {"market": "BTC-EUR", "side": "buy", "amount_quote": "<b>1</b>"}
+    r = await api.post("/orders", data=form, headers=HTML)
+    assert "amount=&" in r.headers["location"] or r.headers["location"].endswith("amount=#order")
+
+
+async def test_a_refused_order_does_not_use_up_its_form(api):
+    form = {"market": "ETH-EUR", "side": "sell", "amount_quote": "10", "order_token": "tok-1"}
+    r = await api.post("/orders", data=form, headers=HTML)
+    from app.flash import flashes_from_response
+
+    (first,) = flashes_from_response(r)
+    assert "geen open positie" in first["text"]
+    r = await api.post("/orders", data=form, headers=HTML)
+    (again,) = flashes_from_response(r)
+    assert "al verstuurd" not in again["text"] and "geen open positie" in again["text"]
+
+
+# -- Review: linkify stops at quotes and angle brackets -------------------------------------------
+
+
+def test_linkify_ends_the_link_at_quotes_and_brackets():
+    from app.web import linkify
+
+    html = str(linkify("<https://example.com>"))
+    assert 'href="https://example.com"' in html and "&gt;</a>" not in html
+    assert html.endswith("&gt;")
+    html = str(linkify('https://example.com/a?b=1&c=2"><script>x</script>'))
+    assert 'href="https://example.com/a?b=1&amp;c=2"' in html
+    assert "<script>" not in html and "&lt;script&gt;" in html
+    assert html.count("<a ") == 1 and "script" not in html.split("</a>")[0]
+    assert str(linkify("zie https://")) == "zie https://"
+
+
+# -- Review: a test on another market is no new strategy ------------------------------------------
+
+
+async def test_testing_the_active_strategy_elsewhere_offers_no_save(api):
+    import respx
+    from httpx import Response
+
+    from tests.test_ux_analysis import BASE, _zigzag
+
+    active = (await api.get("/api/strategy")).json()
+    other = "ETH-EUR" if active["market"] != "ETH-EUR" else "BTC-EUR"
+    with respx.mock:
+        respx.get(f"{BASE}/{other}/candles").mock(return_value=Response(200, json=_zigzag()))
+        body = {
+            "action": "backtest",
+            "strategy_json": json.dumps(active),
+            "limit": "300",
+            "market": other,
+        }
+        page = (await api.post("/strategy", data=body)).text
+    assert f"Backtest op {other}" in page
+    assert "Gelijk aan de actieve strategie" in page and "Nog niet opgeslagen" not in page
+
+
+# -- UX-89: the brand colours come from one place --------------------------------------------------
+
+
+def test_brand_tokens_are_used_and_match_the_tab_icons():
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).parents[1] / "app"
+    css = (root / "static/app.css").read_text(encoding="utf-8")
+    one = re.search(r"--brand-1:\s*(#[0-9a-f]{6})", css).group(1)
+    two = re.search(r"--brand-2:\s*(#[0-9a-f]{6})", css).group(1)
+    assert "var(--brand-1)" in css and "var(--brand-2)" in css
+    for name in ("templates/base.html", "templates/auth/_base.html"):
+        assert 'class="brand-stop-1"' in (root / name).read_text(encoding="utf-8")
+    for icon in (root / "static/icons").glob("*.svg"):
+        svg = icon.read_text(encoding="utf-8")
+        assert one in svg and two in svg, icon.name

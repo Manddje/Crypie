@@ -544,7 +544,7 @@ async def test_strategy_test_redirects_and_a_reload_runs_nothing_again(api):
         'role="img" aria-labelledby="curve-desc"' in page
         and "Kopen en vasthouden €\u00a01.000 →" in page
     )
-    assert "Resultaat (bruto)" in page
+    assert "Resultaat (netto)" in page
     # UX-10: the save button has its own form with the tested JSON, below the backtest.
     form = page[page.index('class="strategy-save"') - 60 :]
     assert 'data-tested-for="strategy-json"' in form and 'name="strategy_json" value="{' in form

@@ -264,7 +264,7 @@
       {% set why = o.reason|order_reason %}
       <tr>
         <td class="nowrap">{{ o.created_at|dt }}</td>
-        <td><strong>{{ o.market }}</strong></td>
+        <td class="nowrap"><strong>{{ o.market }}</strong></td>
         <td>{{ ui.side(o.side) }}</td>
         <td class="num">{{ o.amount_quote|eur }}</td>
         <td class="num">{{ o.price|price_eur if o.price else "–" }}</td>

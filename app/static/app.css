@@ -59,7 +59,10 @@
   /* Height of the sticky header; app.js measures it, these are the fallbacks. */
   --header-h: 57px;
 
-  /* Brand gradient (logo, app icon); the indigo also marks the Oefenmodus. */
+  /* Brand gradient: the logo (.brand-stop-1/2 in base.html and auth/_base.html); the indigo
+     also marks the Oefenmodus. The tab icons in
+     static/icons/*.svg cannot read these, so they repeat the two colours; a test keeps them
+     in line (tests/test_ux_round2.py). */
   --brand-1: #0a84ff;
   --brand-2: #5e5ce6;
 
@@ -83,14 +86,16 @@
   --accent-tint-2: rgba(0, 113, 227, 0.18);
   --green: #12703a;
   --green-tint: rgba(52, 199, 89, 0.16);
-  --red: #b8221b;
+  /* Red and orange differ in hue and in lightness (contrast 1.39:1 between them), so a warning
+     never reads as an error by colour alone; both keep 4.5:1 on every surface (UX-85). */
+  --red: #a51c16;
   --red-fill: #b8221b;
   --red-fill-hover: #9c1c16;
   --on-red: #ffffff;
   --red-tint: rgba(255, 59, 48, 0.14);
   --red-tint-2: rgba(255, 59, 48, 0.2);
-  --orange: #a34c00;
-  --orange-tint: rgba(255, 149, 0, 0.18);
+  --orange: #965d00;
+  --orange-tint: rgba(255, 149, 0, 0.12);
   --paper: #4a40d4;
   --paper-tint: rgba(94, 92, 230, 0.14);
   --seg-active: #ffffff;
@@ -103,7 +108,7 @@
   --chart-green: #1f9d4f;
   --chart-red: #d7261a;
   --chart-accent: #0071e3;
-  --chart-orange: #c2410c;
+  --chart-orange: #d97706;
 }
 
 /* Dark: keep the two blocks below identical (system dark, and the explicit choice). */
@@ -132,7 +137,7 @@
     --red-fill-hover: #d93a31;
     --red-tint: rgba(255, 69, 58, 0.18);
     --red-tint-2: rgba(255, 69, 58, 0.26);
-    --orange: #ffa733;
+    --orange: #ffc44d;
     --orange-tint: rgba(255, 159, 10, 0.2);
     --paper: #b4b2ff;
     --paper-tint: rgba(94, 92, 230, 0.28);
@@ -144,7 +149,7 @@
     --chart-green: #30d158;
     --chart-red: #ff453a;
     --chart-accent: #0a84ff;
-    --chart-orange: #ff9f0a;
+    --chart-orange: #ffb020;
   }
 }
 
@@ -173,7 +178,7 @@
   --red-fill-hover: #d93a31;
   --red-tint: rgba(255, 69, 58, 0.18);
   --red-tint-2: rgba(255, 69, 58, 0.26);
-  --orange: #ffa733;
+  --orange: #ffc44d;
   --orange-tint: rgba(255, 159, 10, 0.2);
   --paper: #b4b2ff;
   --paper-tint: rgba(94, 92, 230, 0.28);
@@ -185,7 +190,7 @@
   --chart-green: #30d158;
   --chart-red: #ff453a;
   --chart-accent: #0a84ff;
-  --chart-orange: #ff9f0a;
+  --chart-orange: #ffb020;
 }
 
 :root[data-theme="light"] { color-scheme: light; }
@@ -477,6 +482,10 @@ abbr[title] { text-decoration: underline dotted; text-underline-offset: 0.15em; 
   padding: 6px 0;
   margin: -6px 0;
 }
+/* The arrow after a link to elsewhere (and before 'Nieuwer'): the chevron icon, not a '›'. */
+.link-chevron { width: 1em; height: 1em; vertical-align: -0.15em; stroke-width: 2.4; }
+a > .link-chevron:last-child { margin-left: 2px; }
+a > .link-chevron:first-child { margin-right: 2px; }
 .card-desc { color: var(--text-2); font-size: var(--fs-help); margin-bottom: 14px; }
 @media (max-width: 640px) {
   .card { padding: 18px; }
@@ -1025,13 +1034,14 @@ details.advanced > *:not(summary) { margin-top: 14px; }
 /* -- Checklist of a decision (ui.checks): ✓ met, ✗ not met, ~ soft filter not met -- */
 .checks { list-style: none; margin: 6px 0 0; padding: 0; font-size: var(--fs-detail); }
 .checks li { padding: 2px 0; }
-.checks .mark { display: inline-block; width: 16px; font-weight: 600; }
+.checks .mark { display: inline-flex; width: 18px; vertical-align: -0.15em; }
+.checks .mark .icon, .checks-legend .mark .icon { width: 14px; height: 14px; stroke-width: 2.6; }
 .checks li.ok .mark { color: var(--green); }
 .checks li.nok .mark { color: var(--red); }
 .checks li.soft .mark { color: var(--orange); }
 .checks.compact { font-size: var(--fs-caption); margin-top: 2px; }
 .checks-legend { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 6px 0 0; color: var(--text-2); font-size: var(--fs-caption); }
-.checks-legend .mark { font-weight: 600; }
+.checks-legend .mark { display: inline-flex; vertical-align: -0.15em; }
 .checks-legend .ok { color: var(--green); }
 .checks-legend .nok { color: var(--red); }
 .checks-legend .soft { color: var(--orange); }
@@ -1215,6 +1225,8 @@ footer.site .footer-alert { color: var(--red); font-weight: 500; }
 .chart-legend .swatch.down { background: var(--chart-red); clip-path: polygon(0 0, 100% 0, 50% 100%); }
 .chart-legend .swatch.circle { background: var(--chart-accent); border-radius: 50%; }
 .chart-legend .swatch.square { background: var(--chart-orange); border-radius: 2px; }
+.brand-stop-1 { stop-color: var(--brand-1); }
+.brand-stop-2 { stop-color: var(--brand-2); }
 .chart-tooltip {
   position: absolute;
   z-index: 3;
@@ -1465,7 +1477,8 @@ footer.site .footer-alert { color: var(--red); font-weight: 500; }
 .plan-h:first-of-type { margin-top: 4px; }
 .rules { list-style: none; margin: 0; padding: 0; font-size: var(--fs-help); }
 .rules li { padding: 4px 0; display: flex; gap: 8px; align-items: baseline; }
-.rules .mark { display: inline-block; width: 14px; font-weight: 700; color: var(--accent); flex: none; }
+.rules .mark { display: inline-flex; width: 14px; color: var(--accent); flex: none; align-self: center; }
+.rules .mark .icon { width: 14px; height: 14px; stroke-width: 2.6; }
 .rules li.soft .mark { color: var(--orange); }
 .steps { margin: 0; padding-left: 22px; font-size: var(--fs-help); line-height: 1.55; }
 .steps li { margin: 6px 0; }
@@ -1833,7 +1846,9 @@ html:has(form.is-dirty) { scroll-padding-bottom: 170px; }
     border: 1px solid CanvasText;
   }
   .btn[disabled] { border-style: dashed; color: GrayText; }
-  .pill .dot, .score-bar .fill, .meter { forced-color-adjust: none; }
+  /* The legend swatches keep the chart's colours: the canvas keeps them too (no system
+     colours), so the legend still maps to the markers. */
+  .pill .dot, .score-bar .fill, .meter, .chart-legend .swatch { forced-color-adjust: none; }
   .pill .dot { background: CanvasText; }
   .table-wrap { background: none; }
   .theme-toggle svg { forced-color-adjust: auto; }

@@ -168,9 +168,17 @@ class Trade:
 
     @property
     def pnl_pct(self) -> float | None:
+        """Gross: the price change from entry to exit, without fees."""
         if self.exit_price is None:
             return None
         return (self.exit_price / self.entry_price - 1) * 100
+
+    def net_pnl_pct(self, fee_pct: float) -> float | None:
+        """Net: after the fee on the buy and on the sell, as the journal counts a trade."""
+        if self.exit_price is None:
+            return None
+        fee = fee_pct / 100.0
+        return (self.exit_price * (1 - fee) / (self.entry_price * (1 + fee)) - 1) * 100
 
 
 @dataclass
@@ -191,12 +199,16 @@ class BacktestResult:
         return [t for t in self.trades if t.exit_price is not None]
 
     @property
+    def wins(self) -> int:
+        """Closed trades with a net profit (after both fees), the journal's 'Winnende trades'."""
+        return sum(1 for t in self.closed_trades if (t.net_pnl_pct(self.fee_pct) or 0) > 0)
+
+    @property
     def win_rate_pct(self) -> float | None:
         closed = self.closed_trades
         if not closed:
             return None
-        wins = sum(1 for t in closed if (t.pnl_pct or 0) > 0)
-        return wins / len(closed) * 100
+        return self.wins / len(closed) * 100
 
     def summary(self) -> dict[str, object]:
         return {

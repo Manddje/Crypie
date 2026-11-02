@@ -307,9 +307,15 @@
       else loose = a === 0 || (b > 0 && a > 2 * b);
       if (loose) {
         var unit = row.getAttribute("data-unit") || "";
+        // The same notation as the message after saving: '€ 50,50', '€ 250', '2,5%'.
         var fmt = function (n) {
-          var t = String(n).replace(".", ",");
-          return unit === "€" || unit === "$" ? unit + " " + t : unit === "%" ? t + "%" : unit ? t + " " + unit : t;
+          var money = unit === "€" || unit === "$";
+          var whole = Math.round(n * 100) % 100 === 0;
+          var t = n.toLocaleString("nl-NL", {
+            minimumFractionDigits: money && !whole ? 2 : 0,
+            maximumFractionDigits: 2
+          });
+          return money ? unit + "\u00a0" + t : unit === "%" ? t + "%" : unit ? t + " " + unit : t;
         };
         out.push("• " + row.getAttribute("data-label") + ": " + fmt(b) + " → " + fmt(a) +
           (rule === "capital" && a === 0 ? " (het hele Bitvavo-account)" : ""));

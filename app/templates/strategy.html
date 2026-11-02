@@ -50,6 +50,7 @@
 
   <section class="card" id="actief" aria-labelledby="actief-title">
     {% call ui.card_header("Actieve strategie", 2, id="actief-title") %}<span class="pill pill-green"><span class="dot" aria-hidden="true"></span>Actief</span>{% endcall %}
+    {{ ui.flashes_here(request, "actief") }}
     <h3 class="strategy-name">{{ strategy.name }}</h3>
     {{ strategy_summary(strategy) }}
     {% if previous %}
@@ -117,7 +118,7 @@
         {{ ui.stat("Kopen en vasthouden", b.buy_hold_return_pct|pct, "koersverandering, ter vergelijking", b.buy_hold_return_pct|pnl_class(1)) }}
         {{ ui.stat("Grootste daling", b.max_drawdown_pct|pct(1, false), "van de hoogste naar de laagste stand van het testsaldo") }}
         {{ ui.stat("Afgeronde trades", b.trades ~ (" (+1 open)" if b.open_position else ""), "aankoop plus verkoop") }}
-        {{ ui.stat("Winnende trades", (b.win_rate_pct|pct(0, false)) if b.win_rate_pct is not none else "–", (bt.wins ~ " van " ~ b.trades ~ " met bruto winst") if b.trades else "nog geen afgeronde trades") }}
+        {{ ui.stat("Winnende trades", (b.win_rate_pct|pct(0, false)) if b.win_rate_pct is not none else "–", (bt.wins ~ " van " ~ b.trades ~ " met netto winst") if b.trades else "nog geen afgeronde trades") }}
         {{ ui.stat("Signaal nu", b.latest.signal|nl, "op de laatste candle", "pos" if b.latest.signal == "buy" else ("neg" if b.latest.signal == "sell" else "")) }}
         {% if b.live_buy_signal_pct is not none %}{{ ui.stat("Koopsignaal live", b.live_buy_signal_pct|pct(1, false), "van de candles na " ~ b.warmup_candles ~ " candles opwarmen", "neg" if bt.loose else "") }}{% endif %}
       </div>
@@ -137,14 +138,15 @@
         <summary>Laatste {{ b.trade_log|length }} trades in de test</summary>
         {% call ui.table_wrap("Laatste trades in de test") %}
         <table class="table-stack">
-          <tr><th scope="col">Instap</th><th scope="col" class="num">Instapkoers</th><th scope="col">Uitstap</th><th scope="col" class="num">Uitstapkoers</th><th scope="col" class="num">Resultaat (bruto)</th><th scope="col">Reden</th></tr>
+          <tr><th scope="col">Instap</th><th scope="col" class="num">Instapkoers</th><th scope="col">Uitstap</th><th scope="col" class="num">Uitstapkoers</th><th scope="col" class="num">Resultaat (netto)</th><th scope="col">Reden</th></tr>
           {% for t in b.trade_log %}
           <tr>
             <td class="nowrap">{{ (t.entry_time // 1000)|int|ts }}</td>
             <td class="num">{{ t.entry_price|price_eur }}</td>
             <td class="nowrap">{{ (t.exit_time // 1000)|int|ts if t.exit_time else "nog open" }}</td>
             <td class="num">{{ t.exit_price|price_eur if t.exit_price else "–" }}</td>
-            <td class="num {{ t.pnl_pct|pnl_class(1) }}">{{ t.pnl_pct|pct if t.pnl_pct is not none else "–" }}</td>
+            {%- set net = t.net_pnl_pct if t.net_pnl_pct is defined else t.pnl_pct %}
+            <td class="num {{ net|pnl_class(1) }}">{{ net|pct if net is not none else "–" }}</td>
             <td>{{ t.reason|nl }}</td>
           </tr>
           {% endfor %}

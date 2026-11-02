@@ -16,6 +16,7 @@ import base64
 import binascii
 import hmac
 import json
+import re
 import secrets
 import time
 from hashlib import sha256
@@ -37,6 +38,9 @@ MAX_COOKIE_BYTES = 3500
 # Internal response header from add_flash() to the middleware; never sent to the browser.
 PENDING_HEADER = "x-crypie-flash"
 SKIP_PREFIXES = ("/static/",)
+# The section a flash belongs to: the #fragment of the redirect. The page shows it there (where
+# the browser lands) instead of at the top of the page, out of view (UX-99).
+_ANCHOR = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,40}")
 
 _key = secrets.token_bytes(32)
 
@@ -71,7 +75,11 @@ def _clean(flashes: Any) -> list[dict[str, str]]:
         kind, text = f.get("kind"), f.get("text")
         if not isinstance(text, str) or not text.strip():
             continue
-        out.append({"kind": kind if kind in KINDS else "info", "text": text.strip()[:MAX_TEXT]})
+        item = {"kind": kind if kind in KINDS else "info", "text": text.strip()[:MAX_TEXT]}
+        at = f.get("at")
+        if isinstance(at, str) and _ANCHOR.fullmatch(at):
+            item["at"] = at
+        out.append(item)
     # The newest messages matter most when there are too many.
     return _dedupe(out)[-MAX_FLASHES:]
 
@@ -130,22 +138,39 @@ def _pending(headers: Headers | MutableHeaders) -> list[dict[str, str]]:
         return []
 
 
-def add_flash(response: Response, kind: str, text: str) -> Response:
+def add_flash(response: Response, kind: str, text: str, at: str | None = None) -> Response:
     """Show ``text`` once on the next page the browser renders. Returns ``response``.
 
-    ``kind`` is "ok", "error", "warn" or "info". Several calls add several messages.
+    ``kind`` is "ok", "error", "warn" or "info". Several calls add several messages. ``at`` is
+    the id of the section the message is about; a page that has a place for it there
+    (``ui.flashes_here``) shows it in that section, otherwise it is shown at the top.
     """
-    flashes = _pending(response.headers) + [{"kind": kind, "text": text}]
+    item = {"kind": kind, "text": text}
+    if at:
+        item["at"] = at
+    flashes = _pending(response.headers) + [item]
     value = _b64(json.dumps(_clean(flashes), ensure_ascii=False).encode())
     response.headers[PENDING_HEADER] = value
     return response
 
 
 def redirect_with_flash(url: str, kind: str, text: str, status_code: int = 303) -> RedirectResponse:
-    """A redirect (303 by default: Post/Redirect/Get) that shows ``text`` on the target page."""
+    """A redirect (303 by default: Post/Redirect/Get) that shows ``text`` on the target page,
+    in the section the URL's #fragment points to when that page has a place for it."""
     response = RedirectResponse(url, status_code=status_code)
-    add_flash(response, kind, text)
+    fragment = url.partition("#")[2]
+    add_flash(response, kind, text, at=fragment if _ANCHOR.fullmatch(fragment) else None)
     return response
+
+
+def take_flashes(request: Any, at: str) -> list[dict[str, str]]:
+    """The flashes meant for section ``at``, removed from the ones the page shows at the top."""
+    state = getattr(request, "state", None)
+    flashes = list(getattr(state, "flashes", None) or [])
+    mine = [f for f in flashes if f.get("at") == at]
+    if mine:
+        state.flashes = [f for f in flashes if f.get("at") != at]
+    return mine
 
 
 def cookie_name(scope: Scope) -> str:
@@ -223,11 +248,15 @@ def _cookies(headers: Headers):
                 yield key, sep, value
 
 
-def flashes_from_response(response: Any) -> list[dict[str, str]]:
-    """The flashes a response sets for the next page (for tests): decodes its Set-Cookie."""
+def flashes_from_response(response: Any, with_at: bool = False) -> list[dict[str, str]]:
+    """The flashes a response sets for the next page (for tests): decodes its Set-Cookie.
+    Kind and text only, unless ``with_at`` (then also the section each one belongs to)."""
     for header in response.headers.get_list("set-cookie"):
         first = header.split(";", 1)[0]
         key, _, value = first.partition("=")
         if key in (COOKIE_NAME, HOST_PREFIX + COOKIE_NAME):
-            return decode(value)
+            found = decode(value)
+            if with_at:
+                return found
+            return [{"kind": f["kind"], "text": f["text"]} for f in found]
     return []

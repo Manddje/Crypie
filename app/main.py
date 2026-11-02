@@ -1114,7 +1114,7 @@ async def _run_backtest(
         "interval": strategy.interval,
         "first_time": int(candles[0][0]) if candles else None,
         "last_time": int(candles[-1][0]) if candles else None,
-        "wins": sum(1 for t in result.closed_trades if (t.pnl_pct or 0) > 0),
+        "wins": result.wins,  # net, like the journal (UX-106)
         # The value of the test account per candle (sampled), for the chart on the page.
         "curve": curve_svg(strategy_curve, hold_curve),
         "latest": latest_snapshot(strategy, candles),
@@ -1125,6 +1125,9 @@ async def _run_backtest(
                 "exit_time": t.exit_time,
                 "exit_price": t.exit_price,
                 "pnl_pct": round(t.pnl_pct, 2) if t.pnl_pct is not None else None,
+                "net_pnl_pct": round(net, 2)
+                if (net := t.net_pnl_pct(result.fee_pct)) is not None
+                else None,
                 "reason": t.reason,
             }
             for t in result.trades[-20:]
@@ -1436,14 +1439,17 @@ async def strategy_action(
             state.update(kind="invalid", strategy_json=strategy_json[:STRATEGY_JSON_MAX])
             candidate = _strategy_input(strategy_json, settings)
             if action == "backtest":
-                if state["market"]:
-                    candidate = candidate.model_copy(update={"market": state["market"]})
                 state.update(
                     kind="backtest",
                     proposal=candidate.model_dump(mode="json"),
                     strategy_json=candidate.model_dump_json(indent=2),
                 )
-                await _try_backtest(request, client, candidate, limit, state)
+                # The market chosen for the test is only where the test runs: it does not
+                # change the strategy, so testing the active one elsewhere is no new strategy.
+                tested = candidate
+                if state["market"] and state["market"] != candidate.market:
+                    tested = candidate.model_copy(update={"market": state["market"]})
+                await _try_backtest(request, client, tested, limit, state)
             else:
                 try:
                     check_for_use(candidate)
@@ -3439,7 +3445,7 @@ async def _markets_for_page(app_: FastAPI) -> set[str] | None:
 
 def _saved_text(title: str, changes: list[str]) -> str:
     if not changes:
-        return f"{title} opgeslagen. Er was niets gewijzigd."
+        return f"Niets gewijzigd in {title}: alles stond al zo."
     return f"{title} opgeslagen; het geldt direct. {_join_changes(changes)}."
 
 
@@ -3518,7 +3524,8 @@ async def settings_save(request: Request, session: Session = Depends(get_session
         return page(400, errors=exc.errors, submitted=raw, form_group=group, form_extra=extra)
     except StepUpError as exc:
         return step_up_failed(group, exc, submitted=raw)
-    text = _saved_text(title, cfg.changes(old, candidate, cfg.keys_in_group(group)))
+    changes = cfg.changes(old, candidate, cfg.keys_in_group(group))
+    text = _saved_text(title, changes)
     if to_live and extra["reset_paper_on_live"]:
         # Offered in the live panel (UX-01): the paper portfolio starts afresh, so no paper
         # position is guarded next to the real ones. The password was checked for the switch.
@@ -3528,7 +3535,9 @@ async def settings_save(request: Request, session: Session = Depends(get_session
             f"{'oefenpositie is' if closed == 1 else 'oefenposities zijn'} gesloten zonder "
             "resultaat."
         )
-    response = flash.redirect_with_flash(f"/settings?saved={group}#{group}", "ok", text)
+    # Nothing changed is no success to report: a neutral note instead of a green one.
+    kind = "ok" if changes or extra["reset_paper_on_live"] else "info"
+    response = flash.redirect_with_flash(f"/settings?saved={group}#{group}", kind, text)
     for key in cfg.keys_in_group(group):
         warning = cfg.model_warning(getattr(candidate, key)) if key in values else None
         if warning and cfg.SPEC_BY_KEY[key].kind == "model":
@@ -3658,7 +3667,9 @@ _price_failures: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 # The order form: the amount filled in for a new buy, and the longest amount text accepted.
 ORDER_DEFAULT_EUR = 25.0
 AMOUNT_MAX_LENGTH = 32
-_AMOUNT_CHARS = re.compile(r"[0-9 .,€ ]*")
+# What a refused amount may look like when the form shows it again (escaped by the template):
+# also '1e3', 'inf' or '-5', so the owner sees what was refused.
+_AMOUNT_CHARS = re.compile(r"[0-9A-Za-z .,€+\- ]*")
 # "Hele positie verkopen": more than any position is worth. manual_order caps a sell at the
 # position, so this sells all of it.
 SELL_ALL_EUR = 1e12
@@ -4211,6 +4222,13 @@ def _claim_order_token(token: str) -> bool:
     return True
 
 
+def _release_order_token(token: str, claimed: bool) -> None:
+    """Forget a token claimed by this request when its order was refused before anything was
+    sent: no order exists, so sending the form again is not a repeat."""
+    if claimed and token:
+        _order_tokens.pop(token, None)
+
+
 class _OrderResent(Exception):
     """The order form was sent before: nothing is placed again."""
 
@@ -4243,6 +4261,7 @@ async def dashboard_order(
     form = _order_form(settings, engine.limits, market, side, amount_quote, sell_all)
     mode = engine.mode
     kind, status = "error", 400
+    claimed = False
     try:
         amount = SELL_ALL_EUR if form["sell_all"] else parse_amount_eur(amount_quote)
         if mode == "live":
@@ -4251,11 +4270,13 @@ async def dashboard_order(
         if order_token and not _claim_order_token(order_token):
             kind, status = "warn", 409
             raise _OrderResent
+        claimed = bool(order_token)
         order = await engine.manual_order(session, market, side, amount)
     except _OrderResent:
         text = ORDER_RESENT
     except StepUpError as exc:
-        text, status = f"Order niet geplaatst: {exc.message}", exc.status
+        # A full sentence of its own ('Het wachtwoord klopt niet.'), so no colon before it.
+        text, status = f"Order niet geplaatst. {exc.message}", exc.status
     except OrderUncertain:
         kind, status = "warn", 202
         text = (
@@ -4266,10 +4287,14 @@ async def dashboard_order(
     except BitvavoError as exc:
         if isinstance(exc, ValueError):  # an invalid market name: nothing was sent
             text = f"Order niet geplaatst: {_order_problem_nl(str(exc))}."
+            _release_order_token(order_token, claimed)
         else:
             text, status = f"Order niet geplaatst: {_bitvavo_problem(exc)}.", 502
     except ValueError as exc:
+        # Refused by Crypie's own checks before anything reached Bitvavo: the same form may
+        # be sent again after a fix (the token only guards against placing an order twice).
         text = f"Order niet geplaatst: {_order_problem_nl(str(exc))}."
+        _release_order_token(order_token, claimed)
     else:
         closed = side == "sell" and open_position(session, mode, form["market"]) is None
         kind, text = _order_done(order, form["market"], side, mode, closed)

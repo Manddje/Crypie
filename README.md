@@ -485,9 +485,10 @@ De actieve strategie bepaalt de regels (indicatoren, condities, stop-loss, trail
 markt uit `MARKETS` toegepast; het `market`-veld van de strategie is alleen de standaard voor backtests.
 
 **De noodstop** ("Noodstop: kopen pauzeren" op Overzicht en Handelen, `POST /trading/action` met
-`action=pause` of `resume`) blokkeert alleen nieuwe aankopen, van de bot en handmatig. Stop-loss,
-trailing stop, take-profit en verkopen op een verkoopsignaal blijven werken; de cycli lopen door, dus
-Claude kan nog worden gevraagd, en een verkoop alleen op negatief nieuws wacht tot je hervat. Aanzetten
+`action=pause` of `resume`) blokkeert nieuwe aankopen, van de bot en handmatig. Stop-loss, trailing
+stop, take-profit en verkopen op een verkoopsignaal blijven werken; alleen een verkoop op negatief
+nieuws wacht tot je hervat. De cycli lopen door, dus Claude kan nog worden gevraagd; dat zegt ook de
+bevestiging vooraf. Aanzetten
 en *Kopen hervatten* vragen elk één bevestiging en nooit een wachtwoord. Zolang de noodstop aan staat,
 toont de navigatie op elke pagina "Oefenmodus · noodstop" of "Live · noodstop", begint de tabtitel met
 "Noodstop · " en heeft het tabbladicoon een oranje stip; zet je hem in een ander tabblad om, dan volgen

@@ -102,7 +102,7 @@
           <p class="dash-step-title">{{ s.title }} <span class="pill{{ ' pill-green' if s.done }}">{{ "klaar" if s.done else "nog te doen" }}</span></p>
           <p class="small muted">{{ s.text }}</p>
           {% if s.env or s.note %}<p class="caption muted">{{ s.note or "" }}{% if s.env %} <span class="mono">{{ s.env }}</span>{% endif %}</p>{% endif %}
-          {% if s.href %}<a class="card-link" href="{{ s.href }}">{{ s.link }}<span aria-hidden="true"> ›</span></a>{% endif %}
+          {% if s.href %}<a class="card-link" href="{{ s.href }}">{{ s.link }}{{ ui.icon("chevron", "link-chevron") }}</a>{% endif %}
         </div>
       </li>
       {% endfor %}

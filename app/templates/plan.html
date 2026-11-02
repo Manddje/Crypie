@@ -11,7 +11,7 @@
 </section>
 {%- endmacro %}
 {% macro change_link(href, text) -%}
-<p class="plan-change"><a class="card-link" href="{{ href }}">{{ text }}<span aria-hidden="true"> ›</span></a></p>
+<p class="plan-change"><a class="card-link" href="{{ href }}">{{ text }}{{ ui.icon("chevron", "link-chevron") }}</a></p>
 {%- endmacro %}
 {% block content %}
 <div class="page-header">
@@ -34,6 +34,7 @@
         <h2 class="card-title" id="eigen-title">Jouw plan <span class="eyebrow plan-tag">bewerkbaar</span></h2>
         {% if plan.is_empty() %}<span class="pill">nog leeg</span>{% elif plan.updated_at %}<span class="card-meta">laatst gewijzigd {{ plan.updated_at|dt(true) }}</span>{% endif %}
       </div>
+      {{ ui.flashes_here(request, "eigen") }}
       <div class="plan-claude {{ 'is-active' if claude.active else 'is-idle' }}">
         {{ ui.icon("ok" if claude.active else "warn") }}
         <p>{{ claude.text }}</p>
@@ -94,7 +95,7 @@
       <h4 class="plan-h">Koopsignaal: alle harde voorwaarden gelden</h4>
       <ul class="rules">
         {% for c in strategy.buy %}
-        <li class="{{ 'soft' if c.soft else 'hard' }}"><span class="mark" aria-hidden="true">{{ "~" if c.soft else "•" }}</span>{{ c|condition_nl|readable_condition(indicator_labels) }}</li>
+        <li class="{{ 'soft' if c.soft else 'hard' }}"><span class="mark">{{ ui.icon("tilde" if c.soft else "dot") }}</span>{{ c|condition_nl|readable_condition(indicator_labels) }}</li>
         {% endfor %}
       </ul>
       {% if strategy.buy|selectattr("soft")|list %}
@@ -114,14 +115,14 @@
       {% call derived("uitstappen", "Uitstappen") %}
       <h4 class="plan-h">Automatisch, zonder Claude</h4>
       <ul class="rules">
-        <li class="hard"><span class="mark" aria-hidden="true">•</span>Stop-loss: {% if strategy.stop_loss_pct %}verkopen bij {{ strategy.stop_loss_pct|pct_limit }} onder de instapkoers{% else %}<span class="muted">niet ingesteld</span>{% endif %}</li>
-        <li class="hard"><span class="mark" aria-hidden="true">•</span>Trailing stop: {% if strategy.trailing_stop_pct %}de stop schuift mee tot {{ strategy.trailing_stop_pct|pct_limit }} onder het hoogste punt sinds instap{% if strategy.trailing_start_pct %}, zodra de winst eerst {{ strategy.trailing_start_pct|pct_limit }} was{% endif %}; hij gaat nooit omlaag{% else %}<span class="muted">niet ingesteld</span>{% endif %}</li>
-        <li class="hard"><span class="mark" aria-hidden="true">•</span>Take-profit: {% if strategy.take_profit_pct %}verkopen bij {{ strategy.take_profit_pct|pct_limit }} boven de instapkoers{% else %}<span class="muted">niet ingesteld; de verkoop volgt het signaal</span>{% endif %}</li>
+        <li class="hard"><span class="mark">{{ ui.icon("dot") }}</span>Stop-loss: {% if strategy.stop_loss_pct %}verkopen bij {{ strategy.stop_loss_pct|pct_limit }} onder de instapkoers{% else %}<span class="muted">niet ingesteld</span>{% endif %}</li>
+        <li class="hard"><span class="mark">{{ ui.icon("dot") }}</span>Trailing stop: {% if strategy.trailing_stop_pct %}de stop schuift mee tot {{ strategy.trailing_stop_pct|pct_limit }} onder het hoogste punt sinds instap{% if strategy.trailing_start_pct %}, zodra de winst eerst {{ strategy.trailing_start_pct|pct_limit }} was{% endif %}; hij gaat nooit omlaag{% else %}<span class="muted">niet ingesteld</span>{% endif %}</li>
+        <li class="hard"><span class="mark">{{ ui.icon("dot") }}</span>Take-profit: {% if strategy.take_profit_pct %}verkopen bij {{ strategy.take_profit_pct|pct_limit }} boven de instapkoers{% else %}<span class="muted">niet ingesteld; de verkoop volgt het signaal</span>{% endif %}</li>
       </ul>
       <h4 class="plan-h">Verkoopsignaal: alle voorwaarden gelden</h4>
       <ul class="rules">
         {% for c in strategy.sell %}
-        <li class="{{ 'soft' if c.soft else 'hard' }}"><span class="mark" aria-hidden="true">{{ "~" if c.soft else "•" }}</span>{{ c|condition_nl|readable_condition(indicator_labels) }}</li>
+        <li class="{{ 'soft' if c.soft else 'hard' }}"><span class="mark">{{ ui.icon("tilde" if c.soft else "dot") }}</span>{{ c|condition_nl|readable_condition(indicator_labels) }}</li>
         {% endfor %}
       </ul>
       <p class="small">Bij een verkoopsignaal beslist Claude of hij verkoopt; zonder Claude volgt de bot het signaal. De noodstop houdt een verkoop op een verkoopsignaal niet tegen.</p>

@@ -590,7 +590,7 @@ async def test_a_refused_password_marks_the_field(api, monkeypatch):
     monkeypatch.setattr(main, "step_up_enabled", lambda request: True)
     page = (await api.get("/")).text
     assert 'name="current_password"' in page and 'aria-invalid="true"' not in page
-    wrong = [{"kind": "error", "text": "Order niet geplaatst: Het wachtwoord klopt niet."}]
+    wrong = [{"kind": "error", "text": "Order niet geplaatst. Het wachtwoord klopt niet."}]
     api.cookies.set(flash.COOKIE_NAME, flash.encode(wrong))
     page = (await api.get("/", headers=HTML)).text
     assert "Het wachtwoord klopt niet" in _order_card(page)

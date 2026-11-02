@@ -153,8 +153,10 @@ def test_checklist_marks_have_a_text_alternative():
             }
 
     html = _render("{{ ui.checks(d, legend=true) }}", d=Decision())
-    mark = '<span class="mark" aria-hidden="true">✗</span>'
-    assert mark + '<span class="visually-hidden">niet gehaald: </span>' in html
+    # UX-89: the marks are SVG icons (hidden from screen readers), not text glyphs.
+    assert "✗" not in html and "✓" not in html
+    cross = '<path d="M7 7l10 10M17 7L7 17"/></svg></span>'
+    assert cross + '<span class="visually-hidden">niet gehaald: </span>' in html
     assert "zacht filter, niet gehaald: </span>" in html and "gehaald: </span>rsi14 stijgt" in html
     assert 'class="checks-legend"' in html
 

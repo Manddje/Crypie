@@ -86,6 +86,7 @@
 
   <section class="card" id="berichten" aria-labelledby="berichten-title">
     {{ ui.card_header("Berichten", 2, meta=(n_total ~ (" nieuwsfeit" if n_total == 1 else " nieuwsfeiten") ~ " uit " ~ n_articles ~ (" bericht" if n_articles == 1 else " berichten") ~ " · laatste " ~ (hours ~ " uur" if hours != 72 else "3 dagen")), id="berichten-title") }}
+    {{ ui.flashes_here(request, "berichten") }}
     <div class="news-filters">
       <div class="segmented" role="group" aria-label="Telt mee in het sentiment">
         <a href="{{ filter_urls[''] }}"{% if not telt %} class="active" aria-current="true"{% endif %}>Alles<span class="count">{{ n_total }}</span></a>
@@ -136,9 +137,9 @@
     {% endfor %}
     {% if pages > 1 %}
     <nav class="pager" aria-label="Pagina's met berichten">
-      {% if newer_url %}<a class="btn btn-sm" href="{{ newer_url }}" rel="prev"><span aria-hidden="true">‹ </span>Nieuwer</a>{% endif %}
+      {% if newer_url %}<a class="btn btn-sm" href="{{ newer_url }}" rel="prev">{{ ui.icon("chevron-left", "link-chevron") }}Nieuwer</a>{% endif %}
       <span class="small muted">{{ first }}–{{ last }} van {{ n_shown }} · pagina {{ page }} van {{ pages }}</span>
-      {% if older_url %}<a class="btn btn-sm" href="{{ older_url }}" rel="next">Ouder<span aria-hidden="true"> ›</span></a>{% endif %}
+      {% if older_url %}<a class="btn btn-sm" href="{{ older_url }}" rel="next">Ouder{{ ui.icon("chevron", "link-chevron") }}</a>{% endif %}
     </nav>
     {% endif %}
     {% elif n_total == 0 %}

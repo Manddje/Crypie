@@ -61,6 +61,23 @@ FIELD_NL = {
     "hours": "uren",
     "days": "dagen",
     "telt": "filter",
+    "position_id": "het nummer van de trade",
+    "evaluation_id": "het nummer van de evaluatie",
+    "page": "het paginanummer",
+    "period": "de periode",
+    "interval": "het interval",
+    "view": "de weergave",
+    "mode": "de modus",
+    "base_version": "de versie van de strategie",
+    "strategy_json": "de strategie",
+    "description": "de omschrijving",
+    "order_token": "het formulier",
+    "sell_all": "hele positie verkopen",
+    "current_password": "het wachtwoord",
+    "result": "het resultaat",
+    "saved": "de melding",
+    "next": "het terugadres",
+    "next_url": "het terugadres",
 }
 _JOURNAL_NOTE_RE = re.compile(r"^/journal/([0-9]{1,10})/note/?$")
 
@@ -168,7 +185,8 @@ def _validation_lines(exc: RequestValidationError) -> list[str]:
     lines = []
     for err in exc.errors()[:6]:
         loc = [str(p) for p in err.get("loc", ()) if p not in ("body", "query", "path")]
-        name = FIELD_NL.get(loc[-1], loc[-1]) if loc else "invoer"
+        # Never the internal parameter name in the Dutch text (an unknown one is 'een waarde').
+        name = FIELD_NL.get(loc[-1], "een waarde") if loc else "invoer"
         kind = str(err.get("type", ""))
         if kind == "missing":
             what = "ontbreekt"
@@ -319,6 +337,10 @@ async def login_disabled(request: Request, exc: LoginDisabled) -> Response:
 def server_error_response(request: Request) -> Response:
     if not wants_html(request):
         return JSONResponse({"detail": "Interne fout"}, status_code=500)
+    # This response is made outside FlashMiddleware, so it cannot clear the flash cookie:
+    # leave pending messages for the next page instead of showing them here and again there
+    # (a green 'gelukt' next to 'mogelijk niet uitgevoerd' would contradict itself too).
+    request.state.flashes = []
     return error_page(
         request,
         500,
