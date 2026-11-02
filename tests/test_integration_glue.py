@@ -150,3 +150,15 @@ async def test_strategy_page_points_to_the_proposal_handelen_shows(api):
         assert "Vorige strategie terugzetten" in strategy
     finally:
         _clean()
+
+
+def test_a_refused_key_has_one_reason_on_every_page():
+    """Overzicht (order card, balance notice, charts) names the same reason for a refused key
+    as the footer and Instellingen (KEY_PROBLEMS_NL), and stays general for an unknown code."""
+    from app.bitvavo.client import BitvavoError
+    from app.main import KEY_PROBLEMS_NL, _bitvavo_problem
+
+    text = _bitvavo_problem(BitvavoError(403, {"errorCode": 301, "error": "API Key length."}))
+    assert text == f"Bitvavo weigert de API-sleutel (fout 403): {KEY_PROBLEMS_NL[301]}"
+    text = _bitvavo_problem(BitvavoError(403, {"errorCode": 399, "error": "?"}))
+    assert text.startswith("Bitvavo weigert de API-sleutel (fout 403); controleer de sleutel")

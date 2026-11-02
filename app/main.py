@@ -3545,9 +3545,14 @@ def _order_problem_nl(text: str) -> str:
 def _bitvavo_problem(exc: BaseException) -> str:
     """What Bitvavo did, in Dutch: a refused key, a time-out or a failure each have their own
     text, so a refused key is never called 'niet bereikbaar'."""
-    if isinstance(exc, BitvavoError) and exc.status in (401, 403):
+    if isinstance(exc, BitvavoError) and (exc.status in (401, 403) or exc.code in KEY_PROBLEMS_NL):
         if "No Bitvavo API key" in str(exc):
             return "er is geen Bitvavo-sleutel ingesteld"
+        if exc.code in KEY_PROBLEMS_NL:
+            # The same reason the footer and Instellingen give for this refusal.
+            return (
+                f"Bitvavo weigert de API-sleutel (fout {exc.status}): {KEY_PROBLEMS_NL[exc.code]}"
+            )
         return (
             f"Bitvavo weigert de API-sleutel (fout {exc.status}); controleer de sleutel, de "
             "rechten 'bekijken' en 'handelen' en de IP-whitelist"
