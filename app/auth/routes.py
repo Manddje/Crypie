@@ -5,10 +5,12 @@ from __future__ import annotations
 import functools
 import ipaddress
 import logging
+import math
 import secrets
 import threading
 import time
-from urllib.parse import urlsplit
+from datetime import UTC, datetime, timedelta
+from urllib.parse import quote, urlsplit
 
 import segno
 from fastapi import APIRouter, Depends, Form, Request, Response
@@ -21,12 +23,14 @@ from app.auth.passwords import hash_password, needs_rehash, verify_password
 from app.auth.service import (
     MFA_SETUP_SECONDS,
     REAUTH_SECONDS,
+    RECOVERY_CODE_COUNT,
     STAGE_ONE_SECONDS,
     AuthService,
     validate_new_password,
 )
 from app.auth.session import COOKIE_NAME, LOGIN, REAUTH, SESSION, SessionData, cookie_name
 from app.db import AuthUser, SessionLocal, get_session
+from app.flash import add_flash, redirect_with_flash
 from app.web import templates
 
 log = logging.getLogger("crypie.auth")
@@ -168,13 +172,61 @@ def _account_key(user: AuthUser) -> str:
     return f"mfa:{user.account_id}"
 
 
+def _wait_text(wait: int) -> str:
+    """'29 seconden', '1 minuut', '15 minuten'."""
+    wait = max(int(wait), 1)
+    if wait < 60:
+        return f"{wait} seconden"
+    minutes = math.ceil(wait / 60)
+    return "1 minuut" if minutes == 1 else f"{minutes} minuten"
+
+
 def _wait_message(wait: int) -> str:
-    return f"Te veel mislukte pogingen. Probeer het over {max(wait, 1)} seconden opnieuw."
+    until = datetime.now(UTC) + timedelta(seconds=max(int(wait), 1))
+    return (
+        f"Te veel mislukte pogingen. Probeer het over {_wait_text(wait)} opnieuw "
+        f"(om {until:%H:%M} UTC)."
+    )
+
+
+def _attempts_note(auth: AuthService, db: Session, key: str) -> str:
+    """After a wrong password or code: the wait that starts now, or a warning when only one or
+    two attempts are left before it does."""
+    wait = auth.throttle.blocked_for(db, key)
+    if wait:
+        return " " + _wait_message(wait)
+    left = auth.throttle.max_failures - auth.throttle.failures(db, key)
+    if 0 < left <= 2:
+        word = "poging" if left == 1 else "pogingen"
+        return f" Nog {left} {word}; daarna moet je even wachten."
+    return ""
+
+
+# Why the login page is shown again (a flash on /login).
+EXPIRED_GET = (
+    "Je bent uitgelogd: je sessie is verlopen of elders beëindigd. Log opnieuw in; daarna ga je "
+    "verder waar je was."
+)
+EXPIRED_POST = (
+    "Je sessie is verlopen; je wijziging is niet opgeslagen. Log opnieuw in; daarna kom je "
+    "terug op de pagina en kun je het opnieuw proberen."
+)
+STAGE_EXPIRED = (
+    "Het inloggen duurde te lang: tussen wachtwoord en code mogen maximaal "
+    f"{STAGE_ONE_SECONDS // 60} minuten zitten. Log opnieuw in."
+)
+LOGGED_OUT = "Je bent uitgelogd."
+LOCKED_OUT_HELP = (
+    "Weet je het zeker en wil je niet wachten? Op de server heft python -m app.auth "
+    "clear-throttle de blokkade op."
+)
+LOGGED_OUT_EVERYWHERE = "Je bent overal uitgelogd: elke browser moet opnieuw inloggen."
 
 
 def _page(request: Request, name: str, status: int = 200, **ctx) -> HTMLResponse:
     ctx.setdefault("settings", request.app.state.settings)
     ctx.setdefault("error", None)
+    ctx.setdefault("stage_minutes", STAGE_ONE_SECONDS // 60)
     return templates.TemplateResponse(request, name, ctx, status_code=status)
 
 
@@ -213,7 +265,19 @@ async def require_login(request: Request, call_next):
     if _wants_json(request):
         return JSONResponse({"detail": "Niet ingelogd"}, status_code=401)
     target = path + (f"?{request.url.query}" if request.url.query else "")
-    return RedirectResponse(f"/login?next={target}" if target != "/" else "/login", status_code=303)
+    response = RedirectResponse(
+        f"/login?next={_next_param(target)}" if target != "/" else "/login", status_code=303
+    )
+    if _read_cookie(request, COOKIE_NAME) and session is None:
+        # There was a login, but it expired or was ended elsewhere: say so on /login, and that
+        # a form that was being sent did not go through.
+        add_flash(response, "warn", EXPIRED_POST if request.method == "POST" else EXPIRED_GET)
+    return response
+
+
+def _next_param(target: str) -> str:
+    """``target`` for a ?next= parameter: its own '&' and '#' must not end the parameter."""
+    return quote(target, safe="/?=")
 
 
 # -- first run: create the account ---------------------------------------------------------
@@ -230,7 +294,13 @@ def _setup_gate(
     key = _client_key(request)
     wait = auth.throttle.blocked_for(db, key)
     if wait:
-        return _page(request, "auth/setup_token.html", status=429, error=_wait_message(wait))
+        return _page(
+            request,
+            "auth/setup_token.html",
+            status=429,
+            error=_wait_message(wait),
+            hide_flashes=True,
+        )
     if token and secrets.compare_digest(token.encode(), auth.setup_token.encode()):
         return None
     if not auth.has_account(db):
@@ -243,8 +313,23 @@ def _setup_gate(
             "auth/setup_token.html",
             status=403,
             error="Deze setup-link klopt niet (meer). Neem de link uit de serverlogs.",
+            hide_flashes=True,
         )
-    return _page(request, "auth/setup_token.html", status=404)
+    return _page(request, "auth/setup_token.html", status=404, hide_flashes=True)
+
+
+def enrolment_unfinished(user: AuthUser | None) -> bool:
+    """An account made at /setup whose first authenticator was never linked: no authenticator,
+    never logged in, and no one-time enrol code from the server. Only then may the setup link
+    plus the password start the linking again (after 'Later koppelen' or the time limit);
+    once ``reset-mfa`` or ``create-account`` issued an enrol code, only that code works."""
+    return (
+        user is not None
+        and not user.totp_secret
+        and user.last_login_at is None
+        and not user.enrol_token_hash
+        and not user.recovery_codes
+    )
 
 
 @router.get("/setup", response_class=HTMLResponse)
@@ -257,6 +342,8 @@ async def setup_page(
     if (gate := _setup_gate(request, auth, db, token)) is not None:
         return gate
     if auth.has_account(db):
+        if enrolment_unfinished(auth.account(db)):
+            return _page(request, "auth/setup_resume.html", username="", token=token)
         return RedirectResponse("/login", status_code=303)
     return _page(request, "auth/setup.html", username="", token=token)
 
@@ -268,12 +355,16 @@ async def setup_submit(
     password: str = Form(""),
     password_repeat: str = Form(""),
     token: str = Form(""),
+    action: str = Form(""),
     auth: AuthService = Depends(get_auth),
     db: Session = Depends(get_session),
 ):
     if (gate := _setup_gate(request, auth, db, token)) is not None:
         return gate
     if auth.has_account(db):
+        user = auth.account(db)
+        if action == "resume" and enrolment_unfinished(user):
+            return await _resume_enrolment(request, auth, db, user, username, password, token)
         return RedirectResponse("/login", status_code=303)
     username = username.strip()
     error = None
@@ -298,6 +389,48 @@ async def setup_submit(
     log.warning("account %r created at /setup from %s", user.username, _client_key(request))
     response = RedirectResponse("/login/mfa/setup", status_code=303)
     # Having had the setup token is the proof that allows linking the first authenticator.
+    _set_cookie(
+        response, request, COOKIE_NAME, auth.stage_one_token(user, enrol=True), STAGE_ONE_SECONDS
+    )
+    return response
+
+
+async def _resume_enrolment(
+    request: Request,
+    auth: AuthService,
+    db: Session,
+    user: AuthUser,
+    username: str,
+    password: str,
+    token: str,
+) -> Response:
+    """Setup link plus password: link the first authenticator after all (see
+    enrolment_unfinished). Wrong passwords count like a wrong login."""
+    key = _client_key(request)
+
+    def again(status: int, error: str) -> HTMLResponse:
+        return _page(
+            request,
+            "auth/setup_resume.html",
+            status=status,
+            username=username[:64],
+            token=token,
+            error=error,
+        )
+
+    try:
+        ok = await _hashing(_verify, password, user.password_hash)
+    except _Busy:
+        return again(429, BUSY)
+    if not ok or not auth.username_matches(user, username):
+        auth.throttle.record_failure(db, key)
+        log.warning("wrong password to resume enrolment from %s", key)
+        return again(
+            401, "Gebruikersnaam of wachtwoord klopt niet." + _attempts_note(auth, db, key)
+        )
+    auth.throttle.reset(db, key)
+    log.warning("first enrolment of %s restarted with the setup link from %s", user.username, key)
+    response = RedirectResponse("/login/mfa/setup", status_code=303)
     _set_cookie(
         response, request, COOKIE_NAME, auth.stage_one_token(user, enrol=True), STAGE_ONE_SECONDS
     )
@@ -344,7 +477,7 @@ async def login_submit(
 
     wait = auth.throttle.blocked_for(db, key)
     if wait:
-        return again(429, _wait_message(wait))
+        return again(429, _wait_message(wait) + " " + LOCKED_OUT_HELP)
     user = auth.account(db)
     try:
         ok = await _hashing(_verify, password, user.password_hash if user else None)
@@ -353,7 +486,9 @@ async def login_submit(
     if user is None or not ok or not auth.username_matches(user, username):
         auth.throttle.record_failure(db, key)
         log.warning("failed login from %s", key)
-        return again(401, "Gebruikersnaam of wachtwoord klopt niet.")
+        return again(
+            401, "Gebruikersnaam of wachtwoord klopt niet." + _attempts_note(auth, db, key)
+        )
     if needs_rehash(user.password_hash):
         try:
             auth.store_rehash(db, user, await _hashing(hash_password, password))
@@ -362,12 +497,21 @@ async def login_submit(
             pass  # next time
     target = _safe_next(next)
     where = "/login/mfa" if user.mfa_enrolled else "/login/mfa/setup"
-    response = RedirectResponse(f"{where}?next={target}", status_code=303)
+    response = RedirectResponse(f"{where}?next={_next_param(target)}", status_code=303)
     _set_cookie(response, request, COOKIE_NAME, auth.stage_one_token(user), STAGE_ONE_SECONDS)
     return response
 
 
 # -- step 2: authenticator code ------------------------------------------------------------
+
+
+def _back_to_login(request: Request, next: str) -> RedirectResponse:
+    """The second step without a valid password step: back to /login, saying why when the
+    password step had simply expired."""
+    response = RedirectResponse(f"/login?next={_next_param(_safe_next(next))}", status_code=303)
+    if _read_cookie(request, COOKIE_NAME):
+        add_flash(response, "warn", STAGE_EXPIRED)
+    return response
 
 
 def _second_factor_wait(request: Request, auth: AuthService, db: Session, user: AuthUser) -> int:
@@ -392,7 +536,7 @@ async def mfa_page(
 ):
     user, session = current_session(request, auth, db)
     if user is None or session is None:
-        return RedirectResponse(f"/login?next={_safe_next(next)}", status_code=303)
+        return _back_to_login(request, next)
     if session.complete:
         return RedirectResponse(_safe_next(next), status_code=303)
     if not user.mfa_enrolled:
@@ -410,23 +554,39 @@ async def mfa_submit(
 ):
     user, session = current_session(request, auth, db)
     if user is None or session is None:
-        return RedirectResponse(f"/login?next={_safe_next(next)}", status_code=303)
+        return _back_to_login(request, next)
     if session.complete:
         return RedirectResponse(_safe_next(next), status_code=303)
     wait = _second_factor_wait(request, auth, db, user)
+    # A code with letters is a recovery code: show that field again after an error.
+    mode = "recovery" if any(c.isalpha() for c in code) else "app"
     if wait:
         return _page(
-            request, "auth/mfa.html", status=429, next=_safe_next(next), error=_wait_message(wait)
+            request,
+            "auth/mfa.html",
+            status=429,
+            next=_safe_next(next),
+            error=_wait_message(wait) + " " + LOCKED_OUT_HELP,
+            mode=mode,
         )
     kind = auth.check_second_factor(db, code)
     if kind is None:
         _second_factor_failed(request, auth, db, user)
+        error = (
+            "Deze herstelcode klopt niet of is al gebruikt."
+            if mode == "recovery"
+            else "De code klopt niet. Controleer de tijd op je telefoon en probeer het opnieuw."
+        )
+        note = _attempts_note(auth, db, _account_key(user)) or _attempts_note(
+            auth, db, _client_key(request)
+        )
         return _page(
             request,
             "auth/mfa.html",
             status=401,
             next=_safe_next(next),
-            error="De code klopt niet. Controleer de tijd op je telefoon en probeer het opnieuw.",
+            error=error + note,
+            mode=mode,
         )
     if kind == "recovery":
         log.warning("recovery code used for %s from %s", user.username, _client_key(request))
@@ -440,6 +600,15 @@ async def mfa_submit(
     auth.throttle.reset(db, _account_key(user))
     response = RedirectResponse(_safe_next(next), status_code=303)
     _set_cookie(response, request, COOKIE_NAME, auth.full_token(user), auth.session_seconds)
+    if kind == "recovery":
+        left = auth.recovery_codes_left(db)
+        add_flash(
+            response,
+            "warn" if left <= 2 else "info",
+            f"Je bent ingelogd met een herstelcode. Je hebt er nog {left} van "
+            f"{RECOVERY_CODE_COUNT}. Ben je je authenticator kwijt? Stel dan via Account een "
+            "nieuwe in; daar maak je ook nieuwe herstelcodes.",
+        )
     return response
 
 
@@ -453,10 +622,14 @@ def _render_setup(
     next: str,
     reenrol: bool,
     status: int = 200,
+    deadline: int | None = None,
     **ctx,
 ) -> HTMLResponse:
+    """``deadline`` (epoch seconds) is when the right to link ends: the password step of a
+    first enrolment, or the re-check on /account."""
     uri = totp.provisioning_uri(secret, user.username, issuer="Crypie")
     qr = segno.make(uri, error="m").svg_inline(scale=5, border=1, dark="#000", light=None)
+    left = max(int((deadline or 0) - time.time()), 0) if deadline else None
     return _page(
         request,
         "auth/mfa_setup.html",
@@ -466,15 +639,22 @@ def _render_setup(
         next=next,
         reenrol=reenrol,
         action="/account/mfa" if reenrol else "/login/mfa/setup",
+        deadline=datetime.fromtimestamp(deadline, UTC) if deadline else None,
+        minutes_left=math.ceil(left / 60) if left else None,
         **ctx,
     )
 
 
 def _new_candidate(
-    request: Request, auth: AuthService, user: AuthUser, next: str, reenrol: bool
+    request: Request,
+    auth: AuthService,
+    user: AuthUser,
+    next: str,
+    reenrol: bool,
+    deadline: int | None = None,
 ) -> HTMLResponse:
     secret = totp.new_secret()
-    response = _render_setup(request, user, secret, next, reenrol)
+    response = _render_setup(request, user, secret, next, reenrol, deadline=deadline)
     # The candidate secret travels in a signed cookie until the user confirms it with a code.
     _set_cookie(
         response,
@@ -496,14 +676,16 @@ async def mfa_setup_page(
     """First enrolment only; linking a new authenticator later goes through /account."""
     user, session = current_session(request, auth, db)
     if user is None or session is None:
-        return RedirectResponse(f"/login?next={_safe_next(next)}", status_code=303)
+        return _back_to_login(request, next)
     if session.complete:
         return RedirectResponse(_safe_next(next), status_code=303)
     if user.mfa_enrolled:
         return RedirectResponse(f"/login/mfa?next={_safe_next(next)}", status_code=303)
     if not session.extra.get("enrol"):
         return _page(request, "auth/enrol_token.html", next=_safe_next(next))
-    return _new_candidate(request, auth, user, _safe_next(next), reenrol=False)
+    return _new_candidate(
+        request, auth, user, _safe_next(next), reenrol=False, deadline=session.expires_at
+    )
 
 
 @router.post("/login/mfa/setup", response_class=HTMLResponse)
@@ -517,7 +699,7 @@ async def mfa_setup_submit(
 ):
     user, session = current_session(request, auth, db)
     if user is None or session is None:
-        return RedirectResponse(f"/login?next={_safe_next(next)}", status_code=303)
+        return _back_to_login(request, next)
     if session.complete:
         return RedirectResponse(_safe_next(next), status_code=303)
     if user.mfa_enrolled:
@@ -536,12 +718,19 @@ async def mfa_setup_submit(
             _safe_next(next),
             False,
             status=400,
+            deadline=session.expires_at,
             error="De code klopt niet. Controleer de tijd op je telefoon.",
         )
     auth.throttle.reset(db, _client_key(request))
     log.info("authenticator enrolled for %s", user.username)
     response = _page(
-        request, "auth/recovery_codes.html", codes=codes, next=_safe_next(next), fresh=True
+        request,
+        "auth/recovery_codes.html",
+        codes=codes,
+        next=_safe_next(next),
+        fresh=True,
+        first=True,
+        username=user.username,
     )
     _clear_cookie(response, request, SETUP_SECRET_COOKIE)
     _set_cookie(response, request, COOKIE_NAME, auth.full_token(user), auth.session_seconds)
@@ -584,12 +773,17 @@ def _account_page(
     request: Request, auth: AuthService, db: Session, status: int = 200, **ctx
 ) -> HTMLResponse:
     ctx.setdefault("message", None)
+    ctx.setdefault("form", None)
+    _, session = current_session(request, auth, db)
     return _page(
         request,
         "auth/account.html",
         status=status,
         user=auth.user(db),
         codes_left=auth.recovery_codes_left(db),
+        codes_total=RECOVERY_CODE_COUNT,
+        session_expires=datetime.fromtimestamp(session.expires_at, UTC) if session else None,
+        session_hours=auth.session_seconds // 3600,
         **ctx,
     )
 
@@ -632,39 +826,47 @@ async def account_action(
     if action == "logout_all":
         auth.revoke_sessions(db)
         log.warning("all sessions of %s revoked from %s", user.username, _client_key(request))
-        response = RedirectResponse("/login", status_code=303)
+        response = redirect_with_flash("/login", "info", LOGGED_OUT_EVERYWHERE)
         for name in (COOKIE_NAME, SETUP_SECRET_COOKIE, REAUTH_COOKIE):
             _clear_cookie(response, request, name)
         return response
     key = _client_key(request)
+    form = action if action in ("recovery", "reenrol", "password") else None
+
+    def failed(status: int, error: str, field: str = "password") -> HTMLResponse:
+        # The error belongs to the form that was sent: shown in its card, its field marked.
+        return _account_page(
+            request, auth, db, status=status, error=error, form=form, bad_field=field
+        )
+
     wait = auth.throttle.blocked_for(db, key)
     if wait:
-        return _account_page(request, auth, db, status=429, error=_wait_message(wait))
+        return failed(
+            429,
+            _wait_message(wait) + " Zolang de blokkade duurt, kun je ook niet opnieuw inloggen.",
+        )
     try:
         ok = await _hashing(verify_password, password, user.password_hash)
     except _Busy:
-        return _account_page(request, auth, db, status=429, error=BUSY)
+        return failed(429, BUSY)
     if not ok:
         auth.throttle.record_failure(db, key)
         log.warning("wrong password on /account from %s", key)
-        return _account_page(request, auth, db, status=401, error="Het wachtwoord klopt niet.")
+        return failed(401, "Het wachtwoord klopt niet." + _attempts_note(auth, db, key))
     auth.throttle.reset(db, key)
     if action in ("recovery", "reenrol"):
         # New recovery codes are a lasting second factor, like a new authenticator: both
         # need a current code too, so a stolen cookie plus the password is not enough.
         wait = _second_factor_wait(request, auth, db, user)
         if wait:
-            return _account_page(request, auth, db, status=429, error=_wait_message(wait))
+            return failed(429, _wait_message(wait), "code")
         kind = auth.check_second_factor(db, code)
         if kind is None:
             _second_factor_failed(request, auth, db, user)
-            return _account_page(
-                request,
-                auth,
-                db,
-                status=401,
-                error="De code klopt niet. Gebruik een code uit je authenticator-app of een "
-                "herstelcode.",
+            return failed(
+                401,
+                "De code klopt niet. Gebruik een code uit je authenticator-app of een herstelcode.",
+                "code",
             )
         auth.throttle.reset(db, _account_key(user))
         if kind == "recovery":
@@ -673,7 +875,12 @@ async def account_action(
         codes = auth.issue_recovery_codes(db)
         log.info("new recovery codes issued for %s", user.username)
         response = _page(
-            request, "auth/recovery_codes.html", codes=codes, next="/account", fresh=False
+            request,
+            "auth/recovery_codes.html",
+            codes=codes,
+            next="/account",
+            fresh=False,
+            username=user.username,
         )
         _reissue_session(response, request, auth, user, session)
         return response
@@ -684,11 +891,11 @@ async def account_action(
     if action == "password":
         error = validate_new_password(new_password, new_password_repeat)
         if error:
-            return _account_page(request, auth, db, status=400, error=error)
+            return failed(400, error, "new_password")
         try:
             hashed = await _hashing(hash_password, new_password)
         except _Busy:
-            return _account_page(request, auth, db, status=429, error=BUSY)
+            return failed(429, BUSY)
         auth.change_password(db, password_hash=hashed)
         log.warning("password changed for %s; other sessions logged out", user.username)
         response = _account_page(
@@ -696,6 +903,7 @@ async def account_action(
             auth,
             db,
             message="Je wachtwoord is gewijzigd. Andere browsers zijn uitgelogd.",
+            form="password",
         )
         _reissue_session(response, request, auth, user, session)
         return response
@@ -806,7 +1014,14 @@ async def account_mfa_submit(
             error="De code klopt niet. Controleer de tijd op je telefoon.",
         )
     log.warning("new authenticator linked for %s; other sessions logged out", user.username)
-    response = _page(request, "auth/recovery_codes.html", codes=codes, next="/account", fresh=True)
+    response = _page(
+        request,
+        "auth/recovery_codes.html",
+        codes=codes,
+        next="/account",
+        fresh=True,
+        username=user.username,
+    )
     _clear_cookie(response, request, SETUP_SECRET_COOKIE)
     _clear_cookie(response, request, REAUTH_COOKIE)
     _reissue_session(response, request, auth, user, session)
@@ -816,7 +1031,10 @@ async def account_mfa_submit(
 @router.post("/logout")
 async def logout(request: Request):
     """Logs out this browser; "Overal uitloggen" on /account ends every session."""
-    response = RedirectResponse("/login", status_code=303)
+    if getattr(request.app.state, "auth", None) is None:
+        response = RedirectResponse("/login", status_code=303)
+    else:
+        response = redirect_with_flash("/login", "info", LOGGED_OUT)
     for name in (COOKIE_NAME, SETUP_SECRET_COOKIE, REAUTH_COOKIE):
         _clear_cookie(response, request, name)
     return response

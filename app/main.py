@@ -33,6 +33,7 @@ from app.api_docs import redoc_page, swagger_page
 from app.auth.routes import (
     StepUpError,
     _safe_next,
+    enrolment_unfinished,
     require_current_password,
     require_login,
     step_up_attempts_left,
@@ -189,6 +190,13 @@ def build_auth(settings: Settings) -> AuthService | None:
         auth.ensure_account_id(session)
         if not auth.has_account(session):
             auth.log_setup_hint()
+        elif enrolment_unfinished(auth.user(session)):
+            # The first linking was never finished: the setup link plus the password restarts it.
+            log.warning(
+                "the account has no authenticator linked yet: open /setup?token=%s and log in "
+                "with the password to link one, or run: python -m app.auth reset-mfa",
+                "<SETUP_TOKEN>" if auth.setup_token_from_env else auth.setup_token,
+            )
         elif not auth.user(session).mfa_enrolled:
             log.warning("the account has no authenticator linked yet")
     return auth

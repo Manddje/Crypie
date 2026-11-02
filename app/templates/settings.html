@@ -192,7 +192,7 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
     <p class="settings-toc-title" aria-hidden="true">Op deze pagina</p>
     <ul>
       {% for g in groups %}
-      <li><a href="#{{ g.key }}" data-toc="{{ g.key }}">{{ g.title }}<span class="toc-dirty" data-toc-dirty{% if not g.unsaved %} hidden{% endif %}>· niet opgeslagen</span></a></li>
+      <li><a href="#{{ g.key }}" data-toc="{{ g.key }}">{{ g.title }}<span class="toc-dirty" data-toc-dirty{% if not g.unsaved %} hidden{% endif %}>niet opgeslagen</span></a></li>
       {% endfor %}
       <li><a href="#oefenportefeuille" data-toc="oefenportefeuille">Oefenportefeuille</a></li>
       <li><a href="#omgeving" data-toc="omgeving">Uit de omgeving</a></li>

@@ -1209,12 +1209,16 @@ footer.site {
 .settings-toc a { display: inline-flex; align-items: center; min-height: 32px; color: var(--accent); text-decoration: underline; text-underline-offset: 0.2em; }
 .settings-toc a[aria-current="true"] { color: var(--text); font-weight: 600; text-decoration: none; }
 .toc-dirty { color: var(--orange); font-weight: 500; white-space: nowrap; margin-left: 0.35em; }
+.toc-dirty::before { content: "· "; }
 @media (min-width: 1100px) {
   .settings-layout { grid-template-columns: 190px minmax(0, 1fr); gap: 32px; align-items: start; }
   .settings-toc { position: sticky; top: calc(var(--header-h) + var(--banner-h, 0px) + 16px); }
   .settings-toc ul { flex-direction: column; gap: 2px; }
   .settings-toc a { padding: 4px 0 4px 12px; margin-left: -14px; border-left: 2px solid transparent; }
   .settings-toc a[aria-current="true"] { border-left-color: var(--accent); }
+  .settings-toc a { flex-wrap: wrap; }
+  .toc-dirty { flex-basis: 100%; margin-left: 0; font-size: var(--fs-detail); }
+  .toc-dirty::before { content: none; }
 }
 
 /* A block: header, explanation, feedback where you land, then its parts and fields. */
@@ -1343,7 +1347,6 @@ footer.site .footer-alert { color: var(--red); font-weight: 500; }
   form.is-dirty .settings-actions { margin-left: -18px; margin-right: -18px; padding-left: 18px; padding-right: 18px; }
 }
 
-
 /* ==== Pagina: Inloggen en account ==== */
 /* Regels voor de inlogflow (auth/*.html) en de accountpagina. */
 
@@ -1353,13 +1356,23 @@ footer.site .footer-alert { color: var(--red); font-weight: 500; }
 .auth-brand svg { width: 32px; height: 32px; }
 .auth-card h1 { font-size: 24px; margin-bottom: 2px; }
 .auth-sub { color: var(--text-2); font-size: var(--fs-help); margin-bottom: 18px; }
+/* An error or flash keeps its distance from the text below it. */
+.auth-card > .notice { margin-bottom: 12px; }
 .auth-form { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
 .auth-form input { width: 100%; }
 .auth-form .actions { margin-top: 2px; }
 .code-input { font-family: var(--mono); font-size: 22px; letter-spacing: 0.25em; text-align: center; }
+/* Recovery and server codes: letters too, and longer, so less spacing. */
+.code-input--text { font-size: 18px; letter-spacing: 0.08em; }
 @media (max-width: 640px) {
   input.code-input { font-size: 22px; }
+  input.code-input--text { font-size: 18px; }
 }
+.auth-note { margin: 0 0 12px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--text); font-size: var(--fs-detail); }
+.auth-meta { color: var(--text-2); font-size: var(--fs-detail); margin-top: 12px; }
+.auth-deadline { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 14px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--orange-tint); color: var(--text); font-size: var(--fs-detail); }
+.auth-deadline .icon { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--orange); }
+.auth-commands { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
 .auth-steps { margin: 0 0 14px 20px; color: var(--text-2); font-size: var(--fs-help); line-height: 1.5; }
 .auth-steps li + li { margin-top: 6px; }
 .qr { display: flex; justify-content: center; padding: 14px; border-radius: var(--radius-sm); background: #fff; color: #000; }
@@ -1367,10 +1380,33 @@ footer.site .footer-alert { color: var(--red); font-weight: 500; }
 .auth-details { margin-top: 14px; font-size: var(--fs-help); }
 .auth-details summary { color: var(--accent); }
 .auth-details p { margin-top: 8px; }
+.auth-details .auth-form { margin-top: 10px; }
 .auth-secret { font-size: var(--fs-body); letter-spacing: 0.08em; word-break: break-all; user-select: all; }
 .recovery-codes { list-style: none; padding: 0; margin: 14px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .recovery-codes li { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--fill); font-size: var(--fs-body); text-align: center; user-select: all; }
+.recovery-status { min-height: 1.4em; margin-top: 8px; font-size: var(--fs-detail); color: var(--text-2); }
+.recovery-done { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--hairline); }
 .auth-below { display: flex; justify-content: center; }
+
+/* Account: status, security changes in sections you open, the destructive ones marked red. */
+.account-action { border-top: 1px solid var(--hairline); padding: 4px 0; }
+.account-action:last-child { border-bottom: 1px solid var(--hairline); }
+.account-action > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 12px 0; cursor: pointer; }
+.account-action-title { font-size: var(--fs-body); font-weight: 600; }
+.account-action-note { color: var(--text-2); font-size: var(--fs-detail); }
+.account-action--danger .account-action-note { color: var(--red); }
+.account-action[open] { padding-bottom: 16px; }
+.account-action .notice { margin-bottom: 12px; }
+.account-action .auth-form { max-width: 420px; }
+.account-danger { box-shadow: inset 4px 0 0 var(--red-fill), var(--shadow-sm); }
+
+/* Printing the recovery codes: only the codes and their title. */
+@media print {
+  .auth-body { display: block; min-height: 0; background: #fff; color: #000; }
+  .auth-brand svg, .auth-card > .notice, .recovery-actions, .recovery-status, .recovery-done, .auth-below { display: none !important; }
+  .auth-card { box-shadow: none; border: 0; }
+  .recovery-codes li { background: none; border: 1px solid #000; color: #000; }
+}
 
 /* ==== 9. Toegankelijkheid ==== */
 
