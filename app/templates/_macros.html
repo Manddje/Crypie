@@ -135,7 +135,7 @@
   {#- The planner (orange when it seems stalled) and the stop-loss watch (red when it is
       behind: open positions are not guarded then). -#}
   <p class="status-meta">
-    <span{% if health.stale %} class="is-late"{% endif %}>Laatste cyclus {{ health.last_cycle|ago }}{% if health.next_cycle %} · volgende {{ health.next_cycle|dt }} ({{ health.next_cycle|ago }}){% elif health.enabled is defined and not health.enabled %} · alleen als je er zelf een start{% endif %}</span>
+    <span{% if health.stale %} class="is-late"{% endif %}>Laatste cyclus {{ health.last_cycle|ago }}{% if health.next_cycle %} · volgende {{ health.next_cycle|dt }} ({{ health.next_cycle|until }}){% elif health.enabled is defined and not health.enabled %} · alleen als je er zelf een start{% endif %}</span>
     <span{% if not health.exits_ok %} class="is-bad"{% endif %}>Bewaking stop-loss/take-profit: {% if health.last_exit_ok %}laatst gelukt {{ health.last_exit_ok|ago }}{% elif health.exits_ok %}wacht op de eerste controle{% else %}nog niet gelukt{% endif %}{% if health.exit_interval_min %} (elke {{ health.exit_interval_min }} min){% endif %}{% if not health.exits_ok %} · loopt achter{% endif %}</span>
   </p>
   {% endif %}

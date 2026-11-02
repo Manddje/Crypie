@@ -201,7 +201,8 @@
     each("[data-ts]", function (el) {
       var d = parseMoment(el);
       if (!d) return;
-      var text = relative(d, now);
+      // A planned moment (data-ahead, e.g. the next cycle) reads "nu" once it is due.
+      var text = el.hasAttribute("data-ahead") && d.getTime() - now < 60000 ? "nu" : relative(d, now);
       if (el.textContent !== text) el.textContent = text;
       if (el.tagName === "TIME" && el.getAttribute("title") && !el.hasAttribute("data-localised")) {
         el.setAttribute("title", localText(d, false));

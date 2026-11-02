@@ -21,6 +21,8 @@ from app.web import (
     price,
     price_eur,
     time_html,
+    until,
+    until_html,
 )
 
 
@@ -49,6 +51,17 @@ def test_dates_and_relative_time():
     assert ago(datetime(2026, 10, 31, 8, 0, tzinfo=UTC), now) == "4 uur geleden"
     assert ago(datetime(2026, 10, 30, 8, 0, tzinfo=UTC), now) == "gisteren"
     assert ago(None) == "nog niet"
+
+
+def test_planned_moment_reads_nu_once_due():
+    """The next cycle is planned: once due it reads 'nu', never 'zojuist' or 'geleden'."""
+    now = datetime(2026, 10, 31, 12, 0, tzinfo=UTC)
+    assert until(now, now) == "nu"
+    assert until(datetime(2026, 10, 31, 11, 0, tzinfo=UTC), now) == "nu"
+    assert until(datetime(2026, 10, 31, 12, 45, tzinfo=UTC), now) == "over 45 min"
+    assert until(None) == "nog niet"
+    html = str(until_html(now, now))
+    assert "data-ahead" in html and ">nu</time>" in html
 
 
 def test_labels_and_strategy_in_words():

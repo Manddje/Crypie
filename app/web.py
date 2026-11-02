@@ -33,7 +33,7 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 # Bumped whenever app.css or a script in /static changes so browsers pick up the new file.
-ASSET_VERSION = "16"
+ASSET_VERSION = "17"
 
 NBSP = " "  # between the euro sign and the amount, so '€ 1.000,00' never breaks
 
@@ -383,6 +383,27 @@ def ago_html(value: datetime | None, now: datetime | None = None) -> Html:
     )
 
 
+def until(value: datetime | None, now: datetime | None = None) -> str:
+    """Like ago(), for a moment that is planned ('volgende cyclus'): once it is due it reads
+    'nu', never 'zojuist' or 'x min geleden'."""
+    moment = _as_utc(value)
+    if moment is None:
+        return ago(None)
+    now = now or datetime.now(UTC)
+    return "nu" if (moment - now).total_seconds() < 60 else ago(moment, now)
+
+
+def until_html(value: datetime | None, now: datetime | None = None) -> Html:
+    """ago_html() for a planned moment: app.js keeps it up to date and shows 'nu' once due."""
+    moment = _as_utc(value)
+    if moment is None:
+        return Html(_esc(ago(None)))
+    return Html(
+        f'<time datetime="{_iso(moment)}" data-ts data-ahead title="{_esc(dt(moment))}">'
+        f"{_esc(until(moment, now))}</time>"
+    )
+
+
 # -- Markdown (untrusted text from Claude) -----------------------------------------------------
 # Escape first, then turn a small safe subset into HTML: headings, paragraphs, lists, bold and
 # italic. Links, images, code and raw HTML stay plain text, because the reports partly rest on
@@ -690,6 +711,7 @@ templates.env.filters.update(
         "isodt": time_html,
         "ts": time_html,
         "ago": ago_html,
+        "until": until_html,
         "dt_text": dt,
         "ago_text": ago,
         "md": md,
