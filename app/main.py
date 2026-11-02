@@ -9,7 +9,7 @@ import re
 import time
 import weakref
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 from urllib.parse import urlencode
 
@@ -34,7 +34,6 @@ from app.ai.strategy_assistant import StrategyAssistant
 from app.api_docs import redoc_page, swagger_page
 from app.auth.routes import (
     StepUpError,
-    _safe_next,
     require_current_password,
     require_login,
     step_up_enabled,
@@ -85,7 +84,7 @@ from app.strategy.model import (
     use_problems,
 )
 from app.strategy.store import STRATEGY_KEY, load_strategy, load_strategy_checked, save_strategy
-from app.trading import risk
+from app.trading import display, risk
 from app.trading.engine import (
     EXCHANGE_MIN_ORDER_EUR,
     NEWS_ENTRY_MIN_SCORE,
@@ -1505,9 +1504,71 @@ def _proposal_guard_problems(current: Strategy, proposal: Strategy, ev: Evaluati
     return problems
 
 
+def _proposal_problems(ev: Evaluation, current: Strategy, settings: Settings) -> list[str]:
+    """Why an evaluation's proposal cannot be applied as it is (empty: it can)."""
+    if not ev.proposed_strategy:
+        return []
+    proposal = _proposal(ev)
+    if proposal is None:
+        return ["het voorstel is geen geldige strategie"]
+    problems = use_problems(proposal)
+    if proposal.market not in settings.markets:
+        problems.append(f"{proposal.market} staat niet in MARKETS")
+    return problems + _proposal_guard_problems(current, proposal, ev)
+
+
+# The strategy that was active before each applied proposal (newest last), so the page can show
+# what an applied proposal changed and the owner can put the previous strategy back.
+APPLIED_PROPOSALS_KEY = "strategy:applied_proposals"
+APPLIED_PROPOSALS_KEEP = 10
+
+
+def _applied_history(session: Session) -> list[dict]:
+    row = session.get(Setting, APPLIED_PROPOSALS_KEY)
+    if row is None:
+        return []
+    try:
+        data = json.loads(row.value)
+    except ValueError:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [e for e in data if isinstance(e, dict) and isinstance(e.get("evaluation_id"), int)]
+
+
+def _belongs_to(entry: dict | None, ev: Evaluation | None) -> bool:
+    """Whether a history entry is about this evaluation (same id and the same moment, so an
+    entry never sticks to a new evaluation that reuses the id of a deleted one)."""
+    if entry is None or ev is None or entry.get("evaluation_id") != ev.id or not ev.created_at:
+        return False
+    created = _parse_moment(entry.get("evaluation_at"))
+    own = ev.created_at if ev.created_at.tzinfo else ev.created_at.replace(tzinfo=UTC)
+    return created is not None and abs((created - own).total_seconds()) < 1
+
+
+def _store_applied_history(session: Session, entries: list[dict]) -> None:
+    """Stage the history in the session; the caller commits."""
+    payload = json.dumps(entries[-APPLIED_PROPOSALS_KEEP:], ensure_ascii=False)
+    row = session.get(Setting, APPLIED_PROPOSALS_KEY)
+    if row is None:
+        session.add(Setting(key=APPLIED_PROPOSALS_KEY, value=payload))
+    else:
+        row.value = payload
+
+
+def _previous_strategy(entry: dict | None) -> Strategy | None:
+    if not entry or not isinstance(entry.get("previous"), dict):
+        return None
+    try:
+        return Strategy.model_validate(entry["previous"])
+    except ValidationError:
+        return None
+
+
 def _apply_proposal(request: Request, session: Session, evaluation_id: int) -> Strategy:
     """Make an evaluation's proposal the active strategy, with the same checks as a save via
-    the API or the strategy page. Raises ProposalError."""
+    the API or the strategy page. The strategy it replaces is kept, so it can be put back.
+    Raises ProposalError."""
     ev = session.get(Evaluation, evaluation_id)
     if ev is None or not ev.proposed_strategy:
         raise ProposalError(404, "Evaluatie of voorstel niet gevonden.")
@@ -1522,14 +1583,61 @@ def _apply_proposal(request: Request, session: Session, evaluation_id: int) -> S
         check_for_use(strategy)
     except ValueError as exc:
         raise ProposalError(400, str(exc)) from exc
-    guard = _proposal_guard_problems(load_strategy(session), strategy, ev)
+    current, load_warning = load_strategy_checked(session)
+    guard = _proposal_guard_problems(current, strategy, ev)
     if guard:
         message = "; ".join(guard)
         raise ProposalError(400, message[0].upper() + message[1:] + ".")
-    save_strategy(session, strategy)
+    history = _applied_history(session)
+    history.append(
+        {
+            "evaluation_id": ev.id,
+            "evaluation_at": ev.created_at.isoformat() if ev.created_at else None,
+            "applied_at": datetime.now(UTC).isoformat(),
+            # An unusable stored strategy is not offered back (the default stood in for it).
+            "previous": None if load_warning else current.model_dump(mode="json"),
+            "reverted_at": None,
+        }
+    )
+    _store_applied_history(session, history)
     ev.applied = True
-    session.commit()
+    save_strategy(session, strategy)  # commits the strategy, the history and ev.applied
     return strategy
+
+
+def _revert_proposal(request: Request, session: Session, evaluation_id: int) -> Strategy:
+    """Put back the strategy that was active before this evaluation's proposal was applied.
+    Only for the most recently applied proposal, and only while it is still the active
+    strategy: an older tab must not undo a later change. Raises ProposalError."""
+    ev = session.get(Evaluation, evaluation_id)
+    history = _applied_history(session)
+    entry = history[-1] if history else None
+    if ev is None or not ev.applied or not _belongs_to(entry, ev):
+        raise ProposalError(
+            409, "Terugzetten kan alleen bij het laatst toegepaste voorstel van Claude."
+        )
+    if entry.get("reverted_at"):
+        raise ProposalError(409, "De vorige strategie is al teruggezet.")
+    previous = _previous_strategy(entry)
+    if previous is None:
+        raise ProposalError(409, "De vorige strategie is niet bewaard en kan niet terug.")
+    proposal = _proposal(ev)
+    if proposal is None or load_strategy(session).model_dump() != proposal.model_dump():
+        raise ProposalError(
+            409,
+            "De strategie is na het toepassen nog gewijzigd; terugzetten zou die wijziging "
+            "ongedaan maken. Pas de strategie zo nodig aan op de strategiepagina.",
+        )
+    if previous.market not in request.app.state.settings.markets:
+        raise ProposalError(400, f"{previous.market} staat niet meer in MARKETS.")
+    try:
+        check_for_use(previous)
+    except ValueError as exc:
+        raise ProposalError(400, str(exc)) from exc
+    entry["reverted_at"] = datetime.now(UTC).isoformat()
+    _store_applied_history(session, history)
+    save_strategy(session, previous)  # commits both
+    return previous
 
 
 @app.post("/api/evaluations/{evaluation_id}/apply")
@@ -1545,61 +1653,168 @@ async def apply_evaluation(
     return {"applied": True, "strategy": strategy.model_dump()}
 
 
-def _trading_context(
-    request: Request, engine: TradingEngine, session: Session, error: str | None = None
-) -> dict:
-    settings: Settings = request.app.state.settings
+def _evaluation_rows(session: Session, settings: Settings, current: Strategy) -> list[dict]:
+    """The last evaluations for the page: what applying a proposal would change (or, once
+    applied, what it changed), why it cannot be applied, and whether it can be undone."""
     evaluations = session.scalars(select(Evaluation).order_by(Evaluation.id.desc()).limit(5)).all()
-    strategy = load_strategy(session)
-    last_cycle = latest_decisions(session, engine.mode, list(engine.markets))
-    evaluation_rows = []
+    applied = _applied_history(session)
+    latest = applied[-1] if applied else None
+    rows = []
     for e in evaluations:
         row = _evaluation_dict(e)
+        row["model_nl"] = display.model_name_nl(e.model)
         proposal = _proposal(e)
-        # What applying would change, and why it cannot be applied (shown on the card).
-        row["diff"] = strategy_diff(strategy, proposal) if proposal is not None else []
-        if e.proposed_strategy and proposal is None:
-            row["problems"] = ["het voorstel is geen geldige strategie"]
+        row["proposal_name"] = proposal.name if proposal is not None else None
+        row["problems"] = _proposal_problems(e, current, settings)
+        row["diff"] = None
+        row["applied_at"] = row["reverted_at"] = row["previous_name"] = None
+        row["can_revert"] = row["revert_blocked"] = False
+        if proposal is not None and not e.applied:
+            # What applying would change.
+            row["diff"] = strategy_diff(current, proposal)
         elif proposal is not None:
-            row["problems"] = use_problems(proposal)
-            if proposal.market not in settings.markets:
-                row["problems"].append(f"{proposal.market} staat niet in MARKETS")
-            row["problems"] += _proposal_guard_problems(strategy, proposal, e)
-        else:
-            row["problems"] = []
-        evaluation_rows.append(row)
+            entry = next((h for h in reversed(applied) if _belongs_to(h, e)), None)
+            previous = _previous_strategy(entry)
+            if entry is not None:
+                row["applied_at"] = _parse_moment(entry.get("applied_at"))
+                row["reverted_at"] = _parse_moment(entry.get("reverted_at"))
+            if previous is not None:
+                # What it changed, compared with the strategy it replaced.
+                row["diff"] = strategy_diff(previous, proposal)
+                row["previous_name"] = previous.name
+                if entry is latest and not entry.get("reverted_at"):
+                    still_active = current.model_dump() == proposal.model_dump()
+                    row["can_revert"] = still_active
+                    row["revert_blocked"] = not still_active
+        rows.append(row)
+    return rows
+
+
+def _parse_moment(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
+# How long a just applied proposal stays at the top of Handelen (with its undo button).
+RECENTLY_APPLIED = timedelta(hours=24)
+
+
+def _trading_context(
+    request: Request,
+    engine: TradingEngine,
+    session: Session,
+    *,
+    view: str = "important",
+    market: str | None = None,
+    page: int = 1,
+) -> dict:
+    settings: Settings = request.app.state.settings
+    strategy = load_strategy(session)
+    labels = display.indicator_labels(strategy)
+    last_cycle = latest_decisions(session, engine.mode, list(engine.markets))
+    evaluation_rows = _evaluation_rows(session, settings, strategy)
+    now = datetime.now(UTC)
+    # At the top of the page: the newest proposal that waits for the owner, or else the one
+    # that was just applied (so its changes and the way back are where the owner looks).
+    featured = next(
+        (r for r in evaluation_rows if r["proposed_strategy"] and not r["applied"]),
+        None,
+    )
+    if featured is not None and featured["problems"]:
+        featured = None  # cannot be applied: shown with the reason under Evaluaties only
+    if featured is None:
+        featured = next(
+            (
+                r
+                for r in evaluation_rows
+                if r["can_revert"] and r["applied_at"] and now - r["applied_at"] < RECENTLY_APPLIED
+            ),
+            None,
+        )
     status = _trading_status(engine, session, settings)
     figures = risk_now(engine, session, settings)
+    prices = engine.last_prices or {}
+    claude_ok = engine.evaluator.available
+    next_evaluation = None
+    if claude_ok and settings.trading_enabled and settings.evaluation_interval_hours > 0:
+        last_eval = _load_last_run("evaluation")
+        if last_eval is not None:
+            next_evaluation = max(
+                last_eval + timedelta(hours=settings.evaluation_interval_hours), now
+            )
     return {
         "settings": settings,
         "status": status,
         # One status for the hero (app/trading/health.py) and the limits as current figures.
         "health": _health(request, engine, session, figures=figures, paused=status["paused"]),
         "risk_now": figures,
-        "open_positions": open_positions(session, engine.mode),
+        "positions": [
+            display.position_view(p, prices.get(p.market), engine.fee_pct)
+            for p in open_positions(session, engine.mode)
+        ],
+        "prices_at": engine.last_prices_at if prices else None,
         "closed_positions": closed_positions(session, engine.mode)[:20],
-        "decisions": recent_decisions(
-            session, engine.mode, limit=5000, days=settings.decision_history_days
+        "cycles": display.cycle_log(
+            session,
+            engine.mode,
+            days=settings.decision_history_days,
+            view=view,
+            market=market,
+            page=page,
+            markets=list(engine.markets),
+            labels=labels,
         ),
-        "last_cycle": last_cycle,
+        "last_cycle": [display.decision_view(d, labels) for d in last_cycle],
         "levels": {d.id: levels_summary(strategy, d.indicator_values()) for d in last_cycle},
         "evaluations": evaluation_rows,
-        "error": error,
+        "featured": featured,
+        "strategy_name": strategy.name,
+        "evaluation_model_nl": display.model_name_nl(settings.claude_model_evaluation),
+        "evaluation_available": claude_ok,
+        "next_evaluation": next_evaluation,
     }
 
 
 @app.get("/trading", response_class=HTMLResponse)
 async def trading_page(
     request: Request,
+    view: Literal["important", "all"] = Query("important"),
+    market: str | None = Query(None, max_length=16, pattern=r"^[A-Z0-9]{1,15}-[A-Z]{2,5}$"),
+    page: int = Query(1, ge=1, le=100_000),
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
     return templates.TemplateResponse(
-        request, "trading.html", _trading_context(request, engine, session)
+        request,
+        "trading.html",
+        _trading_context(request, engine, session, view=view, market=market, page=page),
     )
 
 
 APPLY_ACTION_RE = re.compile(r"apply:([0-9]{1,9})")
+REVERT_ACTION_RE = re.compile(r"revert:([0-9]{1,9})")
+# Where /trading/action may send the browser back to (the hidden field "next").
+TRADING_ACTION_NEXT = ("/", "/trading")
+
+
+def _trading_next(value: str) -> str:
+    """Overzicht and Handelen only; no value means Handelen, anything else Overzicht."""
+    if not value:
+        return "/trading"
+    return value if value in TRADING_ACTION_NEXT else "/"
+
+
+def _action_refused(request: Request, back: str, status: int, text: str) -> RedirectResponse:
+    """A refused action: back to the page with the reason (browsers), or the status code with
+    the reason as detail (scripts and API clients)."""
+    if errors.wants_html(request):
+        return flash.redirect_with_flash(back, "error", text)
+    raise HTTPException(status, text)
 
 
 @app.post("/trading/action")
@@ -1610,30 +1825,82 @@ async def trading_action(
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
-    """Kill switch, cycle, evaluation and proposals. ``next`` (from the kill-switch macro) is
-    the page to return to; only paths on this site are followed."""
+    """Kill switch, cycle, evaluation and proposals. Every outcome is a redirect with a message
+    (Post/Redirect/Get). ``next`` (the kill-switch macro, Overzicht) is the page to return to:
+    "/" or "/trading"."""
+    back = _trading_next(next_url)
     if action == "pause":
         risk.set_paused(session, True)
-    elif action == "resume":
+        return flash.redirect_with_flash(back, "ok", display.PAUSED_FLASH)
+    if action == "resume":
         risk.set_paused(session, False)
-    elif action == "cycle":
-        await engine.run_cycle(session)
-    elif action == "evaluate" and engine.evaluator.available:
+        return flash.redirect_with_flash(back, "ok", display.RESUMED_FLASH)
+    if action == "cycle":
         try:
-            await engine.run_evaluation(session)
+            results = await engine.run_cycle(session)
+        except BitvavoError as exc:
+            if not errors.wants_html(request):
+                raise
+            text = errors.bitvavo_text(exc)
+            return flash.redirect_with_flash(
+                back,
+                "error",
+                f"Cyclus niet gedraaid: {text} De automatische cyclus probeert het later opnieuw.",
+            )
+        kind, text = display.cycle_flash(results)
+        return flash.redirect_with_flash(back, kind, text)
+    if action == "evaluate":
+        if not engine.evaluator.available:
+            return _action_refused(
+                request,
+                "/trading",
+                409,
+                "Evalueren kan niet: de Claude-sleutel ontbreekt (ANTHROPIC_API_KEY in de "
+                "serveromgeving).",
+            )
+        try:
+            ev = await engine.run_evaluation(session)
         except EvaluationBusy as exc:
-            ctx = _trading_context(request, engine, session, error=str(exc))
-            return templates.TemplateResponse(request, "trading.html", ctx, status_code=409)
-    elif action.startswith("apply:"):
-        match = APPLY_ACTION_RE.fullmatch(action)
-        if match is None:
-            raise HTTPException(400, "Ongeldig voorstel: verwacht apply:<nummer>.")
-        try:
-            _apply_proposal(request, session, int(match.group(1)))
-        except ProposalError as exc:
-            ctx = _trading_context(request, engine, session, error=exc.message)
-            return templates.TemplateResponse(request, "trading.html", ctx, status_code=exc.status)
-    return RedirectResponse(_safe_next(next_url) if next_url else "/trading", status_code=303)
+            return _action_refused(request, "/trading", 409, str(exc))
+        except BudgetExceeded as exc:
+            return _action_refused(request, "/trading", 429, f"Evaluatie niet gestart: {exc}")
+        except RuntimeError as exc:
+            return _action_refused(request, "/trading", 502, f"Evaluatie mislukt: {exc}")
+        proposal = _proposal(ev)
+        if proposal is None:
+            text = "Evaluatie klaar. Claude stelt deze keer geen andere strategie voor."
+        elif _proposal_problems(ev, load_strategy(session), request.app.state.settings):
+            text = (
+                f"Evaluatie klaar. Claude stelt de strategie '{proposal.name}' voor, maar die "
+                "kan zo niet worden toegepast; de reden staat bij Evaluaties."
+            )
+        else:
+            text = (
+                f"Evaluatie klaar. Claude stelt de strategie '{proposal.name}' voor; het "
+                "voorstel staat bovenaan deze pagina."
+            )
+        return flash.redirect_with_flash("/trading", "ok", text)
+    to_apply = APPLY_ACTION_RE.fullmatch(action)
+    to_revert = REVERT_ACTION_RE.fullmatch(action)
+    if action.startswith("apply:") and to_apply is None:
+        raise HTTPException(400, "Ongeldig voorstel: verwacht apply:<nummer>.")
+    if action.startswith("revert:") and to_revert is None:
+        raise HTTPException(400, "Ongeldig voorstel: verwacht revert:<nummer>.")
+    if to_apply is None and to_revert is None:
+        raise HTTPException(400, "Onbekende actie.")
+    try:
+        if to_apply is not None:
+            strategy = _apply_proposal(request, session, int(to_apply.group(1)))
+            text = f"Strategie '{strategy.name}' is nu actief."
+        else:
+            strategy = _revert_proposal(request, session, int(to_revert.group(1)))
+            text = f"De vorige strategie '{strategy.name}' is weer actief."
+    except ProposalError as exc:
+        return _action_refused(request, "/trading", exc.status, exc.message)
+    text += " Open posities houden hun huidige stop-loss en take-profit."
+    if strategy.trailing_stop_pct and open_positions(session, engine.mode):
+        text += " De trailing stop schuift voortaan mee volgens deze strategie."
+    return flash.redirect_with_flash("/trading", "ok", text)
 
 
 # -- Trading plan ---------------------------------------------------------------------
