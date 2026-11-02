@@ -109,6 +109,7 @@
   var DRAFT_KEY = "crypie-settings-draft";
   var DRAFT_MAX_AGE_MS = 30 * 60 * 1000;
   var leaving = false;
+  var pending = null; // the form being sent and the other blocks with edits, until it really goes
 
   function each(scope, selector, fn) {
     Array.prototype.forEach.call(scope.querySelectorAll(selector), fn);
@@ -225,11 +226,22 @@
     if (pill) pill.hidden = !dirty;
     var status = form.querySelector("[data-dirty-status]");
     if (status) {
-      var title = form.getAttribute("data-block-title") || "dit blok";
-      status.textContent = dirty
-        ? (rows.length === 1 ? "1 wijziging" : rows.length + " wijzigingen") + " in " + title +
-          " nog niet opgeslagen: " + rows.map(labelOf).join(", ") + "."
-        : "";
+      // '2 wijzigingen in Handelen nog niet opgeslagen: Markten, Interval.' On a phone the bar
+      // shows only '2 wijzigingen nog niet opgeslagen.': the fields themselves are marked.
+      status.textContent = "";
+      if (dirty) {
+        var part = function (text, cls) {
+          var span = document.createElement("span");
+          if (cls) span.className = cls;
+          span.textContent = text;
+          status.appendChild(span);
+        };
+        part(rows.length === 1 ? "1 wijziging" : rows.length + " wijzigingen");
+        part(" in " + titleOf(form), "status-detail");
+        part(" nog niet opgeslagen");
+        part(": " + rows.map(labelOf).join(", "), "status-detail");
+        part(".");
+      }
     }
     var undo = form.querySelector("[data-undo]");
     if (undo) undo.hidden = !dirty;
@@ -290,16 +302,22 @@
     var block = form.closest("section[id]");
     return block ? block.id : "";
   }
-  // ``carriedBy``: the title of the block that was saved while this one had edits too; those
-  // edits come back by themselves after the save (only one block is sent per save).
-  function saveDraft(form, carriedBy) {
+  // ``carrier``: the form that was sent while this one had edits too; those edits come back by
+  // themselves after the save (only one block is sent per save). Its block and title are kept,
+  // so the page can say afterwards whether that save went through.
+  function saveDraft(form, carrier) {
     var values = {};
     fieldsOf(form).forEach(function (el) {
       if (el.type === "radio") { if (el.checked) values[el.name] = el.value; }
       else values[el.name] = valueOf(el);
     });
     var drafts = readDrafts();
-    drafts[blockKey(form)] = { at: Date.now(), values: values, carriedBy: carriedBy || "" };
+    drafts[blockKey(form)] = {
+      at: Date.now(),
+      values: values,
+      carriedBy: carrier ? titleOf(carrier) : "",
+      carriedFrom: carrier ? blockKey(carrier) : ""
+    };
     writeDrafts(drafts);
   }
   function titleOf(form) {
@@ -359,17 +377,34 @@
       { label: "Weggooien", run: function () { dropDraft(blockKey(form)); } }
     );
   }
-  // Another block was saved while this one had edits: put them back at once (still marked
-  // as not saved, so leaving the page asks again) and say so.
+  // How the save of the block that carried this draft ended: "saved" (its message is there),
+  // "refused" (it came back with an error or a password question) or "" (not known, for
+  // example after a new login).
+  function carrierResult(draft) {
+    var block = draft.carriedFrom ? document.getElementById(draft.carriedFrom) : null;
+    var form = block && block.querySelector("form[data-settings-form]");
+    if (!form) return "";
+    if (form.hasAttribute("data-submitted")) return "refused";
+    if (form.querySelector(".settings-feedback .notice-ok, .settings-feedback .notice-info")) return "saved";
+    return "";
+  }
+  // Another block was sent while this one had edits: put them back at once (still marked as
+  // not saved, so leaving the page asks again) and say so, and what became of the other save.
   function carryDraft(form, draft) {
     restore(form, draft.values);
     dropDraft(blockKey(form));
     if (!form.classList.contains("is-dirty")) return;
     setOpen(blockOf(form), true);
+    var result = carrierResult(draft);
+    var other = result === "saved"
+      ? " Alleen " + draft.carriedBy + " is opgeslagen."
+      : result === "refused"
+        ? " Ook " + draft.carriedBy + " is niet opgeslagen; zie de melding daar."
+        : "";
     draftNotice(
       form,
-      "Nog niet opgeslagen: je wijzigingen in " + titleOf(form) + " staan er weer, maar alleen " +
-        draft.carriedBy + " is opgeslagen. Sla ze op met '" + titleOf(form) + " opslaan', of draai ze terug.",
+      "Nog niet opgeslagen: je wijzigingen in " + titleOf(form) + " staan er weer." + other +
+        " Sla ze op met '" + titleOf(form) + " opslaan', of draai ze terug.",
       null,
       { label: "Wijzigingen terugdraaien", run: function () { restore(form, savedValues(form)); syncLive(form); } }
     );
@@ -548,7 +583,8 @@
       }
       if (ev.defaultPrevented) return;
       // Only this block is sent. Edits in other blocks would be lost with the page: ask, and
-      // keep them in this tab so they come back (still unsaved) after the save.
+      // keep them in this tab so they come back (still unsaved) after the save. They are written
+      // once no later question (app.js data-confirm) cancelled the submit (see below).
       var others = otherDirty(form);
       if (others.length) {
         var names = others.map(titleOf);
@@ -560,20 +596,28 @@
           ev.stopPropagation();
           return;
         }
-        others.forEach(function (other) { saveDraft(other, titleOf(form)); });
       }
-      leaving = true;
-      saveDraft(form);
+      pending = { form: form, others: others };
     });
 
     update(form);
     syncLive(form);
   });
 
-  // A later question (app.js data-confirm) may still cancel the submit: then the page stays.
-  // This listener is added after app.js's, so it runs after it.
+  // A later question (app.js data-confirm) may still cancel the submit: then the page stays and
+  // nothing is kept. This listener is added after app.js's, so it runs after it: only now the
+  // drafts are written (this block's, for a session that expired, and the other blocks' edits).
   document.addEventListener("submit", function (ev) {
-    if (ev.defaultPrevented && forms.indexOf(ev.target) >= 0) leaving = false;
+    if (forms.indexOf(ev.target) < 0) return;
+    var sent = pending && pending.form === ev.target ? pending : null;
+    pending = null;
+    if (ev.defaultPrevented || !sent) {
+      leaving = false;
+      return;
+    }
+    sent.others.forEach(function (other) { saveDraft(other, sent.form); });
+    saveDraft(sent.form);
+    leaving = true;
   });
   // Back to this page from the browser cache: it may leave again only after asking.
   window.addEventListener("pageshow", function () { leaving = false; });

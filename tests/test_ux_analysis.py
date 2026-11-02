@@ -328,7 +328,8 @@ async def test_news_list_has_no_silent_cap(api):
     assert re.search(r'Telt niet mee<span class="count">200</span>', r.text)
     assert 'rel="next"' in r.text and r.text.count('class="news-item') == 30
     r = await api.get("/news?telt=ja")
-    assert "Exchange hack drains" in r.text and "1–1 van 1" in r.text
+    # One page: no range line (UX-107), the header already counts the news facts.
+    assert "Exchange hack drains" in r.text and "1–1 van 1" not in r.text
     r = await api.get("/news?page=7")
     assert "181–201 van 201 · pagina 7 van 7" in r.text and "Exchange hack drains" in r.text
     # A page beyond the last shows the last.

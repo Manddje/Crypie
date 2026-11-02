@@ -389,17 +389,23 @@ async def test_fields_have_one_label_and_their_help_unit_and_error_attached(api)
 
     r = await api.post(
         "/settings",
-        data={"group": "trading", "markets": "BTC-USD", "event_calendar": "2026-13-45 nope"},
+        data={"group": "trading", "markets": "BTC-USD", "trade_interval_min": "0"},
     )
     assert r.status_code == 400
     block = _block(r.text, "trading")
     assert "2 velden kloppen niet" in block
     assert '<a href="#f-markets" data-focus-link>Markten</a>' in block
-    assert '<a href="#f-event_calendar" data-focus-link>Agenda</a>' in block
+    assert '<a href="#f-trade_interval_min" data-focus-link>Interval tussen cycli</a>' in block
     tag = re.search(r'<input [^>]*id="f-markets"[^>]*>', block).group(0)
     assert 'aria-invalid="true"' in tag and "f-markets-error" in tag
     # Edited but not saved: marked, also after the error.
     assert re.search(r'class="setting has-error is-changed[^"]*" id="row-markets"', block)
+    r = await api.post(
+        "/settings", data={"group": "bescherming", "event_calendar": "2026-13-45 nope"}
+    )
+    assert r.status_code == 400
+    block = _block(r.text, "bescherming")
+    assert '<a href="#f-event_calendar" data-focus-link>Agenda</a>' in block
 
 
 async def test_fields_under_a_switch_are_dimmed_while_it_is_off(api):
@@ -423,6 +429,7 @@ async def test_settings_page_has_a_list_of_parts_and_sensible_blocks(api):
     nav = re.search(r'<nav class="settings-toc".*?</nav>', page, re.S).group(0)
     for key in (
         "trading",
+        "bescherming",
         "limits",
         "costs",
         "claude",

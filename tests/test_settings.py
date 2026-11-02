@@ -107,6 +107,7 @@ def test_describe_marks_overrides(session, env):
     groups = cfg.describe(session, cfg.effective_settings(session, env), env)
     assert [g["key"] for g in groups] == [
         "trading",
+        "bescherming",  # a part of trading with a block (and a password field) of its own
         "limits",
         "costs",
         "claude",

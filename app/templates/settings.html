@@ -24,7 +24,7 @@
   <p class="setting-default" id="{{ fid }}-default">Aangepast. Standaard: <strong>{{ f.default_display }}</strong> <span class="mono">{{ f.env_name }}</span></p>
   {% if f.key != "trading_mode" %}<button type="button" class="link-btn setting-reset" data-reset-field="{{ f.key }}" data-default="{{ f.default_form }}" hidden>Terug naar standaard ({{ f.default_display }})</button>{% endif %}
   {% endif %}
-  {% if f.ceiling is not none %}<p class="setting-default" id="{{ fid }}-ceiling">Plafond uit de serveromgeving: <strong>{{ f.ceiling_display }}</strong> <span class="mono">{{ f.ceiling_env }}</span></p>{% endif %}
+  {% if f.ceiling is not none %}<p class="setting-default" id="{{ fid }}-ceiling">Plafond op de server: <strong>{{ f.ceiling_display }}</strong> <span class="mono">{{ f.ceiling_env }}</span></p>{% endif %}
   {% if f.kind == "model" %}<p class="setting-warn" id="{{ fid }}-warn" data-model-warn{% if not f.warning %} hidden{% endif %}>{{ f.warning or "Onbekend model: controleer de naam. Een typfout merk je pas bij de volgende aanroep, en de kostenschatting rekent dan met het duurste tarief." }}</p>{% endif %}
   {% if f.key == "markets" and f.warning %}<p class="setting-warn" id="{{ fid }}-warn">Let op: {{ f.warning }} De bot slaat {{ "die markt" if f.warning.count("bestaat niet") == 1 else "die markten" }} in elke cyclus over; haal {{ "hem" if f.warning.count("bestaat niet") == 1 else "ze" }} weg of verbeter de naam.</p>{% endif %}
   {% if f.error %}<p class="setting-error" id="{{ fid }}-error">{{ f.error }}</p>{% endif %}
@@ -101,7 +101,7 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
   {% if settings.trading_mode == "live" %}
   <p class="live-check-title" id="live-check-title">Je handelt live, met echt geld op Bitvavo.</p>
   {% elif live.missing %}
-  <p class="live-check-title" id="live-check-title">Live is nog niet mogelijk. Dit is nodig (op de server):</p>
+  <p class="live-check-title" id="live-check-title">Live is nog niet mogelijk. Nodig in de serveromgeving (daarna de app herstarten):</p>
   {% else %}
   <p class="live-check-title" id="live-check-title">Live is mogelijk. Alles wat de server vraagt, is in orde:</p>
   {% endif %}
@@ -109,7 +109,7 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
     {% for r in live.requirements %}
     <li class="{{ 'is-ok' if r.ok else 'is-missing' }}">
       {{ ui.icon("ok" if r.ok else "error") }}
-      <span><span class="visually-hidden">{{ "In orde: " if r.ok else "Ontbreekt: " }}</span>{{ r.label }}{% if not r.ok %}. <span class="live-fix">{{ r.fix }}</span>{% endif %} <span class="mono">{{ r.env }}</span></span>
+      <span><span class="visually-hidden">{{ "In orde: " if r.ok else "Ontbreekt: " }}</span>{{ r.label }}{% if not r.ok and r.fix %}: <span class="live-fix">{{ r.fix }}</span>{% endif %} <span class="mono">{{ r.env }}</span></span>
     </li>
     {% endfor %}
   </ul>
@@ -118,7 +118,7 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
     {% for a in live.advice %}
     <li class="{{ 'is-ok' if a.ok else 'is-advice' }}">
       {{ ui.icon("ok" if a.ok else "warn") }}
-      <span><span class="visually-hidden">{{ "In orde: " if a.ok else "Aanbevolen: " }}</span>{{ a.label }}.{% if not a.ok %} <span class="live-fix">{{ a.fix }}</span> <a href="{{ a.href }}">{{ a.link }}</a>{% endif %}</span>
+      <span><span class="visually-hidden">{{ "In orde: " if a.ok else "Aanbevolen: " }}</span>{{ a.label }}.{% if not a.ok %}{% if a.fix %} <span class="live-fix">{{ a.fix }}</span>{% endif %} <a href="{{ a.href }}">{{ a.link }}</a>{% endif %}</span>
     </li>
     {% endfor %}
   </ul>
@@ -193,7 +193,7 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
 {% block content %}
 <div class="page-header" id="top">
   <h1>Instellingen</h1>
-  <p class="subtitle">Hier bepaal je hoe de bot handelt. Elk blok heeft een eigen knop Opslaan; wat je opslaat geldt direct, zonder herstart. Sleutels en wachtwoorden staan alleen op de server.</p>
+  <p class="subtitle">Elk blok slaat apart op en geldt direct, zonder herstart.</p>
 </div>
 
 {% if config_warning %}{{ ui.notice("warn", config_warning, live=false) }}{% endif %}
@@ -231,10 +231,11 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
           {{ block_toggle(g.key, open_now) }}
         </div>
         <p class="block-summary" id="{{ g.key }}-summary">{{ g.summary }}</p>
+        {% if g.attention %}<p class="block-attention" id="{{ g.key }}-attention">{{ ui.icon("warn") }}<span>Let op: {{ g.attention|join(" ") }} <a href="#{{ 'row-markets' if g.key == 'trading' else g.key ~ '-body' }}">Bekijken</a></span></p>{% endif %}
         <div class="settings-block-body" id="{{ g.key }}-body">
-        <p class="card-desc">{{ g.description }}</p>
-        {% if g.changed %}<p class="settings-changed">Aangepast ten opzichte van de serveromgeving: {{ g.changed|map(attribute="label")|join(", ") }}.</p>{% endif %}
-        {% if step_up and g.sensitive %}<p class="settings-lock-note">{{ ui.icon("lock") }}<span>Velden met een slotje vragen om je huidige wachtwoord; dat vul je onderaan dit blok in.</span></p>{% endif %}
+        {% if g.description %}<p class="card-desc">{{ g.description }}</p>{% endif %}
+        {% if g.changed %}<p class="settings-changed">Aangepast: {{ g.changed|map(attribute="label")|join(", ") }}.</p>{% endif %}
+        {% if step_up and g.sensitive %}<p class="settings-lock-note">{{ ui.icon("lock") }}<span>Velden met een slotje vragen je wachtwoord, onderaan dit blok.</span></p>{% endif %}
 
         {{ block_feedback(g.key, pw_failed, g.unsaved, g.errors, step_up and g.sensitive) }}
         {% if g.key == form_group and loosened %}
@@ -266,10 +267,10 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
           <p class="settings-actions-status" data-dirty-status aria-live="polite"></p>
           <div class="actions">
             <button class="btn btn-primary" type="submit" name="action" value="save" data-busy="Opslaan…">{{ g.title }} opslaan</button>
-            <button class="btn" type="button" data-undo hidden>Wijzigingen terugdraaien</button>
+            <button class="btn" type="button" data-undo hidden><span class="label-long">Wijzigingen terugdraaien</span><span class="label-short">Terugdraaien</span></button>
             <button class="btn btn-danger" type="submit" name="action" value="reset"{% if not g.resettable %} disabled aria-describedby="{{ g.key }}-reset-note"{% endif %} formnovalidate data-confirm="{{ g.reset_confirm }}" data-busy="Terugzetten…">Standaard herstellen</button>
           </div>
-          <p class="settings-actions-note" id="{{ g.key }}-reset-note">Opslaan geldt alleen voor dit blok.{% if not g.resettable %} Standaard herstellen kan zodra hier iets is aangepast.{% endif %}</p>
+          {% if not g.resettable %}<p class="visually-hidden" id="{{ g.key }}-reset-note">Alles staat al op de standaard.</p>{% endif %}
         </div>
         </div>
       </form>
@@ -285,7 +286,7 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
       <p class="block-summary" id="oefenportefeuille-summary">Startbedrag {{ pf.display }} · {% if n_paper %}{{ n_paper }} open {{ "oefenpositie" if n_paper == 1 else "oefenposities" }}{% else %}geen open oefenposities{% endif %}</p>
       <div class="settings-block-body" id="oefenportefeuille-body">
       {% if settings.trading_mode == "paper" %}
-      <p class="card-desc">Begin opnieuw met een vers oefensaldo. Open oefenposities worden gesloten zonder resultaat; het logboek met beslissingen en orders blijft bewaard.</p>
+      <p class="card-desc">Begin opnieuw met een vers oefensaldo. Open oefenposities sluiten zonder resultaat; het logboek blijft bewaard.</p>
       <form method="post" action="/settings#oefenportefeuille" novalidate data-settings-form data-block-title="Oefenportefeuille"{% if form_group == "paper" %} data-submitted{% endif %} data-confirm="Oefenportefeuille resetten? Het saldo gaat terug naar het startbedrag en open oefenposities worden gesloten zonder resultaat.">
         <input type="hidden" name="group" value="paper">
         {{ block_feedback("paper", paper_failed, [pf] if pf.changed else [], [{"key": "paper_start_eur", "label": pf.label}] if pf.error else [], step_up) }}
@@ -296,7 +297,6 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
           <div class="actions">
             <button class="btn btn-danger" type="submit" name="action" value="reset_paper" data-busy="Resetten…">Oefenportefeuille resetten</button>
           </div>
-          <p class="settings-actions-note">Het startbedrag wordt opgeslagen samen met de reset.</p>
         </div>
       </form>
       {% else %}
@@ -323,7 +323,7 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
       <div class="card-header"><h2 class="card-title" id="omgeving-title">Uit de omgeving</h2><span class="card-meta">alleen op de server</span>{{ block_toggle("omgeving", env_open_now, "Bekijken") }}</div>
       <p class="block-summary" id="omgeving-summary">Bitvavo-sleutel {{ ks.label }} · Claude-sleutel {{ "ingesteld" if environment.anthropic_key else "niet ingesteld" }} · meldingen {{ "aan" if environment.notify else "uit" }} · login {{ "aan" if environment.auth else "uit" }}</p>
       <div class="settings-block-body" id="omgeving-body">
-      <p class="card-desc">Sleutels, de login, de live-bevestiging en het meldingskanaal beheer je bewust niet in het portaal. Je stelt ze in bij de omgevingsvariabelen van de app in Coolify (of in <span class="mono">.env</span>) en herstart de app.</p>
+      <p class="card-desc">Dit stel je in de serveromgeving in (Coolify of <span class="mono">.env</span>); daarna herstart je de app.</p>
       {{ block_feedback("omgeving") }}
       <dl class="kv env-list">
         <dt>Bitvavo-sleutel</dt>
@@ -361,7 +361,7 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
           </form>
           {% else %}
           <span class="pill">niet ingesteld</span>
-          <span class="env-text">Zonder meldingskanaal hoor je buiten de app niets, ook niet bij een storing. Zet bijvoorbeeld een ntfy-topic in de serveromgeving.</span>
+          <span class="env-text">Zonder kanaal (bijvoorbeeld ntfy) hoor je niets buiten de app, ook niet bij een storing.</span>
           <span class="mono env-name">NOTIFY_URL</span>
           {% endif %}
         </dd>

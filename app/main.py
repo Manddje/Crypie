@@ -242,8 +242,8 @@ def build_auth(settings: Settings) -> AuthService | None:
             if auth.setup_token_from_env and enrolment_unfinished(auth.user(session)):
                 log.warning(
                     "the account has no authenticator linked yet: open /setup?token="
-                    "<SETUP_TOKEN> and log in with the password to link one, or run: "
-                    "python -m app.auth reset-mfa"
+                    "<SETUP_TOKEN> in the browser that made the account and log in with the "
+                    "password to link one, or run: python -m app.auth reset-mfa"
                 )
             else:
                 log.warning(
@@ -2231,7 +2231,9 @@ def _trading_context(
         )
     status = _trading_status(engine, session, settings)
     other = "paper" if engine.mode == "live" else "live"
-    other_count = mode_counts(session).get(other, 0)
+    # Under Gesloten posities: closed trades of the other mode only (its open positions are
+    # listed under Open posities already, UX-01).
+    other_count = mode_counts(session, "closed").get(other, 0)
     # The dip watch journals its conditions with indicator ids ('rsi14 stijgt'): readable names.
     status["watch"] = [
         {
@@ -2824,7 +2826,7 @@ def live_requirements(settings: Settings, client: BitvavoClient) -> list[dict]:
             "label": "De login staat aan",
             "missing": "de login staat uit (AUTH_ENABLED=false)",
             "missing_nl": "de login staat uit",
-            "fix": "Zet de login aan in de serveromgeving (op true) en herstart de app.",
+            "fix": "zet hem op true",
             "env": "AUTH_ENABLED",
         },
         {
@@ -2833,8 +2835,7 @@ def live_requirements(settings: Settings, client: BitvavoClient) -> list[dict]:
             "label": "Er is een Bitvavo-sleutel",
             "missing": "er is geen Bitvavo-sleutel (BITVAVO_API_KEY en BITVAVO_API_SECRET)",
             "missing_nl": "er is geen Bitvavo-sleutel",
-            "fix": "Maak bij Bitvavo een API-sleutel met rechten om te lezen en te handelen, "
-            "zonder opnemen, en zet hem in de serveromgeving.",
+            "fix": "maak er bij Bitvavo een die mag lezen en handelen, niet opnemen",
             "env": "BITVAVO_API_KEY, BITVAVO_API_SECRET",
         },
         {
@@ -2843,7 +2844,7 @@ def live_requirements(settings: Settings, client: BitvavoClient) -> list[dict]:
             "label": "Live handelen is op de server bevestigd",
             "missing": "LIVE_TRADING_ACK staat niet op true in de serveromgeving",
             "missing_nl": "live handelen is nog niet bevestigd op de server",
-            "fix": "Bevestig live handelen in de serveromgeving (op true) en herstart de app.",
+            "fix": "zet de bevestiging op true",
             "env": "LIVE_TRADING_ACK",
         },
     ]
@@ -3213,23 +3214,23 @@ def _live_context(
             "ok": capital > 0,
             "label": f"Kapitaal voor de bot: {fmt_eur(capital, 0)}"
             if capital > 0
-            else "Kapitaal voor de bot staat op 0: de limieten rekenen dan met je hele "
-            "Bitvavo-account",
-            "fix": "Stel een bedrag in bij Harde limieten › Kapitaal voor de bot (live).",
+            else "Kapitaal voor de bot staat op 0: de limieten gelden voor je hele account",
+            "fix": "",
             "href": "#f-live_capital_eur",
             "link": "Kapitaal instellen",
         },
         {
+            # Without a key the requirement above asks for one (that can trade, not withdraw).
+            "skip": key_state["state"] == "missing",
             "ok": key_state["state"] == "ok",
             "label": {
                 "ok": "De Bitvavo-sleutel werkt",
                 "rejected": "Bitvavo weigert de sleutel: " + str(key_state.get("reason")),
                 "no_trading": "De Bitvavo-sleutel mag niet handelen",
                 "set": "De Bitvavo-sleutel is nog niet getest",
-                "missing": "Er is nog geen Bitvavo-sleutel om te testen",
+                "missing": "Nog geen Bitvavo-sleutel om te testen",
             }[key_state["state"]],
-            "fix": "Test de verbinding onder 'Uit de omgeving'. Geef de sleutel geen rechten "
-            "om geld op te nemen; Crypie kan dat zelf niet controleren.",
+            "fix": "Geef hem geen rechten om geld op te nemen; Crypie kan dat niet zien.",
             "href": "#omgeving",
             "link": "Verbinding testen",
         },
@@ -3237,8 +3238,8 @@ def _live_context(
             "ok": notify_configured(env),
             "label": "Meldingen buiten de app staan aan"
             if notify_configured(env)
-            else "Er is geen meldingskanaal: bij een storing hoor je niets buiten de app",
-            "fix": "Zet NOTIFY_URL in de serveromgeving (bijvoorbeeld een ntfy-topic).",
+            else "Geen meldingskanaal: bij een storing hoor je niets buiten de app",
+            "fix": "",
             "href": "#omgeving",
             "link": "Meldingen bekijken",
         },
@@ -3246,7 +3247,7 @@ def _live_context(
     return {
         "requirements": requirements,
         "missing": [r for r in requirements if not r["ok"]],
-        "advice": advice,
+        "advice": [a for a in advice if not a.get("skip")],
         "paper_open": paper_open,
         "can_switch": settings.trading_mode != "live" and all(r["ok"] for r in requirements),
         "summary": [
@@ -3347,9 +3348,7 @@ def _settings_context(
     plan = fields_by_key.get("cryptopanic_plan")
     if plan is not None and not env.cryptopanic_token:
         plan["dep_off"] = True
-        plan["depends_text"] = (
-            "Geldt alleen als er een CryptoPanic-token in de serveromgeving staat; nu is er geen."
-        )
+        plan["depends_text"] = "Geldt alleen met een CryptoPanic-token op de server; nu is er geen."
     for group in payload["groups"]:
         group["changed"] = [f for f in group["fields"] if f["overridden"]]
         group["resettable"] = [f for f in group["changed"] if f["key"] != "trading_mode"]
@@ -3372,6 +3371,12 @@ def _settings_context(
             else []
         )
         group["reset_confirm"] = _reset_confirm_text(group)
+        # A folded block still shows what needs attention inside it: an unknown market or model.
+        group["attention"] = [
+            f["warning"] if f["key"] == "markets" else f"{f['label']}: onbekend model."
+            for f in group["fields"]
+            if f.get("warning") and f["key"] not in errors
+        ]
     key_state = bitvavo_key_state(request)
     paper_open = open_positions(session, "paper")
     attempts_left = None

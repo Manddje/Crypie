@@ -67,7 +67,9 @@
     {#- One-off messages after an action (app/flash.py), announced to screen readers. -#}
     {% for f in request.state.flashes|default([]) %}{{ ui.notice(f.kind, f.text, live=true) }}{% endfor %}
     {% if login_disabled(request) %}
-    {{ ui.notice("warn", "De login staat uit (AUTH_ENABLED=false). Iedereen die dit adres kan bereiken, kan instellingen wijzigen en in oefenmodus handelen; live handelen kan niet. Zet AUTH_ENABLED weer op true in de serveromgeving en herstart de app.", live=false) }}
+    {#- The first sentence is pinned by a security test (F17); the way to switch the login on
+        names its variable as secondary help. -#}
+    {% call ui.notice("warn", "", live=false) %}De login staat uit (AUTH_ENABLED=false): iedereen met dit adres kan instellingen wijzigen en in oefenmodus handelen; live kan niet. Aanzetten in de serveromgeving, daarna herstarten: <span class="mono">AUTH_ENABLED=true</span>.{% endcall %}
     {% endif %}
     {{ page_body }}
   </main>

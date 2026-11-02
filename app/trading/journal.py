@@ -333,9 +333,13 @@ def _manual_order_ids():
     return select(Order.id).where(or_(Order.reason == "manual", Order.reason.like("manual:%")))
 
 
-def mode_counts(session: Session) -> dict[str, int]:
-    """Trades per mode, so the journal can offer the other mode when it has trades."""
-    rows = session.execute(select(Position.mode, func.count(Position.id)).group_by(Position.mode))
+def mode_counts(session: Session, status: str | None = None) -> dict[str, int]:
+    """Trades per mode, so the journal can offer the other mode when it has trades. ``status``
+    ('open' or 'closed') counts only those."""
+    query = select(Position.mode, func.count(Position.id)).group_by(Position.mode)
+    if status is not None:
+        query = query.where(Position.status == status)
+    rows = session.execute(query)
     counts = {"paper": 0, "live": 0}
     for mode, n in rows:
         counts[mode] = int(n)

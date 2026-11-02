@@ -50,46 +50,45 @@ CEILINGS: dict[str, str] = {
     "max_trades_per_day": "max_trades_per_day_ceiling",
 }
 
-# The blocks of the settings page; each one is a form of its own with its own Opslaan button.
+# The blocks of the settings page that save a sensitive setting; each one is a form of its own
+# with its own Opslaan button and current-password field. Most are one settings group (Spec.group);
+# Bescherming is one part of the group trading (PART_GROUPS).
 GROUPS: dict[str, tuple[str, str]] = {
-    "trading": (
-        "Handelen",
-        "Wat de bot doet, op welke markten, hoe vaak, en wat open posities beschermt.",
+    "trading": ("Handelen", ""),
+    "bescherming": (
+        "Bescherming",
+        "Wat open posities beschermt en wanneer de bot tijdelijk niet koopt.",
     ),
     "limits": (
         "Harde limieten",
-        "Grenzen die altijd gelden, wat Claude ook adviseert. Ze worden in code afgedwongen.",
+        "Grenzen die altijd gelden, wat Claude ook adviseert.",
     ),
     "costs": (
         "Kosten",
-        "Wat een order kost. Oefenorders betalen deze kosten en de resultaten zijn er netto mee "
-        "berekend.",
+        "Geen limieten: hiermee rekent de bot wat een order kost.",
     ),
-    "claude": (
-        "Claude",
-        "Welk model voor welke taak, en hoeveel het per maand mag kosten.",
-    ),
-    "news": (
-        "Nieuws",
-        "Welke bronnen worden gelezen en hoe vaak.",
-    ),
+    "claude": ("Claude", ""),
+    "news": ("Nieuws", ""),
+}
+# Blocks that are one part of a settings group (UX-57): block -> (group, part). The settings keep
+# their group (the API and the environment list them under Handelen), but the page saves them in
+# a block of their own, so saving a protection setting does not send the mode and the markets.
+PART_GROUPS: dict[str, tuple[str, str]] = {
+    "bescherming": ("trading", "bescherming"),
 }
 # The paper portfolio's start amount is saved together with its reset (its own card), not with
 # a block above: it only matters for a new or reset paper portfolio.
 PAPER_GROUP = "paper"
 
 # Parts of a block, in order: group -> [(section, title, help)]. A group without an entry is one
-# part without a sub-heading.
+# part without a sub-heading. Parts that are a block of their own (PART_GROUPS, OWN_FORM_PARTS)
+# are left out of their group's block.
 SECTIONS: dict[str, list[tuple[str, str, str]]] = {
     "trading": [
         ("modus", "Modus en markten", ""),
-        ("kopen", "Kopen", "Wanneer de bot een koop overweegt en wat hij doet zonder Claude."),
-        (
-            "bescherming",
-            "Bescherming",
-            "Wat open posities beschermt en wanneer de bot tijdelijk niet koopt.",
-        ),
-        ("weergave", "Weergave", "Alleen wat je op de pagina Handelen ziet."),
+        ("kopen", "Kopen", ""),
+        ("bescherming", "Bescherming", ""),
+        ("weergave", "Weergave", ""),
     ],
     "news": [
         ("ophalen", "Ophalen en beoordelen", ""),
@@ -99,15 +98,17 @@ SECTIONS: dict[str, list[tuple[str, str, str]]] = {
 
 # Parts with a block (a form and an Opslaan button) of their own on the page, apart from the
 # block they belong to (UX-57): what a page shows is saved without the mode and the markets.
-# Only parts without a sensitive setting: the block's password field stays with the block.
-# part -> (group, title, description).
+# Only parts without a sensitive setting, so without a password field (a part with one is a
+# block in GROUPS, see PART_GROUPS). part -> (group, title, description).
 OWN_FORM_PARTS: dict[str, tuple[str, str, str]] = {
     "weergave": (
         "trading",
         "Weergave",
-        "Alleen wat je op de pagina's ziet; de bot handelt er niet anders door.",
+        "Alleen wat je ziet; de bot handelt er niet anders door.",
     ),
 }
+# Sections of a group that are not in that group's own block.
+_SPLIT_SECTIONS = {part for _, part in PART_GROUPS.values()} | set(OWN_FORM_PARTS)
 
 # The line under a folded block's title (UX-56): the values that matter most, as
 # (setting, wording with {} for its value).
@@ -117,7 +118,11 @@ SUMMARY: dict[str, tuple[tuple[str, str], ...]] = {
         ("markets", "{}"),
         ("trade_interval_min", "elke {}"),
         ("trading_enabled", "automatisch handelen {}"),
+    ),
+    "bescherming": (
+        ("exit_check_interval_min", "stop-loss en take-profit elke {}"),
         ("risk_off_enabled", "risk-off {}"),
+        ("shock_pause_hours", "schok-pauze {}"),
     ),
     "limits": (
         ("max_trade_eur", "max. {} per order"),
@@ -197,9 +202,7 @@ SPECS: tuple[Spec, ...] = (
         "trading_mode",
         "trading",
         "Modus",
-        "Oefenmodus handelt met fictief geld. Live plaatst echte orders op Bitvavo met echt geld. "
-        "Live kan alleen als de login aan staat, er een Bitvavo-sleutel met handelsrechten is "
-        "en op de server LIVE_TRADING_ACK=true staat.",
+        "Oefenmodus handelt met fictief geld, Live met echt geld op Bitvavo.",
         kind="choice",
         choices=(("paper", "Oefenmodus"), ("live", "Live")),
         section="modus",
@@ -208,9 +211,8 @@ SPECS: tuple[Spec, ...] = (
         "trading_enabled",
         "trading",
         "Bot automatisch laten handelen",
-        "Uit: geen geplande cycli meer; je kunt er zelf een starten. Stop-loss, trailing stop en "
-        "take-profit blijven werken. Alleen stoppen met kopen? Gebruik de noodstop: die werkt "
-        "meteen en zonder wachtwoord.",
+        "Uit: geen geplande cycli; stop-loss, trailing stop en take-profit blijven werken. "
+        "Alleen kopen stoppen? Gebruik de noodstop.",
         kind="bool",
         section="modus",
     ),
@@ -218,8 +220,7 @@ SPECS: tuple[Spec, ...] = (
         "markets",
         "trading",
         "Markten",
-        "Bitvavo-notatie, gescheiden door komma's. Alleen euromarkten die op Bitvavo bestaan, "
-        "bijvoorbeeld BTC-EUR, ETH-EUR, SOL-EUR.",
+        "Gescheiden door komma's, in Bitvavo-notatie.",
         kind="markets",
         section="modus",
         placeholder="BTC-EUR, ETH-EUR",
@@ -240,8 +241,8 @@ SPECS: tuple[Spec, ...] = (
         "claude_unavailable_mode",
         "trading",
         "Als Claude niet beschikbaar is",
-        "Bij een signaal zonder werkende Claude (budget op, geen sleutel, storing). Een "
-        "verkoopsignaal op een open positie wordt in beide gevallen gevolgd.",
+        "Bij een koopsignaal zonder werkende Claude (geen sleutel, budget op, storing). "
+        "Verkoopsignalen worden altijd gevolgd.",
         kind="choice",
         choices=(
             ("hold", "Afwachten, niet kopen"),
@@ -253,9 +254,7 @@ SPECS: tuple[Spec, ...] = (
         "trend_context_enabled",
         "trading",
         "Lange-termijntrend (PlanB)",
-        "Per coin het 200-weeks gemiddelde en de maand-RSI uit Bitvavo, dagelijks ververst. "
-        "Claude krijgt het als context (opwaartse of neerwaartse lange trend); het is geen "
-        "signaal.",
+        "Het 200-weeks gemiddelde en de maand-RSI per coin, als context voor Claude; geen signaal.",
         kind="bool",
         section="kopen",
     ),
@@ -263,9 +262,8 @@ SPECS: tuple[Spec, ...] = (
         "watch_interval_min",
         "trading",
         "Dipbewaking: controle elke",
-        "Gelden de dip-voorwaarden van de strategie (bijvoorbeeld RSI onder 35) maar de draai "
-        "nog niet, dan kijkt de bot zo vaak opnieuw naar die markt. Komt de draai, dan draait "
-        "hij meteen een cyclus. 0 = uit.",
+        "Zit een markt in een dip maar is de draai er nog niet, dan kijkt de bot zo vaak "
+        "opnieuw. 0 = uit.",
         kind="int",
         min=0,
         max=60,
@@ -276,7 +274,7 @@ SPECS: tuple[Spec, ...] = (
         "watch_max_min",
         "trading",
         "Dipbewaking: maximaal",
-        "Hoe lang een dip bewaakt wordt; daarna wacht de bot weer op de gewone cyclus.",
+        "Daarna wacht de bot weer op de gewone cyclus.",
         kind="int",
         min=5,
         max=1440,
@@ -289,9 +287,8 @@ SPECS: tuple[Spec, ...] = (
         "exit_check_interval_min",
         "trading",
         "Stop-loss en take-profit: controle elke",
-        "Hoe vaak de bot stop-loss, trailing stop en take-profit van álle open posities "
-        "controleert. Dit loopt altijd door: ook met automatisch handelen uit, de noodstop aan "
-        "of een markt die niet meer in de lijst staat.",
+        "Loopt altijd door, voor alle open posities: ook met automatisch handelen uit, de "
+        "noodstop aan of een markt buiten de lijst.",
         kind="int",
         min=1,
         max=60,
@@ -302,8 +299,8 @@ SPECS: tuple[Spec, ...] = (
         "risk_off_enabled",
         "trading",
         "Risk-off rond agendamomenten",
-        "Geen nieuwe aankopen rond de momenten in de agenda hieronder en na een nieuwsschok. "
-        "Verkopen en de stop-loss blijven werken.",
+        "Geen nieuwe aankopen rond agendamomenten en na een nieuwsschok; verkopen en de "
+        "stop-loss blijven werken.",
         kind="bool",
         section="bescherming",
     ),
@@ -311,7 +308,7 @@ SPECS: tuple[Spec, ...] = (
         "risk_off_before_min",
         "trading",
         "Risk-off: vooraf",
-        "Hoe lang vóór een agendamoment de bot stopt met kopen.",
+        "",
         kind="int",
         min=0,
         max=720,
@@ -323,7 +320,7 @@ SPECS: tuple[Spec, ...] = (
         "risk_off_after_min",
         "trading",
         "Risk-off: achteraf",
-        "Hoe lang ná een agendamoment de bot nog niet koopt.",
+        "",
         kind="int",
         min=0,
         max=1440,
@@ -335,9 +332,8 @@ SPECS: tuple[Spec, ...] = (
         "shock_pause_hours",
         "trading",
         "Schok-pauze",
-        "Na een nieuwsschok (een nieuwsfeit met impact groot en sterk negatief sentiment, zoals "
-        "een hack of een beurs in problemen) koopt de bot zoveel uur niet in de coins die het "
-        "raakt. 0 = uit.",
+        "Na een nieuwsschok (impact groot, sterk negatief) koopt de bot zo lang niet in de "
+        "geraakte coins. 0 = uit.",
         kind="int",
         min=0,
         max=72,
@@ -349,9 +345,8 @@ SPECS: tuple[Spec, ...] = (
         "event_calendar",
         "trading",
         "Agenda",
-        "Eén moment per regel: datum, tijd en omschrijving. Tijden in UTC; de pagina's tonen "
-        "tijden in je eigen tijdzone. Standaard: FOMC-rentebesluiten en Amerikaanse CPI-cijfers "
-        "t/m 2027.",
+        "Eén moment per regel: datum, tijd in UTC, omschrijving. Standaard: "
+        "FOMC-rentebesluiten en Amerikaanse CPI-cijfers t/m 2027.",
         kind="events",
         section="bescherming",
         depends="risk_off_enabled",
@@ -362,8 +357,7 @@ SPECS: tuple[Spec, ...] = (
         "decision_history_days",
         "trading",
         "Beslissingen tonen van de laatste",
-        "Zo veel dagen aan cycli staan op de pagina Handelen, per markt met signaal, "
-        "indicatorwaarden, nieuws en toelichting.",
+        "Zo veel dagen aan cycli toont de pagina Handelen.",
         kind="int",
         min=1,
         max=365,
@@ -375,8 +369,7 @@ SPECS: tuple[Spec, ...] = (
         "paper_start_eur",
         PAPER_GROUP,
         "Startbedrag",
-        "Fictief saldo waarmee de oefenportefeuille begint. Geldt bij een nieuwe of gereset "
-        "oefenportefeuille.",
+        "Opgeslagen met de reset; geldt vanaf dan.",
         kind="float",
         min=10,
         max=10_000_000,
@@ -387,7 +380,7 @@ SPECS: tuple[Spec, ...] = (
         "max_trade_eur",
         "limits",
         "Maximum per order",
-        "Geen enkele order is groter: niet van Claude, niet van de regels en niet van jou.",
+        "Geldt voor elke order: van Claude, van de regels en van jou.",
         kind="float",
         min=5,
         max=1_000_000,
@@ -397,7 +390,7 @@ SPECS: tuple[Spec, ...] = (
         "min_trade_eur",
         "limits",
         "Minimum per order",
-        "Kleinere orders worden niet geplaatst. Bitvavo accepteert minimaal € 5.",
+        "Kleinere orders worden niet geplaatst; Bitvavo accepteert minimaal € 5.",
         kind="float",
         min=5,
         max=100_000,
@@ -407,9 +400,8 @@ SPECS: tuple[Spec, ...] = (
         "live_capital_eur",
         "limits",
         "Kapitaal voor de bot (live)",
-        "Het bedrag waarmee de bot live mag werken. De blootstellingslimiet en de "
-        "dagverlieslimiet rekenen dan met dit bedrag en alleen met de posities van de bot zelf, "
-        "niet met de rest van je Bitvavo-account. 0 = het hele account.",
+        "Live rekenen de limieten voor crypto en dagverlies met dit bedrag en de posities "
+        "van de bot, niet met je hele account. 0 = het hele account.",
         kind="float",
         min=0,
         max=10_000_000,
@@ -419,7 +411,7 @@ SPECS: tuple[Spec, ...] = (
         "max_exposure_pct",
         "limits",
         "Maximaal in crypto",
-        "Percentage van de totale portefeuille dat in coins mag zitten.",
+        "Deel van de totale portefeuille dat in coins mag zitten.",
         kind="float",
         min=0,
         max=100,
@@ -429,9 +421,8 @@ SPECS: tuple[Spec, ...] = (
         "daily_loss_limit_pct",
         "limits",
         "Dagverlieslimiet",
-        "Geen nieuwe aankopen meer vandaag bij dit verlies: het gerealiseerde resultaat van "
-        "vandaag plus het verlies op open posities (winst op open posities telt niet mee). Er "
-        "wordt niets verkocht of gepauzeerd; om 00:00 UTC begint een nieuwe dag.",
+        "Daarna koopt de bot vandaag niets meer. Telt gerealiseerd verlies plus verlies op "
+        "open posities; er wordt niets verkocht. Nieuwe dag om 00:00 UTC.",
         kind="float",
         min=0.1,
         max=100,
@@ -441,9 +432,8 @@ SPECS: tuple[Spec, ...] = (
         "max_trades_per_day",
         "limits",
         "Maximum aantal orders per dag",
-        "Telt elke uitgevoerde koop- en verkooporder van vandaag, ook handmatige orders en "
-        "verkopen door stop-loss of take-profit. Daarna koopt de bot niet meer tot 00:00 UTC; "
-        "verkopen blijft altijd mogelijk. 0 = de bot koopt niet.",
+        "Elke uitgevoerde koop en verkoop telt, ook handmatig en door een stop. Daarna "
+        "koopt de bot niets tot 00:00 UTC; verkopen kan altijd. 0 = niet kopen.",
         kind="int",
         min=0,
         max=200,
@@ -453,7 +443,7 @@ SPECS: tuple[Spec, ...] = (
         "cooldown_min_after_stop",
         "limits",
         "Afkoelperiode na stop-loss",
-        "Zo lang koopt de bot niet opnieuw in een markt waar een stop-loss is geraakt.",
+        "Zo lang koopt de bot niet opnieuw in een markt na een stop-loss.",
         kind="int",
         min=0,
         max=10_080,
@@ -464,9 +454,8 @@ SPECS: tuple[Spec, ...] = (
         "trading_fee_pct",
         "costs",
         "Handelskosten per order",
-        "Wat Bitvavo per order rekent (het taker-tarief): je betaalt het bij het kopen én bij "
-        "het verkopen. Oefenorders betalen dit tarief en de netto resultaten rekenen ermee. Met "
-        "een live sleutel leest de app je echte tarief bij het opstarten.",
+        "Het taker-tarief van Bitvavo, bij kopen én verkopen. Oefenorders betalen het en "
+        "netto resultaten rekenen ermee; live geldt je echte tarief.",
         kind="float",
         min=0,
         max=5,
@@ -476,7 +465,7 @@ SPECS: tuple[Spec, ...] = (
         "backtest_fee_pct",
         "costs",
         "Handelskosten in backtests",
-        "Kosten per order die backtests op de strategiepagina meerekenen.",
+        "Wat backtests op de strategiepagina per order rekenen.",
         kind="float",
         min=0,
         max=5,
@@ -487,8 +476,8 @@ SPECS: tuple[Spec, ...] = (
         "claude_monthly_budget_usd",
         "claude",
         "Maandbudget",
-        "Harde grens voor de Claude-kosten. Bij 90% waarschuwt het overzicht, bij 100% "
-        "stoppen alle Claude-aanroepen tot de volgende maand.",
+        "Bij 90% waarschuwt het overzicht, bij 100% stoppen alle Claude-aanroepen tot de "
+        "volgende maand.",
         kind="float",
         min=0,
         max=100_000,
@@ -498,8 +487,7 @@ SPECS: tuple[Spec, ...] = (
         "claude_model_decision",
         "claude",
         "Model voor handelsbeslissingen",
-        "Wordt elke cyclus met een signaal aangeroepen; Sonnet is hier de balans tussen "
-        "kwaliteit en kosten.",
+        "Elke cyclus met een signaal.",
         kind="model",
         choices=MODEL_CHOICES,
     ),
@@ -515,7 +503,7 @@ SPECS: tuple[Spec, ...] = (
         "claude_model_strategy",
         "claude",
         "Model voor strategievoorstellen",
-        "Alleen als jij op de strategiepagina een voorstel vraagt.",
+        "Alleen als je op Strategie een voorstel vraagt.",
         kind="model",
         choices=MODEL_CHOICES,
     ),
@@ -523,7 +511,7 @@ SPECS: tuple[Spec, ...] = (
         "claude_model_evaluation",
         "claude",
         "Model voor de evaluatie",
-        "Zeldzaam en diepgaand, dus het sterkste model is hier betaalbaar.",
+        "Zeldzaam, dus het sterkste model is hier betaalbaar.",
         kind="model",
         choices=MODEL_CHOICES,
     ),
@@ -531,8 +519,7 @@ SPECS: tuple[Spec, ...] = (
         "evaluation_interval_hours",
         "claude",
         "Evaluatie-interval",
-        "Hoe vaak Claude terugkijkt op de resultaten en eventueel een strategie voorstelt. "
-        "0 schakelt de automatische evaluatie uit.",
+        "Hoe vaak Claude terugkijkt en eventueel een strategie voorstelt. 0 = uit.",
         kind="int",
         min=0,
         max=8760,
@@ -543,7 +530,7 @@ SPECS: tuple[Spec, ...] = (
         "news_enabled",
         "news",
         "Nieuws automatisch ophalen",
-        "Uit: nieuws wordt alleen opgehaald als je op de nieuwspagina op 'Nu verversen' klikt.",
+        "Uit: alleen ophalen met 'Nu verversen' op de nieuwspagina.",
         kind="bool",
         section="ophalen",
     ),
@@ -551,7 +538,7 @@ SPECS: tuple[Spec, ...] = (
         "news_fetch_interval_min",
         "news",
         "Interval nieuws ophalen",
-        "Hoe vaak de bot alle bronnen leest en nieuwe berichten door Claude laat beoordelen.",
+        "Hoe vaak alle bronnen gelezen en beoordeeld worden.",
         kind="int",
         min=1,
         max=1440,
@@ -563,7 +550,7 @@ SPECS: tuple[Spec, ...] = (
         "news_max_age_hours",
         "news",
         "Berichten ouder dan dit negeren",
-        "Oudere berichten worden niet meer beoordeld en tellen niet mee voor het sentiment.",
+        "Oudere berichten worden niet beoordeeld en tellen niet mee.",
         kind="int",
         min=1,
         max=720,
@@ -574,7 +561,7 @@ SPECS: tuple[Spec, ...] = (
         "news_batch_size",
         "news",
         "Berichten per Claude-aanroep",
-        "Grotere batches zijn goedkoper, maar te groot maakt de beoordeling slordiger.",
+        "Groter is goedkoper; te groot maakt de beoordeling slordiger.",
         kind="int",
         min=1,
         max=50,
@@ -586,8 +573,8 @@ SPECS: tuple[Spec, ...] = (
         "news_rss_feeds",
         "news",
         "RSS-feeds",
-        "Eén adres per regel, alleen https. Standaard: CoinDesk, Cointelegraph, The Block, "
-        "Decrypt, CryptoSlate, NewsBTC, BeInCrypto en DL News.",
+        "Eén https-adres per regel. Standaard: acht cryptonieuwssites, zoals CoinDesk en "
+        "Cointelegraph.",
         kind="lines",
         section="bronnen",
         placeholder="https://www.coindesk.com/arc/outboundfeeds/rss/",
@@ -596,8 +583,7 @@ SPECS: tuple[Spec, ...] = (
         "cryptocv_enabled",
         "news",
         "cryptocurrency.cv",
-        "Gratis verzamelaar van 300+ bronnen zonder sleutel, met een archief per coin. "
-        "Berichten komen direct met de juiste coin-tag binnen.",
+        "Gratis verzamelaar van 300+ bronnen, per coin getagd.",
         kind="bool",
         section="bronnen",
     ),
@@ -605,7 +591,7 @@ SPECS: tuple[Spec, ...] = (
         "google_news_enabled",
         "news",
         "Google News per coin",
-        "Gratis zoekfeed per markt (bijvoorbeeld 'solana') van de laatste 24 uur.",
+        "Gratis zoekfeed per coin over de laatste 24 uur.",
         kind="bool",
         section="bronnen",
     ),
@@ -613,7 +599,7 @@ SPECS: tuple[Spec, ...] = (
         "fear_greed_enabled",
         "news",
         "Fear & Greed-index",
-        "Marktbrede angst/hebzucht-score van alternative.me; Claude krijgt hem als context.",
+        "Angst/hebzucht-score van de markt (alternative.me), als context voor Claude.",
         kind="bool",
         section="bronnen",
     ),
@@ -621,7 +607,7 @@ SPECS: tuple[Spec, ...] = (
         "gdelt_enabled",
         "news",
         "Wereldnieuws via GDELT",
-        "Gratis, maar maximaal één verzoek per 5 seconden per IP-adres.",
+        "Gratis, maar hoogstens één verzoek per 5 seconden.",
         kind="bool",
         section="bronnen",
     ),
@@ -638,7 +624,7 @@ SPECS: tuple[Spec, ...] = (
         "cryptopanic_plan",
         "news",
         "CryptoPanic-abonnement",
-        "Alleen van belang als er een CryptoPanic-token in de serveromgeving staat.",
+        "",
         kind="choice",
         choices=(
             ("growth", "Growth"),
@@ -683,15 +669,18 @@ def sensitive_changes(old: Settings, new: Settings) -> list[str]:
 
 
 def group_has_sensitive(group: str) -> bool:
-    return any(s.group == group and s.key in SENSITIVE_KEYS for s in SPECS)
+    """Whether the block ``group`` (a key of GROUPS) saves a sensitive setting."""
+    return any(key in SENSITIVE_KEYS for key in keys_in_form(group))
 
 
 # What the current-password field of each block is needed for (the password row's help text).
 STEP_UP_HELP: dict[str, str] = {
     "trading": "Nodig voor elk veld met een slotje: de modus, automatisch handelen aan/uit, "
-    "de markten, het gedrag zonder Claude, de exit-controle en alles van risk-off.",
+    "de markten en het gedrag zonder Claude.",
+    "bescherming": "Nodig voor elk veld met een slotje: de exit-controle en alles van risk-off.",
     "limits": "Nodig als je een harde limiet wijzigt of terugzet: elk veld in dit blok.",
-    "costs": "Nodig als je de handelskosten per order wijzigt of terugzet.",
+    "costs": "Nodig als je de handelskosten per order wijzigt of terugzet: oefenorders betalen "
+    "ze en de netto resultaten rekenen ermee.",
     "claude": "Nodig als je het maandbudget wijzigt of terugzet.",
     "news": "Nodig als je de RSS-feeds wijzigt of terugzet.",
 }
@@ -834,13 +823,16 @@ def keys_in_group(group: str) -> list[str]:
 
 
 def keys_in_form(group: str, part: str = "") -> list[str]:
-    """The settings one form of the page saves: a part with its own form (OWN_FORM_PARTS), or
-    the rest of the block."""
+    """The settings one form of the page saves: a block of GROUPS (a whole settings group, or
+    the part PART_GROUPS names), a part with its own form (OWN_FORM_PARTS), or nothing."""
     if part:
         if OWN_FORM_PARTS.get(part, ("",))[0] != group:
             return []
         return [s.key for s in SPECS if s.group == group and s.section == part]
-    return [s.key for s in SPECS if s.group == group and s.section not in OWN_FORM_PARTS]
+    if group in PART_GROUPS:
+        owner, section = PART_GROUPS[group]
+        return [s.key for s in SPECS if s.group == owner and s.section == section]
+    return [s.key for s in SPECS if s.group == group and s.section not in _SPLIT_SECTIONS]
 
 
 # -- parsing & validation ---------------------------------------------------------------
@@ -1292,11 +1284,11 @@ def describe(session: Session, current: Settings, env: Settings | None = None) -
     overrides = load_overrides(session)
     groups: list[dict] = []
     for group, (title, desc) in GROUPS.items():
-        specs = [s for s in SPECS if s.group == group and s.section not in OWN_FORM_PARTS]
-        fields = [_field(s, current, env, overrides) for s in specs]
+        fields = [_field(SPEC_BY_KEY[k], current, env, overrides) for k in keys_in_form(group)]
         sections = []
-        for key, sec_title, sec_help in SECTIONS.get(group, [("", "", "")]):
-            if key in OWN_FORM_PARTS:
+        parts = [("", "", "")] if group in PART_GROUPS else SECTIONS.get(group, [("", "", "")])
+        for key, sec_title, sec_help in parts:
+            if key in _SPLIT_SECTIONS:
                 continue
             in_section = [f for f in fields if f["section"] == key or not key]
             if in_section:

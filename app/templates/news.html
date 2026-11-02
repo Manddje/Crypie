@@ -12,15 +12,15 @@
 {%- set NEWS_CARDS = 3 %}
 <div class="page-header">
   <h1>Nieuws</h1>
-  <p class="subtitle">Wat de cryptomedia en het wereldnieuws melden, en welk nieuws de bot meeweegt.</p>
-  <div class="actions">
+  <p class="subtitle">Wat de media melden en welk nieuws de bot meeweegt.</p>
+  <div class="actions news-actions">
     <form class="inline" method="post" action="/news/refresh">
       <input type="hidden" name="hours" value="{{ hours }}">
       {% if telt %}<input type="hidden" name="telt" value="{{ telt }}">{% endif %}
       <button class="btn btn-tint" type="submit" data-busy="Nieuws ophalen… (kan ~20 s duren)">Nu verversen</button>
     </form>
     <span class="small muted">Laatst opgehaald: {{ last_run|ago }} · {% if settings.news_enabled and settings.news_fetch_interval_min > 0 %}automatisch elke {{ settings.news_fetch_interval_min }} minuten{% else %}alleen als je ververst{% endif %}</span>
-  </div>
+  {#- On the same row as the button while folded (UX-107); opened, it takes the full width. -#}
   <details class="page-help">
     <summary>Hoe telt nieuws mee?</summary>
     <p>Claude beoordeelt per bericht of het de koers raakt, hoe sterk (impact klein, middel of groot) en hoe lang (uren, dagen of weken). De bot weegt dat mee bij elke beslissing.</p>
@@ -28,20 +28,21 @@
     <p>Bij elk nieuwsfeit staat of het nu meetelt voor jouw coins en zo niet, waarom: niet beoordeeld, niet koersrelevant, ouder dan {{ sentiment_hours }} uur, over andere coins, of impact 0.</p>
     <p>Bronnen: {{ settings.news_rss_feeds|length }} RSS-feeds{% if settings.gdelt_enabled %}, GDELT (wereldnieuws){% endif %}{% if settings.cryptopanic_token %}, CryptoPanic{% endif %}{% if settings.fear_greed_enabled %}, en de Fear &amp; Greed-index van alternative.me{% endif %}.</p>
   </details>
+  </div>
 </div>
 
 <div class="stack">
   {% if last_error %}{{ ui.notice("warn", "Bij de laatste ophaalronde ging iets mis: " ~ last_error ~ ". De volgende ronde probeert het opnieuw.", live=false) }}{% endif %}
   {% if not assessing %}
-  {% call ui.notice("info", "Nieuwsbeoordeling staat uit: er is geen Claude-sleutel. Berichten worden wel opgehaald, maar niet beoordeeld, dus nieuws telt niet mee in de beslissingen.", live=false) %}
-  <span class="small muted"> Stel <span class="mono">ANTHROPIC_API_KEY</span> in de serveromgeving in om het aan te zetten.</span>
+  {% call ui.notice("info", "Nieuwsbeoordeling staat uit: zonder Claude-sleutel worden berichten niet beoordeeld en telt nieuws niet mee.", live=false) %}
+  <span class="mono">ANTHROPIC_API_KEY</span>
   {% endcall %}
   {% endif %}
 
   <section class="news-sentiment" aria-labelledby="sentiment-title">
     <div class="news-section-head">
       <h2 id="sentiment-title">Sentiment</h2>
-      <span class="card-meta">laatste {{ sentiment_hours }} uur · zo weegt de bot het nieuws</span>
+      <span class="card-meta">laatste {{ sentiment_hours }} uur · score van -1 tot +1</span>
     </div>
     <div class="grid">
       {% if market_mood %}
@@ -54,7 +55,7 @@
           {% if market_mood.value > 50 %}<div class="fill pos {{ bar_width(market_mood.value - 50) }}"></div>
           {% elif market_mood.value < 50 %}<div class="fill neg {{ bar_width(50 - market_mood.value) }}"></div>{% endif %}
         </div>
-        <p class="small muted">Fear &amp; Greed-index {{ market_mood.value }} van 100 (0 = extreme angst, 100 = extreme hebzucht), bron alternative.me. Claude krijgt dit mee bij elke beslissing.</p>
+        <p class="small muted">Fear &amp; Greed-index {{ market_mood.value }} van 100 (alternative.me), als context voor Claude.</p>
       </section>
       {% endif %}
       {#- UX-107: a card for the first coins; with many markets the rest is one compact,
@@ -69,7 +70,7 @@
           {% if s.score > 0 %}<div class="fill pos {{ bar_width([s.score, 1]|min * 50) }}"></div>
           {% elif s.score < 0 %}<div class="fill neg {{ bar_width([-s.score, 1]|min * 50) }}"></div>{% endif %}
         </div>
-        <p class="small muted">Score {{ signed(s.score) }} op een schaal van -1 tot +1 · {{ s.items }} nieuwsfeit{{ "en" if s.items != 1 }} uit {{ s.articles }} bericht{{ "en" if s.articles != 1 }}{% if s.high_impact %}, waarvan {{ s.high_impact }} met impact middel of groot{% endif %}</p>
+        <p class="small muted">Score {{ signed(s.score) }} · {{ s.items }} nieuwsfeit{{ "en" if s.items != 1 }} uit {{ s.articles }} bericht{{ "en" if s.articles != 1 }}{% if s.high_impact %} · {{ s.high_impact }} met impact middel of groot{% endif %}</p>
         {% if s.top %}
         <details class="news-top-box" open data-collapse-mobile>
         <summary>Belangrijkste nieuws voor {{ s.coin }}</summary>
@@ -124,7 +125,7 @@
     </div>
     {% if truncated %}{{ ui.notice("warn", "Deze periode heeft " ~ n_articles ~ " berichten; alleen de nieuwste " ~ max_items ~ " zijn gegroepeerd en geteld. Kies een kortere periode om alles te zien.", live=false) }}{% endif %}
     {% if groups %}
-    <p class="news-range small muted">{{ first }}–{{ last }} van {{ n_shown }}{% if pages > 1 %} · pagina {{ page }} van {{ pages }}{% endif %}</p>
+    {% if pages > 1 %}<p class="news-range small muted">{{ first }}–{{ last }} van {{ n_shown }} · pagina {{ page }} van {{ pages }}</p>{% endif %}
     {% for g in groups %}
     {% set it = g.lead %}
     <article class="news-item {{ 'dim' if not g.status.counts and g.status.code != 'pending' else '' }}" id="{{ g.anchor }}" aria-labelledby="{{ g.anchor }}-t">

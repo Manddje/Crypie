@@ -316,8 +316,8 @@ async def test_handelen_points_to_trades_of_the_other_mode(api):  # noqa: F811
         pid = p.id
     try:
         page = (await api.get("/trading", headers=HTML)).text
-        assert "Alleen oefenmodus. Er is ook 1 trade uit live" in page
-        assert '<a href="/journal?mode=live">bekijken in het journaal</a>' in page
+        assert "Alleen oefenmodus. Er is ook 1 gesloten trade uit live" in page
+        assert '<a href="/journal?mode=live&amp;status=closed">bekijken in het journaal</a>' in page
     finally:
         with SessionLocal() as s:
             s.execute(delete(Position).where(Position.id == pid))

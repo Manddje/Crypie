@@ -63,8 +63,8 @@ def orders_limit_nl(today: int, maximum: int) -> str:
     bereikt (7 orders vandaag, maximum 6); kopen kan weer vanaf 00:00 UTC'."""
     if maximum <= 0:
         return (
-            "het maximum aantal orders per dag staat op 0: er wordt niets gekocht tot je het "
-            "in Instellingen verhoogt"
+            "het maximum aantal orders per dag staat op 0, dus er wordt niets gekocht tot je "
+            "het in Instellingen verhoogt"
         )
     return (
         f"het maximum aantal orders per dag is bereikt ({today} "
