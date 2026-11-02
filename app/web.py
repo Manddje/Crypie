@@ -473,6 +473,33 @@ def md(text: object, heading: int = 3) -> Html:
     return Html('<div class="md">' + "".join(out) + "</div>")
 
 
+# A web address in the owner's own text (journal notes): http(s) only, closing punctuation
+# stays outside the link. Runs on escaped text, so the address is already attribute-safe.
+_URL = re.compile(r"\bhttps?://[^\s<>\"']+", re.IGNORECASE)
+_URL_TAIL = ".,;:!?)]}'\""
+
+
+def linkify(text: object) -> Html:
+    """Escape ``text`` and make its http(s) addresses clickable (new tab, no referrer). Line
+    breaks stay as they are (use it inside .prose)."""
+    if text is None:
+        return Html("")
+    escaped = _esc(text)
+
+    def link(match: re.Match[str]) -> str:
+        url = match.group(0)
+        tail = ""
+        while url and url[-1] in _URL_TAIL:
+            tail = url[-1] + tail
+            url = url[:-1]
+        if url.endswith(("&quot", "&#x27")):  # an escaped quote right after the address
+            cut = url.rfind("&")
+            url, tail = url[:cut], url[cut:] + tail
+        return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a>{tail}'
+
+    return Html(_URL.sub(link, escaped))
+
+
 def indicator_nl(ind: IndicatorSpec) -> str:
     if ind.type == "macd":
         return f"MACD {ind.fast}/{ind.slow}/{ind.signal}"
@@ -574,6 +601,7 @@ templates.env.filters.update(
         "dt_text": dt,
         "ago_text": ago,
         "md": md,
+        "linkify": linkify,
         "close_reason": close_reason,
         "order_reason": order_reason,
         "indicator_nl": indicator_nl,

@@ -219,3 +219,13 @@ async def test_navigation_shows_the_kill_switch_on_every_page(api):
     finally:
         await api.post("/trading/action", data={"action": "resume"})
     assert "mode-extra" not in (await api.get("/news")).text
+
+
+def test_templates_do_not_gain_inline_styles():
+    """Use the classes in app.css (utilities, .field, .metric, …) instead of style=. This count
+    may only go down."""
+    count = sum(
+        path.read_text(encoding="utf-8").count('style="')
+        for path in (STATIC_DIR.parent / "templates").rglob("*.html")
+    )
+    assert count <= 60, count

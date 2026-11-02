@@ -11,6 +11,7 @@ from app.web import (
     dt,
     eur,
     indicator_nl,
+    linkify,
     md,
     nl,
     num,
@@ -140,3 +141,17 @@ def test_close_and_order_reasons_in_dutch():
     }
     assert order_reason("stop_loss")["text"] == "stop-loss geraakt"
     assert order_reason("iets anders")["source"] == ""
+
+
+def test_linkify_escapes_and_only_links_http_addresses():
+    html = str(
+        linkify('Zie https://example.com/a?b=1&c=2. En <b>"x"</b> javascript:alert(1)\nregel')
+    )
+    assert (
+        '<a href="https://example.com/a?b=1&amp;c=2" target="_blank" rel="noopener noreferrer">'
+        in html
+    )
+    assert "</a>. En &lt;b&gt;&quot;x&quot;&lt;/b&gt; javascript:alert(1)\nregel" in html
+    quoted = str(linkify('"https://x.test/p"'))
+    assert 'href="https://x.test/p"' in quoted and quoted.endswith(">https://x.test/p</a>&quot;")
+    assert linkify(None) == "" and "<a" not in str(linkify("ftp://x.test"))

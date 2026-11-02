@@ -515,7 +515,7 @@ abbr[title] { text-decoration: underline dotted; text-underline-offset: 0.15em; 
 .kill-switch-help { color: var(--text-2); font-size: var(--fs-detail); max-width: 56ch; }
 
 /* -- Stats -- */
-.stats { display: grid; gap: 12px 16px; grid-template-columns: repeat(auto-fill, minmax(min(160px, 100%), 1fr)); }
+.stats { display: grid; gap: 12px 16px; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); }
 .stat { padding: 16px 18px; border-radius: var(--radius-sm); background: var(--fill); min-width: 0; }
 .stat .label { color: var(--text-2); font-size: var(--fs-detail); font-weight: 500; }
 .stat .value { font-size: var(--fs-metric); font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.2; margin-top: 2px; }
@@ -567,6 +567,8 @@ abbr[title] { text-decoration: underline dotted; text-underline-offset: 0.15em; 
     radial-gradient(farthest-side at 100% 50%, var(--scroll-shadow), transparent) right center / 14px 100% no-repeat scroll;
 }
 .table-wrap:focus-visible { outline-offset: -2px; }
+/* Two tables side by side: no bleed into the card padding, or they would overlap. */
+:is(.grid, .grid-2, .grid-3) > .table-wrap { margin: 0; padding: 0; }
 table { width: 100%; border-collapse: collapse; font-size: var(--fs-help); }
 th {
   text-align: left;
@@ -1012,6 +1014,8 @@ details.advanced > *:not(summary) { margin-top: 14px; }
 .right { text-align: right; }
 .nowrap { white-space: nowrap; }
 .break { overflow-wrap: anywhere; }
+/* Long text cut after three lines (put the full text behind a link or <details>). */
+.clamp-3 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 .eyebrow { font-size: var(--fs-detail); font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; }
 .block { display: block; }
 
