@@ -4,17 +4,30 @@
 {% block content %}
 <h1>Inloggen</h1>
 <p class="auth-sub">Stap 1 van 2 · wachtwoord</p>
-{% if error %}{{ ui.notice("error", error) }}{% endif %}
-<form method="post" action="/login" class="auth-form">
+{% if error %}{{ ui.notice("error", error, live=true, id="login-error") }}{% endif %}
+<p class="auth-note" data-draft-note hidden>Je niet-opgeslagen wijzigingen in Instellingen staan nog in deze browser. Na het inloggen kun je ze in het blok terugzetten.</p>
+<form method="post" action="/login" class="auth-form" data-auth-form>
   <input type="hidden" name="next" value="{{ next }}">
   <label>Gebruikersnaam
-    <input type="text" name="username" value="{{ username }}" autocomplete="username" autocapitalize="off" spellcheck="false" required autofocus>
+    <input type="text" name="username" value="{{ username }}" autocomplete="username" autocapitalize="off" spellcheck="false" required{% if not username %} autofocus{% endif %}>
   </label>
   <label>Wachtwoord
-    <input type="password" name="password" autocomplete="current-password" required>
+    {#- After an error the name is still filled in: the password is where to type. -#}
+    <input type="password" name="password" autocomplete="current-password" required{% if username %} autofocus{% endif %}{% if error %} aria-invalid="true" aria-describedby="login-error"{% endif %}>
   </label>
-  <button class="btn btn-primary btn-block" type="submit">Verder</button>
+  <button class="btn btn-primary btn-block" type="submit" data-busy="Bezig…">Verder</button>
 </form>
+<p class="auth-meta">Daarna vul je een code uit je authenticator-app in. Je blijft {{ settings.auth_session_hours }} uur ingelogd.</p>
+<details class="auth-details">
+  <summary>Wachtwoord of authenticator kwijt?</summary>
+  <p class="small muted">Dit los je op de server op (in de container van de app):</p>
+  <ul class="auth-commands small muted">
+    <li><span class="mono">python -m app.auth reset-password</span> kiest een nieuw wachtwoord; elke browser wordt uitgelogd.</li>
+    <li><span class="mono">python -m app.auth reset-mfa</span> wist de authenticator en de herstelcodes en geeft een eenmalige code om een nieuwe te koppelen.</li>
+    <li><span class="mono">python -m app.auth clear-throttle</span> heft een blokkade na te veel foute pogingen op.</li>
+  </ul>
+  <p class="small muted">Telefoon kwijt maar nog herstelcodes? Log gewoon in en kies bij de code 'Herstelcode gebruiken'.</p>
+</details>
 <details class="auth-details">
   <summary>Eerste keer?</summary>
   <p class="small muted">Het account maak je aan via de setup-link die de server bij het starten in de logs zet (zoek naar <span class="mono">/setup?token=</span>), of op de server met <span class="mono">python -m app.auth create-account</span>.</p>

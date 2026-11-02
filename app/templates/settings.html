@@ -1,149 +1,341 @@
 {% extends "base.html" %}
 {% import "_macros.html" as ui %}
 {% block title %}Crypie · Instellingen{% endblock %}
+
+{#- The ids a field's description consists of: unit, help, dependency, lock, default, ceiling,
+    warning and error, each with an element of its own (fid ~ "-help" and so on). -#}
+{% macro described_by(f, fid) -%}
+{%- if f.kind in ("int", "float") and f.unit %} {{ fid }}-unit{% endif -%}
+{%- if f.help %} {{ fid }}-help{% endif -%}
+{%- if f.depends_text %} {{ fid }}-dep{% endif -%}
+{%- if f.sensitive and step_up %} {{ fid }}-lock{% endif -%}
+{%- if f.overridden %} {{ fid }}-default{% endif -%}
+{%- if f.ceiling is not none %} {{ fid }}-ceiling{% endif -%}
+{%- if f.kind == "model" %} {{ fid }}-warn{% endif -%}
+{%- if f.error %} {{ fid }}-error{% endif -%}
+{%- endmacro %}
+
+{#- The text column of a setting: label (or legend), lock, help and the notes below it. -#}
+{% macro setting_notes(f, fid) -%}
+  {% if f.sensitive and step_up %}<span class="lock-tag" id="{{ fid }}-lock">{{ ui.icon("lock") }}vraagt wachtwoord</span>{% endif %}
+  {% if f.help %}<p class="setting-help" id="{{ fid }}-help">{{ f.help }}</p>{% endif %}
+  {% if f.depends_text %}<p class="setting-dep" id="{{ fid }}-dep">{{ f.depends_text }}</p>{% endif %}
+  {% if f.overridden %}
+  <p class="setting-default" id="{{ fid }}-default">Aangepast. Standaard: <strong>{{ f.default_display }}</strong> <span class="mono">{{ f.env_name }}</span></p>
+  {% if f.key != "trading_mode" %}<button type="button" class="link-btn setting-reset" data-reset-field="{{ f.key }}" data-default="{{ f.default_form }}" hidden>Terug naar standaard ({{ f.default_display }})</button>{% endif %}
+  {% endif %}
+  {% if f.ceiling is not none %}<p class="setting-default" id="{{ fid }}-ceiling">Plafond uit de serveromgeving: <strong>{{ f.ceiling_display }}</strong> <span class="mono">{{ f.ceiling_env }}</span></p>{% endif %}
+  {% if f.kind == "model" %}<p class="setting-warn" id="{{ fid }}-warn" data-model-warn{% if not f.warning %} hidden{% endif %}>{{ f.warning or "Onbekend model: controleer de naam. Een typfout merk je pas bij de volgende aanroep, en de kostenschatting rekent dan met het duurste tarief." }}</p>{% endif %}
+  {% if f.error %}<p class="setting-error" id="{{ fid }}-error">{{ f.error }}</p>{% endif %}
+{%- endmacro %}
+
+{#- One setting: label and explanation on the left, the field on the right. -#}
+{% macro field_row(f) -%}
+{%- set fid = "f-" ~ f.key -%}
+{%- set desc = described_by(f, fid)|trim -%}
+{%- set row_class = "setting" ~ (" has-error" if f.error else "") ~ (" is-changed" if f.changed else "") ~ (" is-off" if f.dep_off else "") ~ (" setting--wide" if f.kind in ("lines", "events") else "") -%}
+{%- set row_attrs -%}
+id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} data-sensitive{% endif %}{% if f.depends %} data-depends-on="{{ f.depends }}"{% endif %}{% if f.loosen %} data-loosen="{{ f.loosen }}" data-label="{{ f.label }}" data-unit="{{ f.unit }}"{% endif %}
+{%- endset -%}
+{% if f.key == "trading_mode" %}
+<fieldset class="{{ row_class }} setting--group" {{ row_attrs }} aria-describedby="{{ desc }}">
+  <legend class="setting-label" id="{{ fid }}-label">{{ f.label }}</legend>
+  <div class="setting-text">{{ setting_notes(f, fid) }}</div>
+  <div class="setting-control">
+    <div class="seg-radio" data-saved="{{ f.saved_text }}" data-radio-group="trading_mode">
+      {% for value, label in f.choices %}
+      {% set blocked = value == "live" and live.missing and settings.trading_mode != "live" %}
+      <label class="{{ 'disabled' if blocked }}">
+        <input type="radio" name="{{ f.key }}" value="{{ value }}"{% if f.value == value %} checked{% endif %}{% if blocked %} disabled aria-describedby="live-check-title"{% endif %}>
+        <span>{{ label }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+  {{ live_check() }}
+</fieldset>
+{% else %}
+<div class="{{ row_class }}" {{ row_attrs }}>
+  <div class="setting-text">
+    <label class="setting-label" for="{{ fid }}" id="{{ fid }}-label">{{ f.label }}</label>
+    {{ setting_notes(f, fid) }}
+  </div>
+  <div class="setting-control">
+    {% set aria %}aria-describedby="{{ desc }}"{% if f.error %} aria-invalid="true"{% endif %}{% endset %}
+    {% if f.kind == "bool" %}
+      <input type="hidden" name="{{ f.key }}" value="false">
+      <span class="switch">
+        <input type="checkbox" role="switch" id="{{ fid }}" name="{{ f.key }}" value="true" data-saved="{{ f.saved_text }}"{% if f.value %} checked{% endif %} {{ aria }}>
+        <span class="track" aria-hidden="true"></span>
+        <span class="state" aria-hidden="true">{{ "Aan" if f.value else "Uit" }}</span>
+      </span>
+    {% elif f.kind == "choice" %}
+      <select id="{{ fid }}" name="{{ f.key }}" data-saved="{{ f.saved_text }}" {{ aria }}>
+        {% for value, label in f.choices %}<option value="{{ value }}"{% if f.value == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    {% elif f.kind == "model" %}
+      <input type="text" id="{{ fid }}" name="{{ f.key }}" value="{{ f.text }}" data-saved="{{ f.saved_text }}" list="claude-models" spellcheck="false" autocomplete="off" autocapitalize="off" maxlength="100" data-model {{ aria }}>
+    {% elif f.kind in ("lines", "events") %}
+      <textarea id="{{ fid }}" name="{{ f.key }}" class="setting-textarea" rows="{{ 12 if f.kind == 'events' else 6 }}" spellcheck="false" autocapitalize="off" maxlength="20000" data-saved="{{ f.saved_text }}"{% if f.placeholder %} placeholder="{{ f.placeholder }}"{% endif %} {{ aria }}>{{ f.text }}</textarea>
+    {% elif f.kind in ("int", "float") %}
+      {% set money = f.unit in ("€", "$") %}
+      <div class="unit-input">
+        <span class="unit unit-prefix"{% if money %} id="{{ fid }}-unit"{% else %} aria-hidden="true"{% endif %}>{{ f.unit if money }}</span>
+        <input type="text" id="{{ fid }}" name="{{ f.key }}" value="{{ f.text }}" data-saved="{{ f.saved_text }}" data-number="{{ f.kind }}" inputmode="{{ 'numeric' if f.kind == 'int' and (f.min or 0) >= 0 else 'decimal' }}" autocomplete="off" spellcheck="false" maxlength="24" {{ aria }}>
+        <span class="unit unit-suffix"{% if f.unit and not money %} id="{{ fid }}-unit"{% else %} aria-hidden="true"{% endif %}>{{ f.unit if not money }}</span>
+      </div>
+      <p class="setting-check" data-number-check hidden></p>
+    {% else %}
+      <input type="text" id="{{ fid }}" name="{{ f.key }}" value="{{ f.text }}" data-saved="{{ f.saved_text }}" spellcheck="false" autocomplete="off" maxlength="2000"{% if f.kind == "markets" %} class="input-upper" autocapitalize="characters"{% endif %}{% if f.placeholder %} placeholder="{{ f.placeholder }}"{% endif %} {{ aria }}>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{%- endmacro %}
+
+{#- Under Modus: what live trading needs (all of it at once) and, when it is possible, what
+    switching means plus the typed confirmation. -#}
+{% macro live_check() -%}
+<div class="live-check" id="live-check">
+  {% if settings.trading_mode == "live" %}
+  <p class="live-check-title" id="live-check-title">Je handelt live, met echt geld op Bitvavo.</p>
+  {% elif live.missing %}
+  <p class="live-check-title" id="live-check-title">Live is nog niet mogelijk. Dit is nodig (op de server):</p>
+  {% else %}
+  <p class="live-check-title" id="live-check-title">Live is mogelijk. Alles wat de server vraagt, is in orde:</p>
+  {% endif %}
+  <ul class="live-list">
+    {% for r in live.requirements %}
+    <li class="{{ 'is-ok' if r.ok else 'is-missing' }}">
+      {{ ui.icon("ok" if r.ok else "error") }}
+      <span><span class="visually-hidden">{{ "In orde: " if r.ok else "Ontbreekt: " }}</span>{{ r.label }}{% if not r.ok %}. <span class="live-fix">{{ r.fix }}</span>{% endif %} <span class="mono">{{ r.env }}</span></span>
+    </li>
+    {% endfor %}
+  </ul>
+  <p class="live-check-sub">Aanbevolen voor Live</p>
+  <ul class="live-list">
+    {% for a in live.advice %}
+    <li class="{{ 'is-ok' if a.ok else 'is-advice' }}">
+      {{ ui.icon("ok" if a.ok else "warn") }}
+      <span><span class="visually-hidden">{{ "In orde: " if a.ok else "Aanbevolen: " }}</span>{{ a.label }}.{% if not a.ok %} <span class="live-fix">{{ a.fix }}</span> <a href="{{ a.href }}">{{ a.link }}</a>{% endif %}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% if live.can_switch %}
+  <div class="live-confirm{{ ' has-error' if errors.confirm_live }}" data-live-confirm>
+    <p class="live-confirm-title">Bij Live plaatst de bot vanaf de volgende cyclus echte orders op Bitvavo, met echt geld, binnen deze grenzen:</p>
+    <dl class="kv live-summary">
+      {% for label, value in live.summary %}<dt>{{ label }}</dt><dd>{{ value }}</dd>{% endfor %}
+    </dl>
+    {% if live.capital_zero %}<p class="setting-warn">Kapitaal voor de bot staat op 0: de limieten rekenen dan met je hele Bitvavo-account. <a href="#f-live_capital_eur">Kapitaal instellen</a></p>{% endif %}
+    <div class="field live-confirm-field">
+      <label for="confirm_live">Typ LIVE om over te stappen naar echt geld</label>
+      <input type="text" id="confirm_live" name="confirm_live" value="{{ form_extra.confirm_live|default('') }}" class="input-upper input-sm" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="20" data-no-draft aria-describedby="confirm_live-help{% if errors.confirm_live %} confirm_live-error{% endif %}"{% if errors.confirm_live %} aria-invalid="true"{% endif %}>
+      <p class="setting-help" id="confirm_live-help">Alleen nodig als je hierboven Live kiest en Handelen opslaat.</p>
+      {% if errors.confirm_live %}<p class="setting-error" id="confirm_live-error">{{ errors.confirm_live }}</p>{% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{%- endmacro %}
+
+{#- Feedback at the top of a block, where the browser lands after saving (#block). -#}
+{% macro block_feedback(key, pw_failed=false, unsaved=[], error_items=[], needs_pw=false) -%}
+<div class="settings-feedback" id="{{ key }}-feedback">
+  {% if saved_block == key %}{% for fl in block_flashes %}{{ ui.notice(fl.kind, fl.text, live=true) }}{% endfor %}{% endif %}
+  {% if error_items %}
+    {% call ui.notice("error", "", live=true, title="Niet opgeslagen:") %}
+      {{ error_items|length }} {{ "veld klopt" if error_items|length == 1 else "velden kloppen" }} niet:
+      {% for e in error_items %}{% if e.message %}{{ e.label }} ({{ e.message }}){% else %}<a href="{{ e.href or '#f-' ~ e.key }}" data-focus-link>{{ e.label }}</a>{% endif %}{{ ", " if not loop.last }}{% endfor %}.
+      {% if needs_pw %}Vul daarna ook je wachtwoord opnieuw in.{% endif %}
+    {% endcall %}
+  {% elif pw_failed %}
+    {{ ui.notice("error", password_error[1] ~ (" Zolang de blokkade duurt, kun je ook niet opnieuw inloggen." if password_throttled else ""), live=true, title="Niet opgeslagen:") }}
+  {% endif %}
+  {% if unsaved and form_group == key %}<p class="settings-unsaved-note">Oranje gemarkeerd: gewijzigd, maar nog niet opgeslagen.</p>{% endif %}
+</div>
+{%- endmacro %}
+
+{#- The current-password field of a block. -#}
+{% macro password_row(key, help) -%}
+{%- set pwid = "pw-" ~ key -%}
+{%- set pw_failed = password_error and password_error[0] == key -%}
+<div class="setting setting--password{{ ' has-error' if pw_failed }}" data-password-row>
+  <div class="setting-text">
+    <label class="setting-label" for="{{ pwid }}">{{ ui.icon("lock") }}Huidig wachtwoord</label>
+    <p class="setting-help" id="{{ pwid }}-help">{{ help }}</p>
+    <p class="setting-need" id="{{ pwid }}-need" data-password-need hidden></p>
+    {% if pw_failed %}
+    <p class="setting-error" id="{{ pwid }}-error">{{ password_error[1] }}{% if attempts_left is not none and attempts_left <= 3 and attempts_left > 0 %} Nog {{ attempts_left }} {{ "poging" if attempts_left == 1 else "pogingen" }}; daarna kun je een tijd niet opslaan en niet inloggen.{% endif %}{% if password_throttled %} Zolang de blokkade duurt, kun je ook niet opnieuw inloggen. Op de server heft <span class="mono">python -m app.auth clear-throttle</span> haar op.{% endif %}</p>
+    {% elif form_group == key %}
+    <p class="setting-help">Vul je wachtwoord opnieuw in; het wordt niet bewaard.</p>
+    {% endif %}
+  </div>
+  <div class="setting-control">
+    <input type="password" id="{{ pwid }}" name="current_password" autocomplete="current-password" maxlength="1024" data-no-draft aria-describedby="{{ pwid }}-help {{ pwid }}-need{% if pw_failed %} {{ pwid }}-error{% endif %}"{% if pw_failed %} aria-invalid="true"{% endif %}>
+  </div>
+</div>
+{%- endmacro %}
+
 {% block content %}
-<div class="page-header">
+<div class="page-header" id="top">
   <h1>Instellingen</h1>
-  <p class="subtitle">Hier bepaal je hoe de bot handelt. Wat je opslaat geldt direct, zonder herstart, en blijft bewaard. De serveromgeving (Coolify) levert alleen nog de standaardwaarden; sleutels en wachtwoorden blijven daar staan.</p>
+  <p class="subtitle">Hier bepaal je hoe de bot handelt. Elk blok heeft een eigen knop Opslaan; wat je opslaat geldt direct, zonder herstart. Sleutels en wachtwoorden staan alleen op de server.</p>
 </div>
 
-<div class="stack">
-  {% if message %}{{ ui.notice("ok", message) }}{% endif %}
-  {% if config_warning %}{{ ui.notice("warn", config_warning) }}{% endif %}
-  {% if errors %}{{ ui.notice("error", "Niet opgeslagen. Kijk naar de gemarkeerde velden en probeer het opnieuw.") }}{% endif %}
-  {% if password_error %}{{ ui.notice("error", "Niet opgeslagen: " ~ password_error[1]) }}{% endif %}
+{% if config_warning %}{{ ui.notice("warn", config_warning, live=false) }}{% endif %}
 
-  <nav class="segmented settings-nav" aria-label="Onderdelen">
-    {% for g in groups %}<a href="#{{ g.key }}">{{ g.title }}</a>{% endfor %}
-    <a href="#omgeving">Omgeving</a>
+<datalist id="claude-models">{% for m in model_choices %}<option value="{{ m }}">{% endfor %}</datalist>
+
+<div class="settings-layout">
+  <nav class="settings-toc" aria-label="Onderdelen van Instellingen">
+    <p class="settings-toc-title" aria-hidden="true">Op deze pagina</p>
+    <ul>
+      {% for g in groups %}
+      <li><a href="#{{ g.key }}" data-toc="{{ g.key }}">{{ g.title }}<span class="toc-dirty" data-toc-dirty{% if not g.unsaved %} hidden{% endif %}>niet opgeslagen</span></a></li>
+      {% endfor %}
+      <li><a href="#oefenportefeuille" data-toc="oefenportefeuille">Oefenportefeuille</a></li>
+      <li><a href="#omgeving" data-toc="omgeving">Uit de omgeving</a></li>
+    </ul>
   </nav>
 
-  <datalist id="claude-models">{% for m in model_choices %}<option value="{{ m }}">{% endfor %}</datalist>
-
-  {% for g in groups %}
-  {% set changed = g.fields|selectattr("overridden")|list|length %}
-  <section class="card" id="{{ g.key }}">
-    <form method="post" action="/settings#{{ g.key }}" {% if g.key == "trading" %}data-current-mode="{{ settings.trading_mode }}" data-confirm-live="Overschakelen naar LIVE? Vanaf de volgende cyclus plaatst de bot echte orders op Bitvavo met echt geld."{% endif %}>
-      <input type="hidden" name="group" value="{{ g.key }}">
-      <div class="card-header">
-        <h2>{{ g.title }}</h2>
-        {% if changed %}<span class="pill pill-blue">{{ changed }} aangepast</span>{% else %}<span class="pill">standaard</span>{% endif %}
-      </div>
-      <p class="card-desc">{{ g.description }}</p>
-
-      <div class="settings-list">
-        {% for f in g.fields %}
-        {% set fid = "f-" ~ f.key %}
-        <div class="setting{% if f.key in errors %} has-error{% endif %}">
-          <div class="setting-text">
-            <label for="{{ fid }}">{{ f.label }}</label>
-            {% if f.help %}<div class="setting-help">{{ f.help }}</div>{% endif %}
-            {% if f.overridden %}<div class="setting-default">Standaard uit omgeving: <strong>{{ f.default_text }}</strong> · {{ f.env_name }}</div>{% endif %}
-            {% if f.ceiling is not none %}<div class="setting-default">Plafond uit de omgeving: <strong>{{ f.ceiling|num(0) }}{{ " " ~ f.unit if f.unit else "" }}</strong> · {{ f.env_name }}_CEILING</div>{% endif %}
-            {% if f.key in errors %}<div class="setting-error" role="alert">{{ errors[f.key] }}</div>{% endif %}
-          </div>
-          <div class="setting-control">
-            {% if f.kind == "bool" %}
-              <input type="hidden" name="{{ f.key }}" value="false">
-              <label class="switch">
-                <input type="checkbox" id="{{ fid }}" name="{{ f.key }}" value="true" {% if f.value %}checked{% endif %}>
-                <span class="track" aria-hidden="true"></span>
-                <span class="state">{{ "Aan" if f.value else "Uit" }}</span>
-              </label>
-            {% elif f.key == "trading_mode" %}
-              <div class="seg-radio" role="radiogroup" aria-label="Modus">
-                {% for value, label in f.choices %}
-                {% set blocked = value == "live" and live_blocker and settings.trading_mode != "live" %}
-                <label class="{% if blocked %}disabled{% endif %}" title="{% if blocked %}{{ live_blocker|capitalize }}{% endif %}">
-                  <input type="radio" name="{{ f.key }}" value="{{ value }}" {% if f.value == value %}checked{% endif %} {% if blocked %}disabled{% endif %}>
-                  <span>{{ label }}</span>
-                </label>
-                {% endfor %}
-              </div>
-              {% if live_blocker and settings.trading_mode != "live" %}
-              <div class="setting-help" style="margin-top: 8px; text-align: right">Live is nog niet mogelijk: {{ live_blocker }}.</div>
-              {% endif %}
-            {% elif f.kind == "choice" %}
-              <select id="{{ fid }}" name="{{ f.key }}">
-                {% for value, label in f.choices %}<option value="{{ value }}" {% if f.value == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
-              </select>
-            {% elif f.kind == "model" %}
-              <input type="text" id="{{ fid }}" name="{{ f.key }}" value="{{ f.text }}" list="claude-models" spellcheck="false" autocomplete="off" maxlength="100">
-            {% elif f.kind in ("lines", "events") %}
-              <textarea id="{{ fid }}" name="{{ f.key }}" rows="{{ 8 if f.kind == 'events' else 4 }}" spellcheck="false" maxlength="20000">{{ f.text }}</textarea>
-            {% elif f.kind in ("int", "float") %}
-              <div class="unit-input">
-                {% if f.unit in ("€", "$") %}<span class="unit">{{ f.unit }}</span>{% endif %}
-                <input type="number" id="{{ fid }}" name="{{ f.key }}" value="{{ f.text }}" inputmode="decimal"
-                       {% if f.min is not none %}min="{{ f.min }}"{% endif %} {% if f.max is not none %}max="{{ f.max }}"{% endif %}
-                       step="{{ 1 if f.kind == 'int' else 'any' }}">
-                {% if f.unit and f.unit not in ("€", "$") %}<span class="unit">{{ f.unit }}</span>{% endif %}
-              </div>
-            {% else %}
-              <input type="text" id="{{ fid }}" name="{{ f.key }}" value="{{ f.text }}" spellcheck="false" maxlength="2000" {% if f.kind == "markets" %}placeholder="BTC-EUR, ETH-EUR" style="text-transform: uppercase"{% endif %}>
-            {% endif %}
-          </div>
+  <div class="settings-main">
+    {% for g in groups %}
+    {% set pw_failed = password_error and password_error[0] == g.key %}
+    <section class="card settings-block" id="{{ g.key }}" aria-labelledby="{{ g.key }}-title">
+      <form method="post" action="/settings#{{ g.key }}" novalidate data-settings-form data-block-title="{{ g.title }}"{% if g.key == form_group %} data-submitted{% endif %}{% if g.reset_needs_password and step_up %} data-reset-needs-password{% endif %}>
+        <input type="hidden" name="group" value="{{ g.key }}">
+        <div class="card-header">
+          <h2 class="card-title" id="{{ g.key }}-title">{{ g.title }}</h2>
+          <span class="pill pill-orange" data-dirty-pill{% if not g.unsaved %} hidden{% endif %}>Niet opgeslagen</span>
+          {% if g.changed %}<span class="pill">{{ g.changed|length }} aangepast</span>{% else %}<span class="pill">standaard</span>{% endif %}
         </div>
-        {% endfor %}
-      </div>
+        <p class="card-desc">{{ g.description }}</p>
+        {% if g.changed %}<p class="settings-changed">Aangepast ten opzichte van de serveromgeving: {{ g.changed|map(attribute="label")|join(", ") }}.</p>{% endif %}
+        {% if step_up and g.sensitive %}<p class="settings-lock-note">{{ ui.icon("lock") }}<span>Velden met een slotje vragen om je huidige wachtwoord; dat vul je onderaan dit blok in.</span></p>{% endif %}
 
-      {% if step_up and g.key in sensitive_groups %}
-      {% set pwid = "pw-" ~ g.key %}
-      {% set pw_failed = password_error and password_error[0] == g.key %}
-      <div class="setting{% if pw_failed %} has-error{% endif %}">
-        <div class="setting-text">
-          <label for="{{ pwid }}">Huidig wachtwoord</label>
-          <div class="setting-help">Alleen nodig als je de modus, automatisch handelen aan/uit, markten, limieten, risk-off, de exit-controle, het Claude-budget, het gedrag zonder Claude of de nieuwsfeeds wijzigt of terugzet.</div>
-          {% if pw_failed %}<div class="setting-error" role="alert">{{ password_error[1] }}</div>{% endif %}
+        {{ block_feedback(g.key, pw_failed, g.unsaved, g.errors, step_up and g.sensitive) }}
+        {% if g.key == form_group and loosened %}
+        <div class="loosen-confirm">
+          {% call ui.notice("warn", "", live=true, title="Nog niet opgeslagen: bevestig eerst.") %}
+            <p>Je maakt deze harde {{ "limiet" if loosened|length == 1 else "limieten" }} in één keer meer dan twee keer zo ruim:</p>
+            <ul>{% for c in loosened %}<li>{{ c }}</li>{% endfor %}</ul>
+            <p><label class="check-row"><input type="checkbox" name="confirm_loosen" value="1" id="confirm_loosen"> Ja, dit is wat ik wil</label></p>
+            <p>Vink dit aan{% if step_up %}, vul je wachtwoord opnieuw in{% endif %} en kies opnieuw {{ g.title }} opslaan.</p>
+          {% endcall %}
         </div>
-        <div class="setting-control">
-          <input type="password" id="{{ pwid }}" name="current_password" autocomplete="current-password" maxlength="1024">
-        </div>
-      </div>
-      {% endif %}
-
-      <div class="actions" style="margin-top: 18px">
-        <button class="btn btn-primary" type="submit" name="action" value="save">Opslaan</button>
-        <button class="btn" type="submit" name="action" value="reset" {% if not changed %}disabled{% endif %} formnovalidate data-confirm="Alle instellingen in dit blok terugzetten naar de waarden uit de serveromgeving?">Standaard herstellen</button>
-      </div>
-    </form>
-  </section>
-  {% endfor %}
-
-  <div class="grid-2">
-    <section class="card" id="omgeving">
-      <div class="card-header"><h2>Uit de omgeving</h2><span class="more muted small">alleen op de server</span></div>
-      <p class="card-desc">Sleutels en de live-bevestiging worden bewust niet in het portaal beheerd. Je stelt ze in bij de omgevingsvariabelen van de app in Coolify (of in <code>.env</code>).</p>
-      <dl class="kv">
-        <dt>Bitvavo-sleutel</dt><dd>{% if environment.bitvavo_key %}<span class="pill pill-green">ingesteld</span>{% else %}<span class="pill">niet ingesteld</span> <span class="small muted">BITVAVO_API_KEY, BITVAVO_API_SECRET</span>{% endif %}</dd>
-        <dt>Claude-sleutel</dt><dd>{% if environment.anthropic_key %}<span class="pill pill-green">ingesteld</span>{% else %}<span class="pill">niet ingesteld</span> <span class="small muted">ANTHROPIC_API_KEY</span>{% endif %}</dd>
-        <dt>CryptoPanic-token</dt><dd>{% if environment.cryptopanic_token %}<span class="pill pill-green">ingesteld</span>{% else %}<span class="pill">niet ingesteld</span> <span class="small muted">optioneel, CRYPTOPANIC_TOKEN</span>{% endif %}</dd>
-        <dt>Live-bevestiging</dt><dd>{% if environment.live_ack %}<span class="pill pill-orange">LIVE_TRADING_ACK=true</span>{% else %}<span class="pill">uit</span> <span class="small muted">LIVE_TRADING_ACK=true is nodig om live te kunnen handelen</span>{% endif %}</dd>
-        <dt>Database</dt><dd>{{ environment.database }}</dd>
-      </dl>
-    </section>
-
-    <section class="card">
-      <div class="card-header"><h2>Oefenportefeuille</h2></div>
-      {% if settings.trading_mode == "paper" %}
-      <p class="card-desc">Zet het oefensaldo terug op het startbedrag ({{ settings.paper_start_eur|eur(0) }}) en sluit open oefenposities zonder resultaat. Het logboek met beslissingen en orders blijft bewaard.</p>
-      <form method="post" action="/settings" data-confirm="Oefenportefeuille resetten? Het saldo gaat terug naar het startbedrag en open oefenposities worden gesloten.">
-        <input type="hidden" name="group" value="trading">
-        {% if step_up %}
-        <div class="form-row">
-          <label>Huidig wachtwoord
-            <input type="password" name="current_password" autocomplete="current-password" maxlength="1024" required>
-          </label>
-        </div>
-        {% if password_error and password_error[0] == "paper" %}<div class="setting-error" role="alert">{{ password_error[1] }}</div>{% endif %}
         {% endif %}
-        <button class="btn btn-danger" type="submit" name="action" value="reset_paper">Oefenportefeuille resetten</button>
+
+        {% for s in g.sections %}
+        {% if s.title %}
+        <fieldset class="settings-section" id="{{ g.key }}-{{ s.key }}">
+          <legend><h3 class="settings-section-title">{{ s.title }}</h3></legend>
+          {% if s.help %}<p class="settings-section-help">{{ s.help }}</p>{% endif %}
+          <div class="settings-list">{% for f in s.fields %}{{ field_row(f) }}{% endfor %}</div>
+        </fieldset>
+        {% else %}
+        <div class="settings-list">{% for f in s.fields %}{{ field_row(f) }}{% endfor %}</div>
+        {% endif %}
+        {% endfor %}
+
+        {% if step_up and g.key in sensitive_groups %}{{ password_row(g.key, g.step_up_help) }}{% endif %}
+
+        <div class="settings-actions" data-actions>
+          <p class="settings-actions-status" data-dirty-status aria-live="polite"></p>
+          <div class="actions">
+            <button class="btn btn-primary" type="submit" name="action" value="save" data-busy="Opslaan…">{{ g.title }} opslaan</button>
+            <button class="btn" type="button" data-undo hidden>Wijzigingen terugdraaien</button>
+            <button class="btn btn-danger" type="submit" name="action" value="reset"{% if not g.resettable %} disabled aria-describedby="{{ g.key }}-reset-note"{% endif %} formnovalidate data-confirm="{{ g.reset_confirm }}" data-busy="Terugzetten…">Standaard herstellen</button>
+          </div>
+          <p class="settings-actions-note" id="{{ g.key }}-reset-note">Opslaan geldt alleen voor dit blok.{% if not g.resettable %} Standaard herstellen kan zodra hier iets is aangepast.{% endif %}</p>
+        </div>
+      </form>
+      <p class="settings-top"><a href="#top">Terug naar boven</a></p>
+    </section>
+    {% endfor %}
+
+    {% set pf = paper_field %}
+    {% set paper_failed = password_error and password_error[0] == "paper" %}
+    <section class="card settings-block" id="oefenportefeuille" aria-labelledby="oefenportefeuille-title">
+      <div class="card-header"><h2 class="card-title" id="oefenportefeuille-title">Oefenportefeuille</h2><span class="pill pill-paper">fictief geld</span></div>
+      {% if settings.trading_mode == "paper" %}
+      <p class="card-desc">Begin opnieuw met een vers oefensaldo. Open oefenposities worden gesloten zonder resultaat; het logboek met beslissingen en orders blijft bewaard.</p>
+      <form method="post" action="/settings#oefenportefeuille" novalidate data-settings-form data-block-title="Oefenportefeuille"{% if form_group == "paper" %} data-submitted{% endif %} data-confirm="Oefenportefeuille resetten? Het saldo gaat terug naar het startbedrag en open oefenposities worden gesloten zonder resultaat.">
+        <input type="hidden" name="group" value="paper">
+        {{ block_feedback("paper", paper_failed, [pf] if pf.changed else [], [{"key": "paper_start_eur", "label": pf.label}] if pf.error else [], step_up) }}
+        <div class="settings-list">{{ field_row(pf) }}</div>
+        {% if step_up %}{{ password_row("paper", "Nodig om de oefenportefeuille te resetten.") }}{% endif %}
+        <div class="settings-actions" data-actions>
+          <p class="settings-actions-status" data-dirty-status aria-live="polite"></p>
+          <div class="actions">
+            <button class="btn btn-danger" type="submit" name="action" value="reset_paper" data-busy="Resetten…">Oefenportefeuille resetten</button>
+          </div>
+          <p class="settings-actions-note">Het startbedrag wordt opgeslagen samen met de reset.</p>
+        </div>
       </form>
       {% else %}
-      <p class="card-desc">Je handelt live. De oefenportefeuille kun je alleen resetten in oefenmodus.</p>
+      {{ block_feedback("paper") }}
+      <p class="card-desc">Je handelt live. De oefenportefeuille kun je alleen resetten in oefenmodus. Startbedrag: {{ pf.display }}.</p>
       {% endif %}
+      <p class="settings-top"><a href="#top">Terug naar boven</a></p>
+    </section>
+
+    <section class="card settings-block" id="omgeving" aria-labelledby="omgeving-title">
+      <div class="card-header"><h2 class="card-title" id="omgeving-title">Uit de omgeving</h2><span class="card-meta">alleen op de server</span></div>
+      <p class="card-desc">Sleutels, de login, de live-bevestiging en het meldingskanaal beheer je bewust niet in het portaal. Je stelt ze in bij de omgevingsvariabelen van de app in Coolify (of in <span class="mono">.env</span>) en herstart de app.</p>
+      {{ block_feedback("omgeving") }}
+      <dl class="kv env-list">
+        <dt>Bitvavo-sleutel</dt>
+        <dd>
+          {% set ks = key_state %}
+          {% if ks.state == "missing" %}<span class="pill">niet ingesteld</span>
+          {% elif ks.state == "ok" %}<span class="pill pill-green">werkt</span>
+          {% elif ks.state == "rejected" %}<span class="pill pill-red">geweigerd door Bitvavo</span>
+          {% elif ks.state == "no_trading" %}<span class="pill pill-orange">mag niet handelen</span>
+          {% else %}<span class="pill">ingesteld</span>{% endif %}
+          <span class="env-text">
+            {% if ks.state == "missing" %}Zonder sleutel kan de bot alleen in oefenmodus handelen.
+            {% elif ks.state == "ok" %}Ingesteld en geaccepteerd door Bitvavo, {{ ks.at|ago }}.
+            {% elif ks.state in ("rejected", "no_trading") %}Ingesteld, maar Bitvavo weigerde hem {{ ks.at|ago }}: {{ ks.reason }}. <span class="mono">{{ ks.detail }}</span>
+            {% else %}Ingesteld, nog niet getest: Bitvavo heeft de sleutel sinds de start nog niet gezien.{% endif %}
+          </span>
+          <span class="mono env-name">BITVAVO_API_KEY, BITVAVO_API_SECRET</span>
+          {% if ks.state != "missing" %}
+          <form method="post" action="/settings/bitvavo-test#omgeving" class="env-action">
+            <button class="btn btn-tint btn-sm" type="submit" data-busy="Testen…">Verbinding testen</button>
+          </form>
+          {% endif %}
+        </dd>
+        <dt>Claude-sleutel</dt>
+        <dd>{% if environment.anthropic_key %}<span class="pill pill-green">ingesteld</span>{% else %}<span class="pill">niet ingesteld</span> <span class="env-text">Zonder sleutel beslist de bot volgens 'Als Claude niet beschikbaar is'.</span>{% endif %} <span class="mono env-name">ANTHROPIC_API_KEY</span></dd>
+        <dt>CryptoPanic-token</dt>
+        <dd>{% if environment.cryptopanic_token %}<span class="pill pill-green">ingesteld</span>{% else %}<span class="pill">niet ingesteld</span> <span class="env-text">Optioneel.</span>{% endif %} <span class="mono env-name">CRYPTOPANIC_TOKEN</span></dd>
+        <dt>Meldingen</dt>
+        <dd>
+          {% if environment.notify %}
+          <span class="pill pill-green">ingesteld</span>
+          <span class="env-text">Je krijgt een melding bij een onbewaakte positie, een mislukte verkoop bij de stop, een stilgevallen bewaking, een order met onbekende uitkomst, de dagverlieslimiet, een uitgevoerde live-order, een leeg Claude-budget en een herstart.</span>
+          <span class="mono env-name">NOTIFY_URL</span>
+          <form method="post" action="/settings/notify-test#omgeving" class="env-action">
+            <button class="btn btn-tint btn-sm" type="submit" data-busy="Versturen…">Testmelding sturen</button>
+          </form>
+          {% else %}
+          <span class="pill">niet ingesteld</span>
+          <span class="env-text">Zonder meldingskanaal hoor je buiten de app niets, ook niet bij een storing. Zet bijvoorbeeld een ntfy-topic in de serveromgeving.</span>
+          <span class="mono env-name">NOTIFY_URL</span>
+          {% endif %}
+        </dd>
+        <dt>Login</dt>
+        <dd>{% if environment.auth %}<span class="pill pill-green">aan</span>{% else %}<span class="pill pill-orange">uit</span> <span class="env-text">Live handelen kan alleen met de login aan.</span>{% endif %} <span class="mono env-name">AUTH_ENABLED</span></dd>
+        <dt>Live-bevestiging</dt>
+        <dd>{% if environment.live_ack %}<span class="pill pill-orange">aan</span> <span class="env-text">Live handelen is op de server bevestigd.</span>{% else %}<span class="pill">uit</span> <span class="env-text">Nodig om live te kunnen handelen.</span>{% endif %} <span class="mono env-name">LIVE_TRADING_ACK</span></dd>
+        <dt>Database</dt>
+        <dd>{{ environment.database }}</dd>
+      </dl>
+      <p class="settings-top"><a href="#top">Terug naar boven</a></p>
     </section>
   </div>
 </div>
-
 {% endblock %}
+
+{% block scripts %}<script src="/static/settings.js?v={{ asset_version }}"></script>{% endblock %}

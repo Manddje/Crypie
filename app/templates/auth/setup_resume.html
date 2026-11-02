@@ -1,0 +1,23 @@
+{% extends "auth/_base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Authenticator koppelen{% endblock %}
+{% block content %}
+<h1>Authenticator koppelen</h1>
+<p class="auth-sub">Stap 2 van 3 · opnieuw beginnen</p>
+{% if error %}{{ ui.notice("error", error, live=true, id="resume-error") }}{% endif %}
+<p class="muted">Je account bestaat al, maar er is nog nooit een authenticator gekoppeld: de vorige keer is het koppelen niet afgerond. Log in met je wachtwoord om opnieuw te beginnen; daarna heb je {{ stage_minutes }} minuten.</p>
+<form method="post" action="/setup" class="auth-form" data-auth-form>
+  <input type="hidden" name="token" value="{{ token }}">
+  <input type="hidden" name="action" value="resume">
+  <label>Gebruikersnaam
+    <input type="text" name="username" value="{{ username }}" autocomplete="username" autocapitalize="off" spellcheck="false" maxlength="64" required{% if not username %} autofocus{% endif %}>
+  </label>
+  <label>Wachtwoord
+    <input type="password" name="password" autocomplete="current-password" required{% if username %} autofocus{% endif %}{% if error %} aria-invalid="true" aria-describedby="resume-error"{% endif %}>
+  </label>
+  <button class="btn btn-primary btn-block" type="submit" data-busy="Bezig…">Verder</button>
+</form>
+{% endblock %}
+{% block below %}
+<p class="auth-below"><a class="btn btn-sm" href="/login">Naar inloggen</a></p>
+{% endblock %}

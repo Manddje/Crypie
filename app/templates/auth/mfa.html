@@ -2,20 +2,34 @@
 {% import "_macros.html" as ui %}
 {% block title %}Crypie · Verificatiecode{% endblock %}
 {% block content %}
+{%- set recovery = mode is defined and mode == "recovery" -%}
 <h1>Verificatiecode</h1>
-<p class="auth-sub">Stap 2 van 2 · authenticator-app</p>
-{% if error %}{{ ui.notice("error", error) }}{% endif %}
+<p class="auth-sub">Stap 2 van 2 · code</p>
+{% if error %}{{ ui.notice("error", error, live=true, id="mfa-error") }}{% endif %}
 <p class="muted">Open je authenticator-app en voer de 6-cijferige code voor Crypie in.</p>
-<form method="post" action="/login/mfa" class="auth-form">
+<form method="post" action="/login/mfa" class="auth-form" data-auth-form>
   <input type="hidden" name="next" value="{{ next }}">
-  <label>Code
-    <input class="code-input" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}|[a-zA-Z0-9\-]{10,11}" placeholder="123 456" required autofocus>
+  <label>Code uit je app
+    <input class="code-input" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" title="6 cijfers, bijvoorbeeld 123 456" placeholder="123 456" required{% if not recovery %} autofocus{% if error %} aria-invalid="true" aria-describedby="mfa-error"{% endif %}{% endif %}>
   </label>
-  <button class="btn btn-primary btn-block" type="submit">Inloggen</button>
+  <button class="btn btn-primary btn-block" type="submit" data-busy="Bezig…">Inloggen</button>
 </form>
+{#- A recovery code has letters: its own field with a normal keyboard (the code field above
+    shows only digits on a phone). -#}
+<details class="auth-details" id="herstelcode"{% if recovery %} open{% endif %}>
+  <summary>Herstelcode gebruiken</summary>
+  <p class="small muted">Geen toegang tot je authenticator-app? Typ een van je herstelcodes, zoals <span class="mono">abcde-fghjk</span>: tien letters en cijfers, met of zonder streepje of spatie. Elke code werkt één keer.</p>
+  <form method="post" action="/login/mfa" class="auth-form" data-auth-form>
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>Herstelcode
+      <input class="code-input code-input--text" type="text" name="code" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="32" pattern="[A-Za-z0-9 \-]{10,13}" title="Tien letters en cijfers, bijvoorbeeld abcde-fghjk" placeholder="abcde-fghjk" required{% if recovery %} autofocus{% if error %} aria-invalid="true" aria-describedby="mfa-error"{% endif %}{% endif %}>
+    </label>
+    <button class="btn btn-block" type="submit" data-busy="Bezig…">Inloggen met herstelcode</button>
+  </form>
+</details>
 <details class="auth-details">
-  <summary>Geen toegang tot je authenticator-app?</summary>
-  <p class="small muted">Voer hierboven een van je herstelcodes in (zoals <span class="mono">abcde-fghjk</span>). Elke herstelcode werkt één keer. Stel daarna via Account een nieuwe authenticator in.</p>
+  <summary>Geblokkeerd of geen codes meer?</summary>
+  <p class="small muted">Op de server heft <span class="mono">python -m app.auth clear-throttle</span> een blokkade op, en <span class="mono">python -m app.auth reset-mfa</span> wist de authenticator en geeft een eenmalige code om een nieuwe te koppelen.</p>
 </details>
 {% endblock %}
 {% block below %}

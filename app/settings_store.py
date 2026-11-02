@@ -8,6 +8,7 @@ are deliberately *not* editable here: they stay in the environment.
 
 from __future__ import annotations
 
+import difflib
 import ipaddress
 import json
 import logging
@@ -26,6 +27,7 @@ from app.config import Settings, get_settings
 from app.db import Setting
 from app.news.sources import validate_feed_url
 from app.trading.events import validate_calendar_lines
+from app.web import num
 
 log = logging.getLogger(__name__)
 
@@ -47,14 +49,20 @@ CEILINGS: dict[str, str] = {
     "max_trades_per_day": "max_trades_per_day_ceiling",
 }
 
+# The blocks of the settings page; each one is a form of its own with its own Opslaan button.
 GROUPS: dict[str, tuple[str, str]] = {
     "trading": (
         "Handelen",
-        "Wat de bot doet, hoe vaak en met welk geld.",
+        "Wat de bot doet, op welke markten, hoe vaak, en wat open posities beschermt.",
     ),
     "limits": (
         "Harde limieten",
         "Grenzen die altijd gelden, wat Claude ook adviseert. Ze worden in code afgedwongen.",
+    ),
+    "costs": (
+        "Kosten",
+        "Wat een order kost. Oefenorders betalen deze kosten en de resultaten zijn er netto mee "
+        "berekend.",
     ),
     "claude": (
         "Claude",
@@ -64,6 +72,40 @@ GROUPS: dict[str, tuple[str, str]] = {
         "Nieuws",
         "Welke bronnen worden gelezen en hoe vaak.",
     ),
+}
+# The paper portfolio's start amount is saved together with its reset (its own card), not with
+# a block above: it only matters for a new or reset paper portfolio.
+PAPER_GROUP = "paper"
+
+# Parts of a block, in order: group -> [(section, title, help)]. A group without an entry is one
+# part without a sub-heading.
+SECTIONS: dict[str, list[tuple[str, str, str]]] = {
+    "trading": [
+        ("modus", "Modus en markten", ""),
+        ("kopen", "Kopen", "Wanneer de bot een koop overweegt en wat hij doet zonder Claude."),
+        (
+            "bescherming",
+            "Bescherming",
+            "Wat open posities beschermt en wanneer de bot tijdelijk niet koopt.",
+        ),
+        ("weergave", "Weergave", "Alleen wat je op de pagina Handelen ziet."),
+    ],
+    "news": [
+        ("ophalen", "Ophalen en beoordelen", ""),
+        ("bronnen", "Bronnen", ""),
+    ],
+}
+
+# How a hard limit becomes looser: "higher" (a bigger number allows more), "lower" (a smaller
+# number allows more) or "capital" (more money, and 0 means the whole account). A save that
+# makes one more than twice as loose in one go asks for an extra confirmation in the portal.
+LOOSEN_RULES: dict[str, str] = {
+    "max_trade_eur": "higher",
+    "live_capital_eur": "capital",
+    "max_exposure_pct": "higher",
+    "daily_loss_limit_pct": "higher",
+    "max_trades_per_day": "higher",
+    "cooldown_min_after_stop": "lower",
 }
 
 
@@ -82,6 +124,11 @@ class Spec:
     unit: str = ""
     restart: bool = False  # True when a change only takes effect after a restart
     extra: dict[str, Any] = field(default_factory=dict)
+    section: str = ""  # part of the block (SECTIONS)
+    # The switch this field belongs to: it only does something while that one is on (a bool)
+    # or above 0 (a number). The page dims it then; the value is kept and still saved.
+    depends: str = ""
+    placeholder: str = ""
 
     @property
     def env_name(self) -> str:
@@ -89,34 +136,41 @@ class Spec:
 
 
 MODEL_CHOICES = tuple((m, m) for m in PRICES)
+KNOWN_MODELS: tuple[str, ...] = tuple(PRICES)
 
 SPECS: tuple[Spec, ...] = (
-    # -- trading --
+    # -- trading: modus en markten --
     Spec(
         "trading_mode",
         "trading",
         "Modus",
-        "Oefenmodus handelt met fictief geld. Live plaatst echte orders op Bitvavo en kan "
-        "alleen aan als op de server LIVE_TRADING_ACK=true staat en er een Bitvavo-sleutel "
-        "met handelsrechten is.",
+        "Oefenmodus handelt met fictief geld. Live plaatst echte orders op Bitvavo met echt geld. "
+        "Live kan alleen als de login aan staat, er een Bitvavo-sleutel met handelsrechten is "
+        "en op de server LIVE_TRADING_ACK=true staat.",
         kind="choice",
         choices=(("paper", "Oefenmodus"), ("live", "Live")),
+        section="modus",
     ),
     Spec(
         "trading_enabled",
         "trading",
         "Bot automatisch laten handelen",
         "Uit: de bot draait geen cycli meer, behalve als je er zelf een start. Stop-loss, "
-        "trailing stop en take-profit van open posities blijven wel elke paar minuten draaien.",
+        "trailing stop en take-profit van open posities blijven wel elke paar minuten draaien. "
+        "Wil je alleen direct stoppen met kopen, gebruik dan de Noodstop op Handelen: die werkt "
+        "meteen en zonder wachtwoord.",
         kind="bool",
+        section="modus",
     ),
     Spec(
         "markets",
         "trading",
         "Markten",
-        "Bitvavo-notatie, gescheiden door komma's. Alleen euromarkten, bijvoorbeeld BTC-EUR, "
-        "ETH-EUR, SOL-EUR.",
+        "Bitvavo-notatie, gescheiden door komma's. Alleen euromarkten die op Bitvavo bestaan, "
+        "bijvoorbeeld BTC-EUR, ETH-EUR, SOL-EUR.",
         kind="markets",
+        section="modus",
+        placeholder="BTC-EUR, ETH-EUR",
     ),
     Spec(
         "trade_interval_min",
@@ -127,18 +181,31 @@ SPECS: tuple[Spec, ...] = (
         min=1,
         max=1440,
         unit="minuten",
+        section="modus",
+    ),
+    # -- trading: kopen --
+    Spec(
+        "claude_unavailable_mode",
+        "trading",
+        "Als Claude niet beschikbaar is",
+        "Bij een signaal zonder werkende Claude (budget op, geen sleutel, storing). Een "
+        "verkoopsignaal op een open positie wordt in beide gevallen gevolgd.",
+        kind="choice",
+        choices=(
+            ("hold", "Afwachten, niet kopen"),
+            ("indicators", "Het strategiesignaal volgen (kopen met half bedrag)"),
+        ),
+        section="kopen",
     ),
     Spec(
-        "exit_check_interval_min",
+        "trend_context_enabled",
         "trading",
-        "Stop-loss en take-profit: controle elke",
-        "Hoe vaak de bot de stop-loss, trailing stop en take-profit van álle open posities "
-        "controleert op de actuele koers. Dit loopt altijd door, ook als automatisch handelen "
-        "uit staat, de kill switch aan staat of de markt niet meer in de lijst staat.",
-        kind="int",
-        min=1,
-        max=60,
-        unit="minuten",
+        "Lange-termijntrend (PlanB)",
+        "Per coin het 200-weeks gemiddelde en de maand-RSI uit Bitvavo, dagelijks ververst. "
+        "Claude krijgt het als context (opwaartse of neerwaartse lange trend); het is geen "
+        "signaal.",
+        kind="bool",
+        section="kopen",
     ),
     Spec(
         "watch_interval_min",
@@ -151,6 +218,7 @@ SPECS: tuple[Spec, ...] = (
         min=0,
         max=60,
         unit="minuten",
+        section="kopen",
     ),
     Spec(
         "watch_max_min",
@@ -161,15 +229,22 @@ SPECS: tuple[Spec, ...] = (
         min=5,
         max=1440,
         unit="minuten",
+        section="kopen",
+        depends="watch_interval_min",
     ),
+    # -- trading: bescherming --
     Spec(
-        "trend_context_enabled",
+        "exit_check_interval_min",
         "trading",
-        "Lange-termijntrend (PlanB)",
-        "Per coin het 200-weeks gemiddelde en de maand-RSI uit Bitvavo, dagelijks ververst. "
-        "Claude krijgt het als context (opwaartse of neerwaartse lange trend); het is geen "
-        "signaal.",
-        kind="bool",
+        "Stop-loss en take-profit: controle elke",
+        "Hoe vaak de bot de stop-loss, trailing stop en take-profit van álle open posities "
+        "controleert op de actuele koers. Dit loopt altijd door, ook als automatisch handelen "
+        "uit staat, de noodstop aan staat of de markt niet meer in de lijst staat.",
+        kind="int",
+        min=1,
+        max=60,
+        unit="minuten",
+        section="bescherming",
     ),
     Spec(
         "risk_off_enabled",
@@ -178,6 +253,7 @@ SPECS: tuple[Spec, ...] = (
         "Geen nieuwe aankopen rond de momenten in de agenda hieronder en na een nieuwsschok. "
         "Verkopen en de stop-loss blijven werken.",
         kind="bool",
+        section="bescherming",
     ),
     Spec(
         "risk_off_before_min",
@@ -188,6 +264,8 @@ SPECS: tuple[Spec, ...] = (
         min=0,
         max=720,
         unit="minuten",
+        section="bescherming",
+        depends="risk_off_enabled",
     ),
     Spec(
         "risk_off_after_min",
@@ -198,6 +276,8 @@ SPECS: tuple[Spec, ...] = (
         min=0,
         max=1440,
         unit="minuten",
+        section="bescherming",
+        depends="risk_off_enabled",
     ),
     Spec(
         "shock_pause_hours",
@@ -209,15 +289,22 @@ SPECS: tuple[Spec, ...] = (
         min=0,
         max=72,
         unit="uur",
+        section="bescherming",
+        depends="risk_off_enabled",
     ),
     Spec(
         "event_calendar",
         "trading",
         "Agenda",
-        "Eén moment per regel als '2026-12-09 19:00 Omschrijving', tijd in UTC zoals overal in "
-        "de app. Standaard: FOMC-rentebesluiten en Amerikaanse CPI-cijfers t/m 2027.",
+        "Eén moment per regel: datum, tijd en omschrijving. Tijden in UTC; de pagina's tonen "
+        "tijden in je eigen tijdzone. Standaard: FOMC-rentebesluiten en Amerikaanse CPI-cijfers "
+        "t/m 2027.",
         kind="events",
+        section="bescherming",
+        depends="risk_off_enabled",
+        placeholder="2026-12-09 19:00 FOMC-rentebesluit",
     ),
+    # -- trading: weergave --
     Spec(
         "decision_history_days",
         "trading",
@@ -228,29 +315,19 @@ SPECS: tuple[Spec, ...] = (
         min=1,
         max=365,
         unit="dagen",
+        section="weergave",
     ),
+    # -- paper portfolio (saved with its reset) --
     Spec(
         "paper_start_eur",
-        "trading",
-        "Startbedrag oefenmodus",
-        "Fictief saldo waarmee de oefenportefeuille begint. Geldt bij een nieuwe of "
-        "gereset oefenportefeuille.",
+        PAPER_GROUP,
+        "Startbedrag",
+        "Fictief saldo waarmee de oefenportefeuille begint. Geldt bij een nieuwe of gereset "
+        "oefenportefeuille.",
         kind="float",
         min=10,
         max=10_000_000,
         unit="€",
-    ),
-    Spec(
-        "claude_unavailable_mode",
-        "trading",
-        "Als Claude niet beschikbaar is",
-        "Bij een signaal zonder werkende Claude (budget op, geen sleutel, storing). Een "
-        "verkoopsignaal op een open positie wordt in beide gevallen gevolgd.",
-        kind="choice",
-        choices=(
-            ("hold", "Afwachten, niet kopen"),
-            ("indicators", "Het strategiesignaal volgen (kopen met half bedrag)"),
-        ),
     ),
     # -- limits --
     Spec(
@@ -264,6 +341,16 @@ SPECS: tuple[Spec, ...] = (
         unit="€",
     ),
     Spec(
+        "min_trade_eur",
+        "limits",
+        "Minimum per order",
+        "Kleinere orders worden niet geplaatst. Bitvavo accepteert minimaal € 5.",
+        kind="float",
+        min=5,
+        max=100_000,
+        unit="€",
+    ),
+    Spec(
         "live_capital_eur",
         "limits",
         "Kapitaal voor de bot (live)",
@@ -273,16 +360,6 @@ SPECS: tuple[Spec, ...] = (
         kind="float",
         min=0,
         max=10_000_000,
-        unit="€",
-    ),
-    Spec(
-        "min_trade_eur",
-        "limits",
-        "Minimum per order",
-        "Kleinere orders worden niet geplaatst. Bitvavo accepteert minimaal € 5.",
-        kind="float",
-        min=5,
-        max=100_000,
         unit="€",
     ),
     Spec(
@@ -299,8 +376,9 @@ SPECS: tuple[Spec, ...] = (
         "daily_loss_limit_pct",
         "limits",
         "Dagverlieslimiet",
-        "Bij dit verlies op één dag (gerealiseerd plus ongerealiseerd op open posities) koopt de "
-        "bot de rest van de dag niets.",
+        "Geen nieuwe aankopen meer vandaag bij dit verlies, inclusief het verlies op open "
+        "posities (gerealiseerd plus ongerealiseerd). Er wordt niets verkocht of gepauzeerd; om "
+        "00:00 UTC begint een nieuwe dag.",
         kind="float",
         min=0.1,
         max=100,
@@ -309,12 +387,14 @@ SPECS: tuple[Spec, ...] = (
     Spec(
         "max_trades_per_day",
         "limits",
-        "Maximum aantal trades per dag",
-        "Uitgevoerde koop- en verkooporders vandaag, ook handmatige orders en verkopen door "
-        "stop-loss of take-profit. Daarna koopt de bot niet meer; verkopen blijft altijd mogelijk.",
+        "Maximum aantal orders per dag",
+        "Telt elke uitgevoerde koop- en verkooporder van vandaag, ook handmatige orders en "
+        "verkopen door stop-loss of take-profit. Daarna koopt de bot niet meer tot 00:00 UTC; "
+        "verkopen blijft altijd mogelijk. 0 = de bot koopt niet.",
         kind="int",
         min=0,
         max=200,
+        unit="orders",
     ),
     Spec(
         "cooldown_min_after_stop",
@@ -325,6 +405,29 @@ SPECS: tuple[Spec, ...] = (
         min=0,
         max=10_080,
         unit="minuten",
+    ),
+    # -- costs --
+    Spec(
+        "trading_fee_pct",
+        "costs",
+        "Handelskosten per order",
+        "Bitvavo-kosten (taker-fee) per order: je betaalt ze bij het kopen én bij het verkopen. "
+        "Oefenorders betalen dit tarief en de netto resultaten rekenen ermee. Met een live "
+        "sleutel leest de app je echte tarief bij het opstarten.",
+        kind="float",
+        min=0,
+        max=5,
+        unit="%",
+    ),
+    Spec(
+        "backtest_fee_pct",
+        "costs",
+        "Handelskosten in backtests",
+        "Kosten per order die backtests op de strategiepagina meerekenen.",
+        kind="float",
+        min=0,
+        max=5,
+        unit="%",
     ),
     # -- claude --
     Spec(
@@ -382,98 +485,37 @@ SPECS: tuple[Spec, ...] = (
         max=8760,
         unit="uur",
     ),
-    Spec(
-        "trading_fee_pct",
-        "limits",
-        "Handelskosten per order",
-        "Bitvavo taker-fee per kant die oefenorders betalen en waarmee resultaten netto worden "
-        "berekend. Met een live key leest de app je echte tarief bij het opstarten.",
-        kind="float",
-        min=0,
-        max=5,
-        unit="%",
-    ),
-    Spec(
-        "backtest_fee_pct",
-        "claude",
-        "Handelskosten in backtests",
-        "Bitvavo-fee per order die backtests meerekenen.",
-        kind="float",
-        min=0,
-        max=5,
-        unit="%",
-    ),
-    # -- news --
+    # -- news: ophalen --
     Spec(
         "news_enabled",
         "news",
         "Nieuws automatisch ophalen",
         "Uit: nieuws wordt alleen opgehaald als je op de nieuwspagina op 'Nu verversen' klikt.",
         kind="bool",
+        section="ophalen",
     ),
     Spec(
         "news_fetch_interval_min",
         "news",
         "Interval nieuws ophalen",
-        "",
+        "Hoe vaak de bot alle bronnen leest en nieuwe berichten door Claude laat beoordelen.",
         kind="int",
         min=1,
         max=1440,
         unit="minuten",
-    ),
-    Spec(
-        "news_rss_feeds",
-        "news",
-        "RSS-feeds",
-        "Eén adres per regel. Standaard: CoinDesk, Cointelegraph, The Block, Decrypt, "
-        "CryptoSlate, NewsBTC, BeInCrypto en DL News.",
-        kind="lines",
-    ),
-    Spec(
-        "cryptocv_enabled",
-        "news",
-        "cryptocurrency.cv",
-        "Gratis verzamelaar van 300+ bronnen zonder sleutel, met een archief per coin. "
-        "Berichten komen direct met de juiste coin-tag binnen.",
-        kind="bool",
-    ),
-    Spec(
-        "google_news_enabled",
-        "news",
-        "Google News per coin",
-        "Gratis zoekfeed per markt (bijvoorbeeld 'solana') van de laatste 24 uur.",
-        kind="bool",
-    ),
-    Spec(
-        "fear_greed_enabled",
-        "news",
-        "Fear & Greed-index",
-        "Marktbrede angst/hebzucht-score van alternative.me; Claude krijgt hem als context.",
-        kind="bool",
-    ),
-    Spec(
-        "gdelt_enabled",
-        "news",
-        "Wereldnieuws via GDELT",
-        "Gratis, maar maximaal één verzoek per 5 seconden per IP-adres.",
-        kind="bool",
-    ),
-    Spec(
-        "gdelt_query",
-        "news",
-        "GDELT-zoekopdracht",
-        "Zoektermen in de GDELT-syntaxis.",
-        kind="str",
+        section="ophalen",
+        depends="news_enabled",
     ),
     Spec(
         "news_max_age_hours",
         "news",
         "Berichten ouder dan dit negeren",
-        "",
+        "Oudere berichten worden niet meer beoordeld en tellen niet mee voor het sentiment.",
         kind="int",
         min=1,
         max=720,
         unit="uur",
+        section="ophalen",
     ),
     Spec(
         "news_batch_size",
@@ -483,18 +525,74 @@ SPECS: tuple[Spec, ...] = (
         kind="int",
         min=1,
         max=50,
+        unit="berichten",
+        section="ophalen",
+    ),
+    # -- news: bronnen --
+    Spec(
+        "news_rss_feeds",
+        "news",
+        "RSS-feeds",
+        "Eén adres per regel, alleen https. Standaard: CoinDesk, Cointelegraph, The Block, "
+        "Decrypt, CryptoSlate, NewsBTC, BeInCrypto en DL News.",
+        kind="lines",
+        section="bronnen",
+        placeholder="https://www.coindesk.com/arc/outboundfeeds/rss/",
+    ),
+    Spec(
+        "cryptocv_enabled",
+        "news",
+        "cryptocurrency.cv",
+        "Gratis verzamelaar van 300+ bronnen zonder sleutel, met een archief per coin. "
+        "Berichten komen direct met de juiste coin-tag binnen.",
+        kind="bool",
+        section="bronnen",
+    ),
+    Spec(
+        "google_news_enabled",
+        "news",
+        "Google News per coin",
+        "Gratis zoekfeed per markt (bijvoorbeeld 'solana') van de laatste 24 uur.",
+        kind="bool",
+        section="bronnen",
+    ),
+    Spec(
+        "fear_greed_enabled",
+        "news",
+        "Fear & Greed-index",
+        "Marktbrede angst/hebzucht-score van alternative.me; Claude krijgt hem als context.",
+        kind="bool",
+        section="bronnen",
+    ),
+    Spec(
+        "gdelt_enabled",
+        "news",
+        "Wereldnieuws via GDELT",
+        "Gratis, maar maximaal één verzoek per 5 seconden per IP-adres.",
+        kind="bool",
+        section="bronnen",
+    ),
+    Spec(
+        "gdelt_query",
+        "news",
+        "GDELT-zoekopdracht",
+        "Zoektermen in de GDELT-syntaxis.",
+        kind="str",
+        section="bronnen",
+        depends="gdelt_enabled",
     ),
     Spec(
         "cryptopanic_plan",
         "news",
         "CryptoPanic-abonnement",
-        "Alleen van belang als er een CRYPTOPANIC_TOKEN in de omgeving staat.",
+        "Alleen van belang als er een CryptoPanic-token in de serveromgeving staat.",
         kind="choice",
         choices=(
             ("growth", "Growth"),
             ("growth_weekly", "Growth (weekly)"),
             ("enterprise", "Enterprise"),
         ),
+        section="bronnen",
     ),
 )
 
@@ -518,6 +616,9 @@ SENSITIVE_KEYS: frozenset[str] = frozenset(
         "shock_pause_hours",
         "news_rss_feeds",
         "claude_monthly_budget_usd",
+        # The fee sits in its own block (it is no hard limit), but it still decides what paper
+        # orders cost and how results are counted, so it keeps asking for the password.
+        "trading_fee_pct",
     }
     | {s.key for s in SPECS if s.group == "limits"}
 )
@@ -530,6 +631,18 @@ def sensitive_changes(old: Settings, new: Settings) -> list[str]:
 
 def group_has_sensitive(group: str) -> bool:
     return any(s.group == group and s.key in SENSITIVE_KEYS for s in SPECS)
+
+
+# What the current-password field of each block is needed for (the password row's help text).
+STEP_UP_HELP: dict[str, str] = {
+    "trading": "Nodig als je de modus, automatisch handelen aan/uit, de markten, het gedrag "
+    "zonder Claude, de exit-controle of risk-off (aan/uit, het venster ervoor en erna, de "
+    "schok-pauze en de agenda) wijzigt of terugzet.",
+    "limits": "Nodig als je een harde limiet wijzigt of terugzet: elk veld in dit blok.",
+    "costs": "Nodig als je de handelskosten per order wijzigt of terugzet.",
+    "claude": "Nodig als je het maandbudget wijzigt of terugzet.",
+    "news": "Nodig als je de RSS-feeds wijzigt of terugzet.",
+}
 
 
 class SettingsError(ValueError):
@@ -565,7 +678,22 @@ def effective_settings(session: Session, env: Settings | None = None) -> Setting
     with a warning rather than taking the app down.
     """
     env = env or get_settings()
-    overrides = load_overrides(session)
+    return _effective_from(env, load_overrides(session))
+
+
+def preview_reset(
+    session: Session, keys: list[str] | None, env: Settings | None = None
+) -> Settings:
+    """The settings as they would be after forgetting ``keys`` (None: every stored value),
+    without touching the database."""
+    env = env or get_settings()
+    stored = load_overrides(session)
+    remaining = {} if keys is None else {k: v for k, v in stored.items() if k not in keys}
+    return _effective_from(env, remaining)
+
+
+def _effective_from(env: Settings, overrides: dict[str, Any]) -> Settings:
+    overrides = dict(overrides)
     while True:
         try:
             return _build(env, overrides)
@@ -667,27 +795,60 @@ def _parse_bool(raw: Any) -> bool:
     raise ValueError("kies aan of uit")
 
 
-def _parse_number(spec: Spec, raw: Any) -> float | int:
+# A typed number: optional sign, digits, and at most one decimal separator (comma or point).
+_NUMBER_RE = re.compile(r"([+-]?)(\d*)(?:([.,])(\d*))?")
+_SPACES = (" ", " ", " ")
+
+
+def parse_decimal(raw: Any) -> float:
+    """A number as typed in a settings field: '2,5', '2.5', '1000' or '-3' (a JSON number
+    passes as is). The decimal comma of a Dutch keyboard is fine, but a value whose separator
+    could also group thousands ('1.000', '2,500', '1.000,50') is refused rather than guessed,
+    and so is anything that is not a plain number ('1e3', 'inf', 'nan')."""
     if isinstance(raw, bool):
         raise ValueError("getal verwacht")
-    text = str(raw).strip().replace(",", ".")
-    if text == "":
-        raise ValueError("vul een getal in")
-    try:
-        value = float(text)
-    except ValueError as exc:
-        raise ValueError("geen geldig getal") from exc
+    if isinstance(raw, int | float):
+        value = float(raw)
+    else:
+        text = str(raw).strip()
+        for space in _SPACES:
+            text = text.replace(space, "")
+        if text == "":
+            raise ValueError("vul een getal in")
+        if text.count(",") + text.count(".") > 1:
+            raise ValueError(_ambiguous(text))
+        match = _NUMBER_RE.fullmatch(text)
+        if match is None or not (match.group(2) or match.group(4)):
+            raise ValueError("geen geldig getal")
+        sign, whole, separator, frac = match.groups()
+        frac = frac or ""
+        if separator and len(frac) == 3 and whole.lstrip("0"):
+            # '1.000' is a thousand to a Dutch reader and one to an English one.
+            raise ValueError(_ambiguous(text))
+        value = float(f"{sign}{whole or '0'}.{frac or '0'}")
     if not math.isfinite(value):
         # NaN passes every min/max check (comparisons are False) and switches limits off.
         raise ValueError("geen geldig getal")
+    return value
+
+
+def _ambiguous(text: str) -> str:
+    return (
+        f"'{text[:20]}' is onduidelijk, want een punt of komma kan ook duizendtallen scheiden. "
+        "Schrijf het getal zonder scheidingsteken voor duizendtallen, bijvoorbeeld 1000 of 2,5"
+    )
+
+
+def _parse_number(spec: Spec, raw: Any) -> float | int:
+    value: float | int = parse_decimal(raw)
     if spec.kind == "int":
         if value != int(value):
             raise ValueError("heel getal verwacht")
         value = int(value)
     if spec.min is not None and value < spec.min:
-        raise ValueError(f"minimaal {spec.min:g}{' ' + spec.unit if spec.unit else ''}")
+        raise ValueError(f"minimaal {display_value(spec, spec.min)}")
     if spec.max is not None and value > spec.max:
-        raise ValueError(f"maximaal {spec.max:g}{' ' + spec.unit if spec.unit else ''}")
+        raise ValueError(f"maximaal {display_value(spec, spec.max)}")
     return value
 
 
@@ -838,10 +999,9 @@ def check_ceilings(values: dict[str, Any], env: Settings) -> dict[str, str]:
         ceiling = ceiling_of(env, key)
         if ceiling is not None and value > ceiling:
             spec = SPEC_BY_KEY[key]
-            unit = f" {spec.unit}" if spec.unit else ""
             errors[key] = (
-                f"maximaal {ceiling:g}{unit}: dat plafond staat in de serveromgeving "
-                f"({CEILINGS[key].upper()}) en is hier niet te verhogen"
+                f"maximaal {display_value(spec, ceiling)}: dat plafond staat in de serveromgeving "
+                f"en is hier niet te verhogen ({CEILINGS[key].upper()})"
             )
     return errors
 
@@ -878,53 +1038,231 @@ def preview(session: Session, values: dict[str, Any], env: Settings | None = Non
     return candidate
 
 
-def as_text(spec: Spec, value: Any) -> str:
-    """How a value is shown in a form field."""
-    if spec.kind == "markets":
-        return ", ".join(value)
-    if spec.kind in ("lines", "events"):
-        return "\n".join(value)
+def unknown_markets(markets: list[str], known: set[str]) -> str | None:
+    """Why some of ``markets`` cannot be traded: they are not in Bitvavo's market list
+    (``known``). None when all exist. Suggests the closest existing market for a typo."""
+    problems = []
+    for market in markets:
+        if market in known:
+            continue
+        close = difflib.get_close_matches(
+            market, sorted(m for m in known if m.endswith("-EUR")), n=1, cutoff=0.75
+        )
+        hint = f" Bedoel je {close[0]}?" if close else ""
+        problems.append(f"{market} bestaat niet op Bitvavo.{hint}")
+    return " ".join(problems) or None
+
+
+def model_warning(name: Any) -> str | None:
+    """A warning (never a refusal) for a model name the app does not know: probably a typo,
+    and the cost estimate then assumes the most expensive tier."""
+    if not isinstance(name, str) or name in KNOWN_MODELS:
+        return None
+    return (
+        "Onbekend model: controleer de naam. Een typfout merk je pas bij de volgende "
+        "aanroep, en de kostenschatting rekent dan met het duurste tarief."
+    )
+
+
+# -- how values are shown --------------------------------------------------------------------
+
+
+def number_text(value: float | int) -> str:
+    """A number as the form field shows it, readable back by parse_decimal: a decimal comma and
+    no thousands separator ('2,5', '1000', '0,25'). Never an exponent ('1e+07')."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    if value == int(value) and abs(value) < 1e15:
+        return str(int(value))
+    whole, _, frac = f"{value:.8f}".rstrip("0").partition(".")
+    if len(frac) == 3 and whole.lstrip("-0"):
+        frac += "0"  # '1234,5670': three decimals would read as a thousands separator
+    return f"{whole},{frac}" if frac else whole
+
+
+def _dutch(value: float) -> str:
+    """'1.000', '2,5', '0,25': thousands with a point, up to four decimals."""
+    if value == int(value):
+        return num(value, 0)
+    return num(value, len(f"{value:.4f}".rstrip("0").partition(".")[2]))
+
+
+def display_value(spec: Spec, value: Any) -> str:
+    """A value in a sentence, with its unit and in Dutch notation: '€ 1.000', '2,5%',
+    '60 minuten', 'aan', 'Oefenmodus', 'BTC-EUR, ETH-EUR', '3 regels'."""
     if spec.kind == "bool":
         return "aan" if value else "uit"
     if spec.kind == "choice":
         return dict(spec.choices).get(value, str(value))
-    if isinstance(value, float):
-        return f"{value:g}"
+    if spec.kind == "markets":
+        return ", ".join(value)
+    if spec.kind == "lines":
+        return f"{len(value)} feed{'' if len(value) == 1 else 's'}"
+    if spec.kind == "events":
+        return f"{len(value)} regel{'' if len(value) == 1 else 's'}"
+    if spec.kind in ("int", "float") and isinstance(value, int | float):
+        text = _dutch(float(value))
+        if spec.unit in ("€", "$"):
+            money = num(value, 0 if value == int(value) else 2)
+            return f"{spec.unit} {money}"
+        if spec.unit == "%":
+            return f"{text}%"
+        return f"{text} {spec.unit}" if spec.unit else text
     return str(value)
+
+
+def form_text(spec: Spec, value: Any) -> str:
+    """The value as the form submits it: what the page compares to see an unsaved edit."""
+    if spec.kind == "bool":
+        return "true" if value else "false"
+    if spec.kind == "markets":
+        return ", ".join(value)
+    if spec.kind in ("lines", "events"):
+        return "\n".join(value)
+    if spec.kind in ("int", "float") and isinstance(value, int | float):
+        return number_text(value)
+    return str(value)
+
+
+def as_text(spec: Spec, value: Any) -> str:
+    """How a value is shown in a form field (and, for switches and choices, in words)."""
+    if spec.kind == "bool":
+        return "aan" if value else "uit"
+    if spec.kind == "choice":
+        return dict(spec.choices).get(value, str(value))
+    return form_text(spec, value)
+
+
+def describe_change(spec: Spec, old: Any, new: Any) -> str:
+    """'Maximum per order: € 100 → € 25,50'; lists say what was added and removed."""
+    if spec.kind in ("lines", "events") and isinstance(old, list) and isinstance(new, list):
+        added = len([v for v in new if v not in old])
+        removed = len([v for v in old if v not in new])
+        parts = []
+        if added:
+            parts.append(f"{added} toegevoegd")
+        if removed:
+            parts.append(f"{removed} verwijderd")
+        word = "regel" if spec.kind == "events" else "feed"
+        what = ", ".join(parts) if parts else "volgorde aangepast"
+        return f"{spec.label}: {what} (nu {len(new)} {word}{'' if len(new) == 1 else 's'})"
+    return f"{spec.label}: {display_value(spec, old)} → {display_value(spec, new)}"
+
+
+def changes(old: Settings, new: Settings, keys: list[str] | None = None) -> list[str]:
+    """Every editable setting (or only ``keys``) whose value differs, as describe_change."""
+    out = []
+    for key in keys or EDITABLE_KEYS:
+        spec = SPEC_BY_KEY[key]
+        before, after = getattr(old, key), getattr(new, key)
+        if before != after:
+            out.append(describe_change(spec, before, after))
+    return out
+
+
+def loosened_limits(old: Settings, new: Settings) -> list[str]:
+    """The hard limits that ``new`` makes more than twice as loose as ``old`` in one go, as
+    'Maximum per order: € 100 → € 500'. The portal asks for an extra confirmation then."""
+    out = []
+    for key, rule in LOOSEN_RULES.items():
+        before, after = float(getattr(old, key)), float(getattr(new, key))
+        if before == after:
+            continue
+        if rule == "higher":
+            loose = after > 2 * before if before > 0 else after > 0
+        elif rule == "lower":
+            loose = before > 0 and after < before / 2
+        else:  # capital: more money for the bot; 0 means the whole account
+            loose = after == 0 or (before > 0 and after > 2 * before)
+        if loose:
+            spec = SPEC_BY_KEY[key]
+            text = describe_change(spec, getattr(old, key), getattr(new, key))
+            if rule == "capital" and after == 0:
+                text += " (het hele Bitvavo-account)"
+            out.append(text)
+    return out
 
 
 # -- description for UI and API ----------------------------------------------------------
 
 
+def _depends_text(spec: Spec) -> str:
+    parent = SPEC_BY_KEY.get(spec.depends)
+    if parent is None:
+        return ""
+    if parent.kind == "bool":
+        return f"Geldt alleen als '{parent.label}' aan staat."
+    return f"Geldt alleen als '{parent.label}' niet op 0 staat."
+
+
+def _field(spec: Spec, current: Settings, env: Settings, overrides: dict[str, Any]) -> dict:
+    ceiling = ceiling_of(env, spec.key)
+    value = getattr(current, spec.key)
+    default = getattr(env, spec.key)
+    return {
+        "key": spec.key,
+        "label": spec.label,
+        "help": spec.help,
+        "kind": spec.kind,
+        "choices": list(spec.choices),
+        "min": spec.min,
+        "max": spec.max if ceiling is None else min(spec.max or ceiling, ceiling),
+        "ceiling": ceiling,
+        "ceiling_display": display_value(spec, ceiling) if ceiling is not None else None,
+        "ceiling_env": CEILINGS[spec.key].upper() if ceiling is not None else None,
+        "unit": spec.unit,
+        "env_name": spec.env_name,
+        "value": value,
+        "text": as_text(spec, value),
+        "saved_text": form_text(spec, value),
+        "display": display_value(spec, value),
+        "default": default,
+        "default_text": as_text(spec, default),
+        "default_form": form_text(spec, default),
+        "default_display": display_value(spec, default),
+        "overridden": spec.key in overrides,
+        "sensitive": spec.key in SENSITIVE_KEYS,
+        "section": spec.section,
+        "depends": spec.depends,
+        "depends_text": _depends_text(spec),
+        "placeholder": spec.placeholder,
+        "loosen": LOOSEN_RULES.get(spec.key, ""),
+        "warning": model_warning(value) if spec.kind == "model" else None,
+    }
+
+
+def describe_field(
+    session: Session, current: Settings, key: str, env: Settings | None = None
+) -> dict:
+    """One field as describe() shows it (for settings outside the blocks: the start amount)."""
+    env = env or get_settings()
+    return _field(SPEC_BY_KEY[key], current, env, load_overrides(session))
+
+
 def describe(session: Session, current: Settings, env: Settings | None = None) -> list[dict]:
-    """Groups with their fields: current value, environment default and whether overridden."""
+    """Groups with their fields: current value, environment default and whether overridden.
+    Each group also lists its parts (``sections``) with their fields, in page order."""
     env = env or get_settings()
     overrides = load_overrides(session)
     groups: list[dict] = []
     for group, (title, desc) in GROUPS.items():
-        fields = []
-        for spec in SPECS:
-            if spec.group != group:
-                continue
-            ceiling = ceiling_of(env, spec.key)
-            fields.append(
-                {
-                    "key": spec.key,
-                    "label": spec.label,
-                    "help": spec.help,
-                    "kind": spec.kind,
-                    "choices": list(spec.choices),
-                    "min": spec.min,
-                    "max": spec.max if ceiling is None else min(spec.max or ceiling, ceiling),
-                    "ceiling": ceiling,
-                    "unit": spec.unit,
-                    "env_name": spec.env_name,
-                    "value": getattr(current, spec.key),
-                    "text": as_text(spec, getattr(current, spec.key)),
-                    "default": getattr(env, spec.key),
-                    "default_text": as_text(spec, getattr(env, spec.key)),
-                    "overridden": spec.key in overrides,
-                }
-            )
-        groups.append({"key": group, "title": title, "description": desc, "fields": fields})
+        fields = [_field(s, current, env, overrides) for s in SPECS if s.group == group]
+        sections = []
+        for key, sec_title, sec_help in SECTIONS.get(group, [("", "", "")]):
+            in_section = [f for f in fields if f["section"] == key or not key]
+            if in_section:
+                sections.append(
+                    {"key": key, "title": sec_title, "help": sec_help, "fields": in_section}
+                )
+        groups.append(
+            {
+                "key": group,
+                "title": title,
+                "description": desc,
+                "fields": fields,
+                "sections": sections,
+                "sensitive": group_has_sensitive(group),
+                "step_up_help": STEP_UP_HELP.get(group, ""),
+            }
+        )
     return groups

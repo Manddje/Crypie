@@ -72,7 +72,12 @@
   <footer class="site">
     {% if base_cfg %}
     <span>Markten: {{ base_cfg.markets|join(", ") }} · <a href="/settings">instellingen</a></span>
-    <span>Bitvavo-sleutel {{ "ingesteld" if base_cfg.has_bitvavo_credentials else "niet ingesteld" }}</span>
+    {%- set base_key = bitvavo_key_state(request) if bitvavo_key_state is defined else none %}
+    {% if base_key and base_key.state in ("rejected", "no_trading") %}
+    <span class="footer-alert">Bitvavo-sleutel {{ base_key.label }}: {{ base_key.reason }} · <a href="/settings#omgeving">bekijken</a></span>
+    {% else %}
+    <span>Bitvavo-sleutel {{ base_key.label if base_key else ("ingesteld" if base_cfg.has_bitvavo_credentials else "niet ingesteld") }}</span>
+    {% endif %}
     <span>Claude {{ "ingesteld" if base_cfg.anthropic_api_key else "niet ingesteld" }}</span>
     {% endif %}
     {% block footer %}{% endblock %}

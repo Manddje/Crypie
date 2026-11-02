@@ -1,78 +1,103 @@
 {% extends "base.html" %}
 {% import "_macros.html" as ui %}
 {% block title %}Crypie · Account{% endblock %}
+
+{#- The result of a form, shown in that form's card. -#}
+{% macro result(key) -%}
+{% if form == key %}
+{% if error %}{{ ui.notice("error", error, live=true, id=key ~ "-error") }}{% endif %}
+{% if message %}{{ ui.notice("ok", message, live=true) }}{% endif %}
+{% endif %}
+{%- endmacro %}
+
+{#- A field of an account form; marked when the error is about it. -#}
+{% macro field(key, name, label, type="password", autocomplete="current-password", extra="") -%}
+{%- set bad = form == key and error and bad_field is defined and bad_field == name -%}
+<label>{{ label }}
+  <input type="{{ type }}" name="{{ name }}" autocomplete="{{ autocomplete }}" {{ extra|safe }} required{% if bad %} aria-invalid="true" aria-describedby="{{ key }}-error"{% endif %}>
+</label>
+{%- endmacro %}
+
 {% block content %}
 <div class="page-header">
   <h1>Account</h1>
   <p class="subtitle">Je bent ingelogd als <strong>{{ user.username }}</strong>. Inloggen gebeurt met je wachtwoord plus een code uit je authenticator-app.</p>
 </div>
-<div class="stack">
-  {% if error %}{{ ui.notice("error", error) }}{% endif %}
-  {% if message %}{{ ui.notice("ok", message) }}{% endif %}
-  {% if user.mfa_failures_before_login %}{{ ui.notice("warn", "Voor je laatste login is " ~ user.mfa_failures_before_login ~ " keer een verkeerde code voor je account ingevuld. Was jij dat niet, dan kent iemand anders waarschijnlijk je wachtwoord: wijzig het hieronder.") }}{% endif %}
-  <div class="grid-2">
-    <section class="card">
-      <div class="card-header"><h2>Tweestapsverificatie</h2>{{ ui.pill("Actief", "pill-green") if user.mfa_enrolled else ui.pill("Niet ingesteld", "pill-orange") }}</div>
-      <dl class="kv">
-        <dt>Authenticator gekoppeld</dt><dd>{{ user.totp_enrolled_at|dt(true) }}</dd>
-        <dt>Laatste login</dt><dd>{{ user.last_login_at|dt(true) }}</dd>
-        <dt>Herstelcodes over</dt><dd>{{ codes_left }} van 8</dd>
-      </dl>
-      {% if codes_left <= 2 %}<p class="form-help">Je hebt nog maar {{ codes_left }} herstelcode{{ "" if codes_left == 1 else "s" }}. Maak hieronder nieuwe aan.</p>{% endif %}
-    </section>
-    <section class="card">
-      <div class="card-header"><h2>Herstelcodes</h2></div>
-      <p class="card-desc">Vul ter bevestiging je wachtwoord in plus een code uit je authenticator-app of een herstelcode. Je oude herstelcodes werken daarna niet meer en andere browsers worden uitgelogd.</p>
-      <form method="post" action="/account" class="auth-form">
-        <input type="hidden" name="action" value="recovery">
-        <label>Wachtwoord
-          <input type="password" name="password" autocomplete="current-password" required>
-        </label>
-        <label>Huidige code of herstelcode
-          <input class="code-input" type="text" name="code" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" maxlength="32" placeholder="123 456" required>
-        </label>
-        <div class="actions"><button class="btn" type="submit">Nieuwe herstelcodes</button></div>
-      </form>
-    </section>
-    <section class="card">
-      <div class="card-header"><h2>Authenticator opnieuw instellen</h2></div>
-      <p class="card-desc">Vul ter bevestiging je wachtwoord in plus een code uit je huidige authenticator-app of een herstelcode. Daarna koppel je binnen 5 minuten de nieuwe app.</p>
-      <form method="post" action="/account" class="auth-form">
-        <input type="hidden" name="action" value="reenrol">
-        <label>Wachtwoord
-          <input type="password" name="password" autocomplete="current-password" required>
-        </label>
-        <label>Huidige code of herstelcode
-          <input class="code-input" type="text" name="code" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" maxlength="32" placeholder="123 456" required>
-        </label>
-        <div class="actions"><button class="btn btn-danger" type="submit">Authenticator opnieuw instellen</button></div>
-      </form>
-    </section>
-    <section class="card">
-      <div class="card-header"><h2>Wachtwoord wijzigen</h2></div>
-      <form method="post" action="/account" class="auth-form">
+<div class="stack account">
+  {% if error and not form %}{{ ui.notice("error", error, live=true) }}{% endif %}
+  {% if message and not form %}{{ ui.notice("ok", message, live=true) }}{% endif %}
+  {% if user.mfa_failures_before_login %}{{ ui.notice("warn", "Voor je laatste login is " ~ user.mfa_failures_before_login ~ " keer een verkeerde code voor je account ingevuld. Was jij dat niet, dan kent iemand anders waarschijnlijk je wachtwoord: wijzig het hieronder.", live=false) }}{% endif %}
+  {% if codes_left <= 2 %}{{ ui.notice("warn", "Je hebt nog maar " ~ codes_left ~ " herstelcode" ~ ("" if codes_left == 1 else "s") ~ ". Maak nieuwe aan onder Beveiliging wijzigen.", live=false) }}{% endif %}
+
+  <section class="card" aria-labelledby="account-status">
+    {{ ui.card_header("Status", 2, id="account-status") }}
+    <dl class="kv">
+      <dt>Tweestapsverificatie</dt><dd>{{ ui.pill("Actief", "pill-green") if user.mfa_enrolled else ui.pill("Niet ingesteld", "pill-orange") }}</dd>
+      <dt>Authenticator gekoppeld</dt><dd>{{ user.totp_enrolled_at|dt(true) }}</dd>
+      <dt>Laatste login</dt><dd>{{ user.last_login_at|dt(true) }}</dd>
+      <dt>Herstelcodes over</dt><dd>{{ codes_left }} van {{ codes_total }}</dd>
+      {% if session_expires %}<dt>Deze sessie geldig tot</dt><dd>{{ session_expires|dt }} <span class="muted">({{ session_hours }} uur na het inloggen; daarna log je opnieuw in)</span></dd>{% endif %}
+    </dl>
+  </section>
+
+  <section class="card" aria-labelledby="account-change">
+    {{ ui.card_header("Beveiliging wijzigen", 2, id="account-change") }}
+    <p class="card-desc">Elke wijziging vraagt opnieuw om je wachtwoord. Wat andere browsers uitlogt of je oude codes ongeldig maakt, staat erbij.</p>
+
+    <details class="account-action" id="wachtwoord"{% if form == "password" %} open{% endif %}>
+      <summary><h3 class="account-action-title">Wachtwoord wijzigen</h3><span class="account-action-note">andere browsers worden uitgelogd</span></summary>
+      {{ result("password") }}
+      <form method="post" action="/account#wachtwoord" class="auth-form">
         <input type="hidden" name="action" value="password">
-        <label>Huidig wachtwoord
-          <input type="password" name="password" autocomplete="current-password" required>
-        </label>
-        <label>Nieuw wachtwoord
-          <input type="password" name="new_password" autocomplete="new-password" minlength="10" required>
-        </label>
-        <label>Nieuw wachtwoord nog een keer
-          <input type="password" name="new_password_repeat" autocomplete="new-password" minlength="10" required>
-        </label>
-        <div class="actions"><button class="btn btn-primary" type="submit">Wachtwoord wijzigen</button></div>
+        {{ field("password", "password", "Huidig wachtwoord") }}
+        {{ field("password", "new_password", "Nieuw wachtwoord", autocomplete="new-password", extra='minlength="10"') }}
+        {{ field("password", "new_password_repeat", "Nieuw wachtwoord nog een keer", autocomplete="new-password", extra='minlength="10"') }}
+        <div class="actions"><button class="btn btn-primary" type="submit" data-busy="Bezig…">Wachtwoord wijzigen</button></div>
       </form>
-      <p class="form-help">Wachtwoord kwijt? Draai op de server <span class="mono">python -m app.auth reset-password</span>.</p>
-    </section>
-    <section class="card">
-      <div class="card-header"><h2>Overal uitloggen</h2></div>
-      <p class="card-desc">Logt elke browser uit, ook deze. Gebruik dit als je denkt dat iemand anders bij je sessie kan.</p>
-      <form method="post" action="/account" class="auth-form">
-        <input type="hidden" name="action" value="logout_all">
-        <div class="actions"><button class="btn btn-danger" type="submit">Overal uitloggen</button></div>
+    </details>
+
+    <details class="account-action account-action--danger" id="herstelcodes"{% if form == "recovery" %} open{% endif %}>
+      <summary><h3 class="account-action-title">Nieuwe herstelcodes</h3><span class="account-action-note">je oude codes werken daarna niet meer</span></summary>
+      {{ result("recovery") }}
+      <p class="card-desc">Vul ter bevestiging je wachtwoord in plus een code uit je authenticator-app of een herstelcode. Je oude herstelcodes werken daarna niet meer en andere browsers worden uitgelogd.</p>
+      <form method="post" action="/account#herstelcodes" class="auth-form" data-confirm="Nieuwe herstelcodes maken? Je oude herstelcodes werken daarna niet meer en andere browsers worden uitgelogd.">
+        <input type="hidden" name="action" value="recovery">
+        {{ field("recovery", "password", "Wachtwoord") }}
+        {{ field("recovery", "code", "Huidige code of herstelcode", type="text", autocomplete="one-time-code", extra='class="code-input code-input--text" autocapitalize="off" spellcheck="false" maxlength="32" placeholder="123 456"') }}
+        <div class="actions"><button class="btn btn-danger" type="submit" data-busy="Bezig…">Nieuwe herstelcodes maken</button></div>
       </form>
-    </section>
-  </div>
+    </details>
+
+    <details class="account-action account-action--danger" id="authenticator"{% if form == "reenrol" %} open{% endif %}>
+      <summary><h3 class="account-action-title">Authenticator opnieuw instellen</h3><span class="account-action-note">vervangt de koppeling en je herstelcodes</span></summary>
+      {{ result("reenrol") }}
+      <p class="card-desc">Vul ter bevestiging je wachtwoord in plus een code uit je huidige authenticator-app of een herstelcode. Daarna koppel je binnen 5 minuten de nieuwe app; je krijgt nieuwe herstelcodes en andere browsers worden uitgelogd.</p>
+      <form method="post" action="/account#authenticator" class="auth-form" data-confirm="Authenticator opnieuw instellen? De huidige koppeling en je herstelcodes vervallen zodra je de nieuwe app koppelt, en andere browsers worden uitgelogd.">
+        <input type="hidden" name="action" value="reenrol">
+        {{ field("reenrol", "password", "Wachtwoord") }}
+        {{ field("reenrol", "code", "Huidige code of herstelcode", type="text", autocomplete="one-time-code", extra='class="code-input code-input--text" autocapitalize="off" spellcheck="false" maxlength="32" placeholder="123 456"') }}
+        <div class="actions"><button class="btn btn-danger" type="submit" data-busy="Bezig…">Authenticator opnieuw instellen</button></div>
+      </form>
+    </details>
+  </section>
+
+  <section class="card account-danger" aria-labelledby="account-logout">
+    {{ ui.card_header("Overal uitloggen", 2, id="account-logout") }}
+    <p class="card-desc">Logt elke browser uit, ook deze. Gebruik dit als je denkt dat iemand anders bij je sessie kan.</p>
+    <form method="post" action="/account" data-confirm="Overal uitloggen? Elke browser, ook deze, moet daarna opnieuw inloggen.">
+      <input type="hidden" name="action" value="logout_all">
+      <div class="actions"><button class="btn btn-danger" type="submit" data-busy="Bezig…">Overal uitloggen</button></div>
+    </form>
+  </section>
+
+  <section class="card" aria-labelledby="account-lost">
+    {{ ui.card_header("Wachtwoord of authenticator kwijt?", 2, id="account-lost") }}
+    <p class="card-desc">Dit los je op de server op (in de container van de app):</p>
+    <ul class="auth-commands small muted">
+      <li><span class="mono">python -m app.auth reset-password</span> kiest een nieuw wachtwoord; elke browser wordt uitgelogd.</li>
+      <li><span class="mono">python -m app.auth reset-mfa</span> wist de authenticator en de herstelcodes en geeft een eenmalige code om een nieuwe te koppelen.</li>
+      <li><span class="mono">python -m app.auth clear-throttle</span> heft een blokkade na te veel foute pogingen op.</li>
+    </ul>
+  </section>
 </div>
 {% endblock %}

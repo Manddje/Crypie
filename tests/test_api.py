@@ -290,6 +290,10 @@ async def test_settings_page_and_api_change_the_running_app(api):
         "max_trades_per_day": "2",
         "cooldown_min_after_stop": "60",
     }
+    # The cooldown goes from 240 to 60 minutes: more than twice as loose, so it asks first.
+    r = await api.post("/settings", data=form, follow_redirects=False)
+    assert r.status_code == 409 and "Afkoelperiode na stop-loss" in r.text
+    form["confirm_loosen"] = "1"
     r = await api.post("/settings", data=form, follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].startswith("/settings?saved=limits")
     status = (await api.get("/api/trading/status")).json()
@@ -362,14 +366,15 @@ async def test_reset_paper_portfolio(api):
 
 
 async def test_number_fields_accept_any_decimal(api):
-    # A step attribute would make the browser reject e.g. 10 on a field with min 0.1 and step
-    # 0.5 ("Voer een geldige waarde in"); only integers get a step, the rest accepts any value.
+    # Number fields are text fields with a number keyboard: the browser never rewrites '2,5'
+    # (a number field in Chromium turns it into 25), and the server reads the decimal comma.
     r = await api.get("/settings")
-    inputs = re.findall(r'<input type="number"[^>]*>', r.text)
+    assert '<input type="number"' not in r.text
+    inputs = re.findall(r"<input [^>]*data-number=[^>]*>", r.text)
     assert len(inputs) > 10
     for tag in inputs:
-        step = re.search(r'step="([^"]+)"', tag).group(1)
-        assert step in ("1", "any"), tag
+        assert 'type="text"' in tag and re.search(r'inputmode="(decimal|numeric)"', tag), tag
+        assert "step=" not in tag and "pattern=" not in tag, tag
     r = await api.post(
         "/settings",
         data={
@@ -377,12 +382,13 @@ async def test_number_fields_accept_any_decimal(api):
             "max_trade_eur": "42",
             "min_trade_eur": "10",
             "max_exposure_pct": "15",
-            "daily_loss_limit_pct": "10",
+            "daily_loss_limit_pct": "7,5",
             "max_trades_per_day": "6",
             "cooldown_min_after_stop": "240",
+            "confirm_loosen": "1",  # earlier tests may have left stricter limits behind
         },
         follow_redirects=False,
     )
     assert r.status_code == 303
-    assert (await api.get("/api/settings")).json()["values"]["daily_loss_limit_pct"] == 10.0
+    assert (await api.get("/api/settings")).json()["values"]["daily_loss_limit_pct"] == 7.5
     await api.delete("/api/settings")

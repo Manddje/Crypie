@@ -105,7 +105,7 @@ def test_unreadable_or_invalid_stored_values_are_ignored(session, env):
 def test_describe_marks_overrides(session, env):
     cfg.save_overrides(session, {"trade_interval_min": 15}, env)
     groups = cfg.describe(session, cfg.effective_settings(session, env), env)
-    assert [g["key"] for g in groups] == ["trading", "limits", "claude", "news"]
+    assert [g["key"] for g in groups] == ["trading", "limits", "costs", "claude", "news"]
     by_key = {f["key"]: f for g in groups for f in g["fields"]}
     assert by_key["trade_interval_min"]["overridden"] is True
     assert by_key["trade_interval_min"]["value"] == 15
