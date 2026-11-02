@@ -413,5 +413,11 @@ class LiveBroker:
         return True
 
 
-def recent_orders(session: Session, limit: int = 50) -> list[Order]:
-    return list(session.scalars(select(Order).order_by(Order.id.desc()).limit(limit)))
+def recent_orders(session: Session, limit: int = 50, mode: str | None = None) -> list[Order]:
+    """The newest orders first. ``mode`` ("paper" or "live") keeps one mode apart from the
+    other, like the positions and the charts do: the overview never shows fictitious orders
+    next to real ones."""
+    stmt = select(Order)
+    if mode is not None:
+        stmt = stmt.where(Order.mode == mode)
+    return list(session.scalars(stmt.order_by(Order.id.desc()).limit(limit)))
