@@ -23,7 +23,11 @@ from app.ai.news_analyst import NewsAnalyst
 from app.ai.strategy_assistant import StrategyAssistant
 from app.auth.routes import require_login
 from app.auth.routes import router as auth_router
-from app.auth.service import AuthService, load_or_create_session_secret
+from app.auth.service import (
+    AuthService,
+    load_or_create_session_secret,
+    session_secret_is_weak,
+)
 from app.bitvavo.broker import PAPER_WALLET_KEY, Broker, LiveBroker, PaperBroker, recent_orders
 from app.bitvavo.client import BitvavoClient, BitvavoError
 from app.config import Settings, get_settings
@@ -39,6 +43,7 @@ from app.news.service import (
     requeue_items_without_event_key,
 )
 from app.news.sources import NewsFetcher
+from app.security import BodySizeLimit, CrossOriginProtection, SecurityHeaders
 from app.settings_store import SettingsError
 from app.strategy.describe import levels_summary
 from app.strategy.engine import backtest, latest_snapshot
@@ -93,6 +98,8 @@ def live_blocker(settings: Settings, client: BitvavoClient) -> str | None:
     Both conditions live in the environment on purpose: switching to live in the portal is
     never enough on its own.
     """
+    if not settings.auth_enabled:
+        return "AUTH_ENABLED staat op false; live handelen vereist een login"
     if not client.authenticated:
         return "er is geen Bitvavo-sleutel (BITVAVO_API_KEY en BITVAVO_API_SECRET) ingesteld"
     if not settings.live_trading_ack:
@@ -110,15 +117,28 @@ def build_broker(settings: Settings, client: BitvavoClient) -> Broker:
 
 
 def build_auth(settings: Settings) -> AuthService | None:
-    """Login is on unless AUTH_ENABLED=false; the account itself is created at /setup."""
+    """Login is on unless AUTH_ENABLED=false; the account itself is created at /setup (with the
+    setup link from the log) or with ``python -m app.auth create-account``."""
     if not settings.auth_enabled:
         log.warning("AUTH_ENABLED=false: the dashboard is reachable without logging in")
         return None
+    if session_secret_is_weak(settings):
+        log.warning(
+            "SESSION_SECRET is %s: whoever can read the database can forge login cookies; "
+            "set it to a random value of at least 32 characters",
+            "not set" if not settings.session_secret else "shorter than 32 characters",
+        )
     secret = settings.session_secret
-    if not secret:
-        with SessionLocal() as session:
+    with SessionLocal() as session:
+        if not secret:
             secret = load_or_create_session_secret(session)
-    return AuthService(settings, secret)
+        auth = AuthService(settings, secret)
+        auth.ensure_account_id(session)
+        if not auth.has_account(session):
+            auth.log_setup_hint()
+        elif not auth.user(session).mfa_enrolled:
+            log.warning("the account has no authenticator linked yet")
+    return auth
 
 
 def apply_settings(app: FastAPI, new: Settings) -> None:
@@ -189,6 +209,7 @@ async def lifespan(app: FastAPI):
     app.state.config_warning = None
     # Login settings come from the environment only; they are not editable in the portal.
     app.state.auth = build_auth(env)
+    app.state.session_secret_weak = env.auth_enabled and session_secret_is_weak(env)
     with SessionLocal() as session:
         settings = cfg.effective_settings(session, env)
         requeued = requeue_items_without_event_key(session)
@@ -399,9 +420,22 @@ async def evaluation_scheduler(app: FastAPI) -> None:
     )
 
 
-app = FastAPI(title="Crypie", version="0.1.0", lifespan=lifespan)
+_docs = get_settings().api_docs_enabled  # API docs only on request, and behind the login
+app = FastAPI(
+    title="Crypie",
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url="/docs" if _docs else None,
+    redoc_url="/redoc" if _docs else None,
+    openapi_url="/openapi.json" if _docs else None,
+)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.middleware("http")(require_login)
+# Added last = runs first: headers on every response, then the body limit, then the origin
+# check, all before the login check and before any body is parsed.
+app.add_middleware(CrossOriginProtection)
+app.add_middleware(BodySizeLimit)
+app.add_middleware(SecurityHeaders)
 app.include_router(auth_router)
 
 
@@ -433,8 +467,8 @@ def get_engine(request: Request) -> TradingEngine:
 
 
 @app.get("/health")
-async def health(request: Request):
-    return {"status": "ok", "mode": request.app.state.settings.trading_mode}
+async def health():
+    return {"status": "ok"}
 
 
 @app.get("/api/prices")

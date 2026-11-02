@@ -21,7 +21,7 @@ async def api():
 async def test_health(api):
     r = await api.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok", "mode": "paper"}
+    assert r.json() == {"status": "ok"}  # nothing about the instance without a login
 
 
 @respx.mock
@@ -306,7 +306,7 @@ async def test_settings_page_and_api_change_the_running_app(api):
     # Live mode needs the environment safeguards; the portal alone cannot switch it on.
     r = await api.put("/api/settings", json={"trading_mode": "live"})
     assert r.status_code == 422 and "kan nog niet" in r.json()["detail"]["trading_mode"]
-    assert (await api.get("/health")).json()["mode"] == "paper"
+    assert (await api.get("/api/settings")).json()["mode"] == "paper"
 
     # Reset one key, then everything.
     r = await api.delete("/api/settings/markets")
