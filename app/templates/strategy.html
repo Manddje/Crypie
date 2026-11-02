@@ -7,7 +7,7 @@
 {#- Readable indicator names, as on Handelen and the plan (UX-104); the chips below map them
     to the ids the JSON uses. -#}
 {%- set names = s|indicator_labels -%}
-<p class="strategy-scope">Geldt voor <strong>{{ settings.markets|market_list }}</strong> · candles van {{ s.interval|nl }}{% if s.position_size_pct < 100 %} · {{ s.position_size_pct|num(0) }}% van het beschikbare bedrag per positie{% endif %}</p>
+<p class="strategy-scope">Geldt voor <strong>{{ settings.markets|market_list }}</strong> · candles van {{ s.interval|nl }}{% if s.position_size_pct < 100 %} · {{ s.position_size_pct|pct_limit }} van het beschikbare bedrag per positie{% endif %}</p>
 <div class="strategy-rules">
   <div>
     <h{{ level + 1 }} class="eyebrow">Kopen als</h{{ level + 1 }}>
@@ -19,9 +19,9 @@
     <h{{ level + 1 }} class="eyebrow">Verkopen als</h{{ level + 1 }}>
     <ul class="list small">
       {% for c in s.sell %}<li>{{ c|condition_nl|readable_condition(names) }}{% if not loop.last %} <span class="muted">én</span>{% endif %}</li>{% endfor %}
-      {% if s.stop_loss_pct %}<li>de koers {{ s.stop_loss_pct|num(1) }}% onder de instapkoers zakt <span class="muted">(stop-loss)</span></li>{% endif %}
-      {% if s.trailing_stop_pct %}<li>de koers {{ s.trailing_stop_pct|num(1) }}% onder het hoogste punt sinds instap zakt{% if s.trailing_start_pct %}, zodra de winst eerst {{ s.trailing_start_pct|num(1) }}% was{% endif %} <span class="muted">(trailing stop)</span></li>{% endif %}
-      {% if s.take_profit_pct %}<li>de koers {{ s.take_profit_pct|num(1) }}% boven de instapkoers staat <span class="muted">(take-profit)</span></li>{% endif %}
+      {% if s.stop_loss_pct %}<li>de koers {{ s.stop_loss_pct|pct_limit }} onder de instapkoers zakt <span class="muted">(stop-loss)</span></li>{% endif %}
+      {% if s.trailing_stop_pct %}<li>de koers {{ s.trailing_stop_pct|pct_limit }} onder het hoogste punt sinds instap zakt{% if s.trailing_start_pct %}, zodra de winst eerst {{ s.trailing_start_pct|pct_limit }} was{% endif %} <span class="muted">(trailing stop)</span></li>{% endif %}
+      {% if s.take_profit_pct %}<li>de koers {{ s.take_profit_pct|pct_limit }} boven de instapkoers staat <span class="muted">(take-profit)</span></li>{% endif %}
     </ul>
   </div>
 </div>
@@ -88,7 +88,6 @@
     {{ explanation|md(4) }}
     {% endif %}
     {{ ui.strategy_diff(proposal_diff, level=3, new="Voorstel" if kind == "propose" else "Getest") }}
-    {% if description_outdated %}{{ ui.notice("warn", "De regels veranderen, maar de omschrijving niet. Pas de omschrijving (description) aan, anders spreekt die straks de regels tegen.", live=false) }}{% endif %}
     {% if problems %}{{ ui.notice("error", "Zo kan deze strategie niet actief worden: " ~ problems|join("; ") ~ ". Pas de JSON aan en test opnieuw.", live=false) }}{% endif %}
 
     <div class="strategy-backtest" id="backtest">

@@ -29,6 +29,9 @@ STAGE_ONE_SECONDS = 10 * 60  # time allowed between password and second factor
 MFA_SETUP_SECONDS = 15 * 60  # time allowed to scan the QR code and confirm a code
 REAUTH_SECONDS = 5 * 60  # time allowed between re-entering password + code and re-linking
 ENROL_TOKEN_SECONDS = 60 * 60  # lifetime of the one-time enrol code printed by the CLI
+# How long after creating the account at /setup the setup link plus the password may restart the
+# linking of the first authenticator. Later only the enrol code from the CLI works (shell access).
+SETUP_RESUME_SECONDS = 60 * 60
 MIN_PASSWORD_LENGTH = 10
 MIN_SESSION_SECRET_LENGTH = 32
 SESSION_SECRET_KEY = "auth:session_secret"

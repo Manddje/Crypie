@@ -13,7 +13,9 @@
  *   - a hard limit that becomes more than twice as loose asks once more (data-loosen);
  *   - the live confirmation only shows while Live is chosen;
  *   - what you typed is kept in this tab (sessionStorage, never passwords or the live
- *     confirmation) while the form is sent, so it can be put back if the session expired.
+ *     confirmation) while the form is sent, so it can be put back if the session expired;
+ *   - saving one block while another has edits asks first, and those edits come back (still
+ *     marked as not saved) after the page reloads, instead of being lost silently.
  */
 (function () {
   "use strict";
@@ -204,60 +206,90 @@
     var block = form.closest("section[id]");
     return block ? block.id : "";
   }
-  function saveDraft(form) {
+  // ``carriedBy``: the title of the block that was saved while this one had edits too; those
+  // edits come back by themselves after the save (only one block is sent per save).
+  function saveDraft(form, carriedBy) {
     var values = {};
     fieldsOf(form).forEach(function (el) {
       if (el.type === "radio") { if (el.checked) values[el.name] = el.value; }
       else values[el.name] = valueOf(el);
     });
     var drafts = readDrafts();
-    drafts[blockKey(form)] = { at: Date.now(), values: values };
+    drafts[blockKey(form)] = { at: Date.now(), values: values, carriedBy: carriedBy || "" };
     writeDrafts(drafts);
+  }
+  function titleOf(form) {
+    return form.getAttribute("data-block-title") || "dit blok";
+  }
+  function clockOf(when) {
+    var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+    var zone = window.CrypieTime && window.CrypieTime.zone ? window.CrypieTime.zone(when) : "";
+    return pad(when.getHours()) + ":" + pad(when.getMinutes()) + (zone ? " " + zone : "");
   }
   function dropDraft(key) {
     var drafts = readDrafts();
     if (key in drafts) { delete drafts[key]; writeDrafts(drafts); }
   }
-  function offerDraft(form, draft) {
+  function draftNotice(form, message, primary, secondary) {
     var feedback = form.querySelector(".settings-feedback");
-    if (!feedback) return;
-    var when = new Date(draft.at);
-    var hhmm = (when.getHours() < 10 ? "0" : "") + when.getHours() + ":" + (when.getMinutes() < 10 ? "0" : "") + when.getMinutes();
+    if (!feedback) return null;
     var box = document.createElement("div");
     box.className = "notice notice-warn";
     box.setAttribute("role", "status");
     var body = document.createElement("div");
     body.className = "body";
     var text = document.createElement("p");
-    text.textContent = "Je wijzigingen in dit blok van " + hhmm + " zijn niet opgeslagen (bijvoorbeeld omdat je sessie was verlopen). Ze staan nog in deze browser.";
+    text.textContent = message;
     var actions = document.createElement("div");
     actions.className = "actions";
-    var put = document.createElement("button");
-    put.type = "button";
-    put.className = "btn btn-primary btn-sm";
-    put.textContent = "Wijzigingen terugzetten";
-    var drop = document.createElement("button");
-    drop.type = "button";
-    drop.className = "btn btn-sm";
-    drop.textContent = "Weggooien";
-    actions.appendChild(put);
-    actions.appendChild(drop);
+    [primary, secondary].forEach(function (spec, i) {
+      if (!spec) return;
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = i === 0 ? "btn btn-primary btn-sm" : "btn btn-sm";
+      button.textContent = spec.label;
+      button.addEventListener("click", function () {
+        spec.run();
+        box.remove();
+      });
+      actions.appendChild(button);
+    });
     body.appendChild(text);
     body.appendChild(actions);
     box.appendChild(body);
     feedback.appendChild(box);
-    put.addEventListener("click", function () {
-      restore(form, draft.values);
-      dropDraft(blockKey(form));
-      box.remove();
-      var first = changedRows(form)[0];
-      var field = first && first.querySelector("input:not([type=hidden]), select, textarea");
-      if (field) field.focus();
-    });
-    drop.addEventListener("click", function () {
-      dropDraft(blockKey(form));
-      box.remove();
-    });
+    return box;
+  }
+  function focusFirstChange(form) {
+    var first = changedRows(form)[0];
+    var field = first && first.querySelector("input:not([type=hidden]), select, textarea");
+    if (field) field.focus();
+  }
+  function offerDraft(form, draft) {
+    draftNotice(
+      form,
+      "Je wijzigingen in dit blok van " + clockOf(new Date(draft.at)) + " zijn niet opgeslagen " +
+        "(bijvoorbeeld omdat je sessie was verlopen). Ze staan nog in deze browser.",
+      { label: "Wijzigingen terugzetten", run: function () { restore(form, draft.values); dropDraft(blockKey(form)); focusFirstChange(form); } },
+      { label: "Weggooien", run: function () { dropDraft(blockKey(form)); } }
+    );
+  }
+  // Another block was saved while this one had edits: put them back at once (still marked
+  // as not saved, so leaving the page asks again) and say so.
+  function carryDraft(form, draft) {
+    restore(form, draft.values);
+    dropDraft(blockKey(form));
+    if (!form.classList.contains("is-dirty")) return;
+    draftNotice(
+      form,
+      "Nog niet opgeslagen: je wijzigingen in " + titleOf(form) + " staan er weer, maar alleen " +
+        draft.carriedBy + " is opgeslagen. Sla ze op met '" + titleOf(form) + " opslaan', of draai ze terug.",
+      null,
+      { label: "Wijzigingen terugdraaien", run: function () { restore(form, savedValues(form)); syncLive(form); } }
+    );
+  }
+  function otherDirty(form) {
+    return forms.filter(function (f) { return f !== form && f.classList.contains("is-dirty"); });
   }
 
   // -- Loosening a hard limit -----------------------------------------------------------------
@@ -314,7 +346,9 @@
       var differs = Object.keys(draft.values || {}).some(function (n) {
         return n in current && normal(current[n]) !== normal(draft.values[n]);
       });
-      if (differs) offerDraft(form, draft); else dropDraft(key);
+      if (!differs) dropDraft(key);
+      else if (draft.carriedBy) carryDraft(form, draft);
+      else offerDraft(form, draft);
     }
 
     each(form, "[data-reset-field]", function (btn) {
@@ -421,6 +455,21 @@
         }
       }
       if (ev.defaultPrevented) return;
+      // Only this block is sent. Edits in other blocks would be lost with the page: ask, and
+      // keep them in this tab so they come back (still unsaved) after the save.
+      var others = otherDirty(form);
+      if (others.length) {
+        var names = others.map(titleOf);
+        var question = "Je hebt ook niet-opgeslagen wijzigingen in " + names.join(", ") + ". " +
+          "Alleen " + titleOf(form) + " wordt nu opgeslagen. De andere wijzigingen staan er na het " +
+          "opslaan weer, nog niet opgeslagen.\n\nNu " + titleOf(form) + " opslaan?";
+        if (!window.confirm(question)) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          return;
+        }
+        others.forEach(function (other) { saveDraft(other, titleOf(form)); });
+      }
       leaving = true;
       saveDraft(form);
     });
@@ -429,6 +478,11 @@
     syncLive(form);
   });
 
+  // A later question (app.js data-confirm) may still cancel the submit: then the page stays.
+  // This listener is added after app.js's, so it runs after it.
+  document.addEventListener("submit", function (ev) {
+    if (ev.defaultPrevented && forms.indexOf(ev.target) >= 0) leaving = false;
+  });
   // Back to this page from the browser cache: it may leave again only after asking.
   window.addEventListener("pageshow", function () { leaving = false; });
   window.addEventListener("beforeunload", function (ev) {

@@ -24,6 +24,7 @@ from app.auth.service import (
     MFA_SETUP_SECONDS,
     REAUTH_SECONDS,
     RECOVERY_CODE_COUNT,
+    SETUP_RESUME_SECONDS,
     STAGE_ONE_SECONDS,
     AuthService,
     validate_new_password,
@@ -227,6 +228,7 @@ def _page(request: Request, name: str, status: int = 200, **ctx) -> HTMLResponse
     ctx.setdefault("settings", request.app.state.settings)
     ctx.setdefault("error", None)
     ctx.setdefault("stage_minutes", STAGE_ONE_SECONDS // 60)
+    ctx.setdefault("resume_minutes", setup_resume_minutes())
     return templates.TemplateResponse(request, name, ctx, status_code=status)
 
 
@@ -318,18 +320,32 @@ def _setup_gate(
     return _page(request, "auth/setup_token.html", status=404, hide_flashes=True)
 
 
-def enrolment_unfinished(user: AuthUser | None) -> bool:
+def enrolment_unfinished(user: AuthUser | None, now: datetime | None = None) -> bool:
     """An account made at /setup whose first authenticator was never linked: no authenticator,
-    never logged in, and no one-time enrol code from the server. Only then may the setup link
-    plus the password start the linking again (after 'Later koppelen' or the time limit);
-    once ``reset-mfa`` or ``create-account`` issued an enrol code, only that code works."""
-    return (
-        user is not None
-        and not user.totp_secret
-        and user.last_login_at is None
-        and not user.enrol_token_hash
-        and not user.recovery_codes
-    )
+    never logged in, no one-time enrol code from the server, and made less than
+    SETUP_RESUME_SECONDS ago. Only then may the setup link plus the password start the linking
+    again (after 'Later koppelen' or the time limit). Later, or once ``reset-mfa`` or
+    ``create-account`` issued an enrol code, only that code works: it needs a shell on the
+    server, where read access to the logs alone is not enough."""
+    if (
+        user is None
+        or user.totp_secret
+        or user.last_login_at is not None
+        or user.enrol_token_hash
+        or user.recovery_codes
+    ):
+        return False
+    created = user.created_at
+    if created is None:
+        return False
+    if created.tzinfo is None:  # SQLite hands back naive datetimes
+        created = created.replace(tzinfo=UTC)
+    now = now or datetime.now(UTC)
+    return timedelta(0) <= now - created < timedelta(seconds=SETUP_RESUME_SECONDS)
+
+
+def setup_resume_minutes() -> int:
+    return SETUP_RESUME_SECONDS // 60
 
 
 @router.get("/setup", response_class=HTMLResponse)
@@ -540,7 +556,9 @@ async def mfa_page(
     if session.complete:
         return RedirectResponse(_safe_next(next), status_code=303)
     if not user.mfa_enrolled:
-        return RedirectResponse(f"/login/mfa/setup?next={_safe_next(next)}", status_code=303)
+        return RedirectResponse(
+            f"/login/mfa/setup?next={_next_param(_safe_next(next))}", status_code=303
+        )
     return _page(request, "auth/mfa.html", next=_safe_next(next))
 
 
@@ -680,7 +698,7 @@ async def mfa_setup_page(
     if session.complete:
         return RedirectResponse(_safe_next(next), status_code=303)
     if user.mfa_enrolled:
-        return RedirectResponse(f"/login/mfa?next={_safe_next(next)}", status_code=303)
+        return RedirectResponse(f"/login/mfa?next={_next_param(_safe_next(next))}", status_code=303)
     if not session.extra.get("enrol"):
         return _page(request, "auth/enrol_token.html", next=_safe_next(next))
     return _new_candidate(
@@ -703,12 +721,14 @@ async def mfa_setup_submit(
     if session.complete:
         return RedirectResponse(_safe_next(next), status_code=303)
     if user.mfa_enrolled:
-        return RedirectResponse(f"/login/mfa?next={_safe_next(next)}", status_code=303)
+        return RedirectResponse(f"/login/mfa?next={_next_param(_safe_next(next))}", status_code=303)
     if not session.extra.get("enrol"):
         return _check_enrol_token(request, auth, db, user, enrol_token, _safe_next(next))
     secret = auth.setup_secret(user, _read_cookie(request, SETUP_SECRET_COOKIE))
     if secret is None:
-        return RedirectResponse(f"/login/mfa/setup?next={_safe_next(next)}", status_code=303)
+        return RedirectResponse(
+            f"/login/mfa/setup?next={_next_param(_safe_next(next))}", status_code=303
+        )
     codes = auth.enrol_totp(db, secret, code)
     if codes is None:
         return _render_setup(
@@ -759,7 +779,7 @@ def _check_enrol_token(
             next=next,
             error="Deze code klopt niet of is verlopen. Maak op de server een nieuwe aan.",
         )
-    response = RedirectResponse(f"/login/mfa/setup?next={next}", status_code=303)
+    response = RedirectResponse(f"/login/mfa/setup?next={_next_param(next)}", status_code=303)
     _set_cookie(
         response, request, COOKIE_NAME, auth.stage_one_token(user, enrol=True), STAGE_ONE_SECONDS
     )

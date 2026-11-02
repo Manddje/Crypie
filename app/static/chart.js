@@ -192,6 +192,8 @@
           var err = new Error("HTTP " + r.status);
           err.status = r.status;
           err.detail = body && typeof body.detail === "string" ? body.detail : "";
+          // 'unreachable', 'busy', 'refused' or 'key' (app/main.py ChartUnavailable).
+          err.reason = body && typeof body.reason === "string" ? body.reason : "";
           throw err;
         });
       }, function (err) {
@@ -203,8 +205,15 @@
   // this chart needs from Bitvavo.
   function friendly(err, what) {
     if (err && err.name === "AbortError") return "Bitvavo antwoordde niet op tijd.";
-    if (err && err.status === 502 && /Bitvavo 40[13]\b/.test(err.detail || "")) {
+    if (err && err.status === 502 && (err.reason === "key" || /Bitvavo 40[13]\b/.test(err.detail || ""))) {
       return "Bitvavo weigert de API-sleutel, dus " + (what || "de koersen") + " konden niet worden opgehaald.";
+    }
+    if (err && err.status === 502 && err.reason === "refused") {
+      // Not an outage: trying again gives the same answer (UX-53).
+      return (err.detail || "Bitvavo weigerde het verzoek") + ". Bestaat de markt nog op Bitvavo? Controleer je markten in Instellingen.";
+    }
+    if (err && err.status === 502 && err.detail && (err.reason === "unreachable" || err.reason === "busy")) {
+      return err.detail + ". " + (what ? what.charAt(0).toUpperCase() + what.slice(1) : "De koersen") + " konden niet worden opgehaald.";
     }
     if (err && err.status === 502) {
       var text = (what || "de koersen") + " konden niet worden opgehaald bij Bitvavo.";
@@ -233,11 +242,18 @@
   function showError(status, message, err, retry) {
     status.textContent = "";
     status.appendChild(el("span", "chart-error", message));
-    var again = el("button", "btn btn-tint btn-sm", "Opnieuw proberen");
-    again.type = "button";
-    again.addEventListener("click", retry);
     status.appendChild(document.createElement("br"));
-    status.appendChild(again);
+    if (err && (err.reason === "refused" || err.reason === "key")) {
+      // Trying again gives the same refusal: point to where it can be fixed instead.
+      var fix = el("a", "btn btn-tint btn-sm", err.reason === "key" ? "Sleutel controleren" : "Markten controleren");
+      fix.href = err.reason === "key" ? "/settings#omgeving" : "/settings#row-markets";
+      status.appendChild(fix);
+    } else {
+      var again = el("button", "btn btn-tint btn-sm", "Opnieuw proberen");
+      again.type = "button";
+      again.addEventListener("click", retry);
+      status.appendChild(again);
+    }
     var tech = technical(err);
     if (tech) {
       var box = el("details", null, null, el("summary", null, "Technische details"), el("p", "mono", tech));

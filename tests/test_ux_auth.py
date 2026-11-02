@@ -245,6 +245,71 @@ async def test_after_reset_mfa_only_the_server_code_works(client, capsys):  # no
     assert routes.enrolment_unfinished(_user()) is False
 
 
+async def test_setup_link_restart_closes_an_hour_after_the_account_was_made(client):  # noqa: F811
+    """Security review: read access to the logs plus the password must not be enough to link
+    an authenticator long after the owner made the account; then only the CLI code works."""
+    from datetime import UTC, datetime, timedelta
+
+    token = _setup_token()
+    form = {"username": "kris", "password": PASSWORD, "password_repeat": PASSWORD}
+    await client.post("/setup", data=form | {"token": token})
+    await client.post("/logout")
+    user = _user()
+    made = user.created_at.replace(tzinfo=UTC)
+    assert routes.enrolment_unfinished(user, made + timedelta(minutes=59)) is True
+    assert routes.enrolment_unfinished(user, made + timedelta(minutes=61)) is False
+    with SessionLocal() as db:
+        db.query(AuthUser).update({"created_at": datetime.now(UTC) - timedelta(hours=2)})
+        db.commit()
+    r = await client.get(f"/setup?token={token}")
+    assert r.status_code == 303 and r.headers["location"] == "/login"
+    resume = {"username": "kris", "token": token, "action": "resume", "password": PASSWORD}
+    r = await client.post("/setup", data=resume)
+    assert r.status_code == 303 and r.headers["location"] == "/login"
+    assert COOKIE_NAME not in r.headers.get("set-cookie", "")
+
+
+def test_startup_log_never_shows_the_setup_token_once_the_account_exists(caplog):
+    from app.auth.service import AuthService
+    from app.config import get_settings
+    from app.main import build_auth
+
+    with SessionLocal() as db:
+        db.query(AuthUser).delete()
+        db.add(AuthUser(username="kris", password_hash="x"))
+        db.commit()
+    settings = get_settings().model_copy(
+        update={"setup_token": "", "auth_enabled": True, "session_secret": "s" * 40}
+    )
+    with caplog.at_level("WARNING"):
+        auth = build_auth(settings)
+    assert isinstance(auth, AuthService)
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "reset-mfa" in logged and auth.setup_token not in logged
+    with SessionLocal() as db:
+        db.query(AuthUser).delete()
+        db.commit()
+
+
+async def test_enrolment_redirects_keep_the_whole_next_address(client):  # noqa: F811
+    token = _setup_token()
+    form = {"username": "kris", "password": PASSWORD, "password_repeat": PASSWORD}
+    await client.post("/setup", data=form | {"token": token})
+    await client.post("/logout")
+    await client.post(
+        "/login",
+        data={"username": "kris", "password": PASSWORD, "next": "/news?hours=6&telt=nee"},
+    )
+    target = "/news?hours=6%26telt=nee"
+    r = await client.get("/login/mfa", params={"next": "/news?hours=6&telt=nee"})
+    assert r.status_code == 303 and r.headers["location"] == f"/login/mfa/setup?next={target}"
+    r = await client.post(
+        "/login/mfa/setup", data={"enrol_token": "fout", "next": "/news?hours=6&telt=nee"}
+    )
+    assert r.status_code == 401 and 'value="/news?hours=6&amp;telt=nee"' in r.text
+    _clear_throttle()
+
+
 async def test_setup_link_needs_the_right_token_for_a_restart(client, monkeypatch):  # noqa: F811
     monkeypatch.setattr("sys.stdin", io.StringIO(f"{PASSWORD}\n"))
     r = await client.get("/setup?token=fout")

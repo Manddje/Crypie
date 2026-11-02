@@ -58,6 +58,7 @@ from app.bitvavo.broker import (
 from app.bitvavo.client import BitvavoClient, BitvavoError, InvalidMarketError
 from app.config import Settings, get_settings
 from app.db import Evaluation, Order, Position, SessionLocal, Setting, get_session, init_db
+from app.labels import limit_pct
 from app.news.service import (
     FEAR_GREED_NL,
     NEWS_RETENTION_DAYS,
@@ -99,7 +100,6 @@ from app.strategy.page import (
     StrategyInputError,
     backtest_view,
     curve_svg,
-    description_outdated,
     equity_curves,
     parse_strategy_json,
     save_confirm,
@@ -236,15 +236,20 @@ def build_auth(settings: Settings) -> AuthService | None:
         auth.ensure_account_id(session)
         if not auth.has_account(session):
             auth.log_setup_hint()
-        elif enrolment_unfinished(auth.user(session)):
-            # The first linking was never finished: the setup link plus the password restarts it.
-            log.warning(
-                "the account has no authenticator linked yet: open /setup?token=%s and log in "
-                "with the password to link one, or run: python -m app.auth reset-mfa",
-                "<SETUP_TOKEN>" if auth.setup_token_from_env else auth.setup_token,
-            )
         elif not auth.user(session).mfa_enrolled:
-            log.warning("the account has no authenticator linked yet")
+            # Never the setup token itself once the account exists: whoever reads the logs
+            # must not be able to link an authenticator with it (see enrolment_unfinished).
+            if auth.setup_token_from_env and enrolment_unfinished(auth.user(session)):
+                log.warning(
+                    "the account has no authenticator linked yet: open /setup?token="
+                    "<SETUP_TOKEN> and log in with the password to link one, or run: "
+                    "python -m app.auth reset-mfa"
+                )
+            else:
+                log.warning(
+                    "the account has no authenticator linked yet: run "
+                    "python -m app.auth reset-mfa and enter the code it prints at /login"
+                )
     return auth
 
 
@@ -822,6 +827,95 @@ async def candles(
         raise HTTPException(502, str(exc)) from exc
 
 
+# The overview charts (UX-102): the same short wait as the overview itself, and once Bitvavo
+# did not answer, no chart asks again for PRICE_REUSE_S seconds (each would wait in vain).
+CHART_TIMEOUT_S = 5.0
+# Per Bitvavo client: when a chart or the overview last found Bitvavo unreachable, and why.
+_bitvavo_outages: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+class ChartUnavailable(Exception):
+    """A chart cannot be drawn: ``reason`` is 'unreachable' (time-out, no connection, a
+    Bitvavo outage: try again later), 'refused' (Bitvavo refused the request, e.g. a market it
+    does not know: trying again will not help), 'key' or 'busy'; ``message`` is Dutch."""
+
+    def __init__(self, reason: str, message: str, market: str | None = None):
+        super().__init__(message)
+        self.reason, self.message, self.market = reason, message, market
+
+
+def _unreachable(exc: BaseException) -> bool:
+    return isinstance(exc, TimeoutError) or (
+        isinstance(exc, BitvavoError) and (exc.status == 0 or exc.status >= 500)
+    )
+
+
+def _note_outage(client: object, exc: BaseException) -> None:
+    if _unreachable(exc):
+        _bitvavo_outages[client] = (time.monotonic(), _chart_problem(exc).message)
+
+
+def _recent_outage(client: object) -> str | None:
+    hit = _bitvavo_outages.get(client)
+    if hit and time.monotonic() - hit[0] <= PRICE_REUSE_S:
+        return hit[1]
+    return None
+
+
+def _chart_problem(exc: BaseException, market: str | None = None) -> ChartUnavailable:
+    """Why Bitvavo gave no candles, as a ChartUnavailable (UX-53: a refusal is not an outage)."""
+    if isinstance(exc, TimeoutError):
+        text = f"Bitvavo antwoordde niet binnen {CHART_TIMEOUT_S:g} seconden"
+        return ChartUnavailable("unreachable", text, market)
+    if not isinstance(exc, BitvavoError):
+        return ChartUnavailable("unreachable", describe_problem(exc), market)
+    if exc.status == 0:
+        return ChartUnavailable(
+            "unreachable", "Bitvavo reageert niet (geen verbinding of een time-out)", market
+        )
+    if exc.status >= 500:
+        return ChartUnavailable(
+            "unreachable", f"Bitvavo had een storing (fout {exc.status})", market
+        )
+    if exc.rate_limited:
+        return ChartUnavailable(
+            "busy", "Bitvavo krijgt even te veel verzoeken; probeer het over een minuut", market
+        )
+    if exc.status in (401, 403) or exc.code in KEY_PROBLEMS_NL:
+        return ChartUnavailable("key", _bitvavo_problem(exc), market)
+    where = f" voor {market}" if market else ""
+    detail = f"fout {exc.status}" + (f", code {exc.code}" if exc.code is not None else "")
+    said = exc.payload.get("error") if isinstance(exc.payload, dict) else exc.payload
+    said = str(said or "").strip().rstrip(".")[:160]
+    return ChartUnavailable(
+        "refused",
+        f"Bitvavo weigerde het verzoek{where} ({detail}{': ' + said if said else ''})",
+        market,
+    )
+
+
+async def _chart_candles(client: BitvavoClient, market: str, interval: str, limit: int):
+    """Candles for a chart, waiting at most CHART_TIMEOUT_S; raises ChartUnavailable."""
+    outage = _recent_outage(client)
+    if outage is not None:
+        raise ChartUnavailable("unreachable", outage + " (net nog geprobeerd)", market)
+    try:
+        rows = await asyncio.wait_for(client.candles(market, interval, limit), CHART_TIMEOUT_S)
+    except (BitvavoError, TimeoutError) as exc:
+        _note_outage(client, exc)
+        raise _chart_problem(exc, market) from exc
+    _bitvavo_outages.pop(client, None)
+    return rows
+
+
+def _chart_error(problem: ChartUnavailable) -> JSONResponse:
+    """502 with the reason for chart.js: 'unreachable' and 'busy' offer to try again."""
+    return JSONResponse(
+        {"detail": problem.message, "reason": problem.reason, "market": problem.market},
+        status_code=502,
+    )
+
+
 @app.get("/api/chart/{market}")
 async def chart_market(
     request: Request,
@@ -834,9 +928,9 @@ async def chart_market(
     market = _tracked_market(request, market)
     key, interval, limit = period_spec(period)
     try:
-        rows = await client.candles(market, interval, limit)
-    except BitvavoError as exc:
-        raise HTTPException(502, str(exc)) from exc
+        rows = await _chart_candles(client, market, interval, limit)
+    except ChartUnavailable as problem:
+        return _chart_error(problem)
     candles_ = candle_dicts(rows)
     since = (
         datetime.fromtimestamp(candles_[0]["time"], UTC)
@@ -868,7 +962,8 @@ async def portfolio_history_api(
     settings: Settings = request.app.state.settings
     key, interval, limit = period_spec(period)
     results = await asyncio.gather(
-        *(client.candles(m, interval, limit) for m in settings.markets), return_exceptions=True
+        *(_chart_candles(client, m, interval, limit) for m in settings.markets),
+        return_exceptions=True,
     )
     # One market Bitvavo refuses (a typo, a delisted coin) must not take the whole chart with
     # it (UX-53): leave it out and say so. Only when every market fails is it an error.
@@ -878,14 +973,20 @@ async def portfolio_history_api(
         if isinstance(r, BaseException)
     ]
     for _, exc in failed:
-        if not isinstance(exc, BitvavoError):
+        if not isinstance(exc, ChartUnavailable):
             raise exc
-    if settings.markets and len(failed) == len(settings.markets):
-        raise HTTPException(502, str(failed[0][1]))
+    unreachable = [exc for _, exc in failed if exc.reason == "unreachable"]
+    if unreachable or (settings.markets and len(failed) == len(settings.markets)):
+        # Bitvavo is down (or nothing at all came back): no half-rebuilt portfolio.
+        return _chart_error(unreachable[0] if unreachable else failed[0][1])
     try:
-        balances = await broker.balances(session)
-    except BitvavoError as exc:
-        raise HTTPException(502, str(exc)) from exc
+        if broker.mode == "paper":
+            balances = await broker.balances(session)
+        else:
+            balances = await asyncio.wait_for(broker.balances(session), CHART_TIMEOUT_S)
+    except (BitvavoError, TimeoutError) as exc:
+        _note_outage(client, exc)
+        return _chart_error(_chart_problem(exc))
     candles_by_market = {
         m: candle_dicts(rows)
         for m, rows in zip(settings.markets, results, strict=True)
@@ -901,7 +1002,7 @@ async def portfolio_history_api(
         "start_eur": settings.paper_start_eur if mode == "paper" else None,
         "points": portfolio_history(session, mode, balances, candles_by_market, since),
         "actions": trade_actions(session, mode, since, interval),
-        "skipped": [{"market": m, "reason": _cycle_failure_nl(str(exc))} for m, exc in failed],
+        "skipped": [{"market": m, "reason": exc.message} for m, exc in failed],
     }
 
 
@@ -1148,7 +1249,6 @@ def _strategy_context(
         "proposal": None,
         "proposal_json": None,
         "proposal_diff": None,
-        "description_outdated": False,
         "problems": [],
         "explanation": state.get("explanation"),
         "backtest": state.get("backtest"),
@@ -1178,7 +1278,6 @@ def _strategy_context(
         ctx["proposal"] = proposal
         ctx["proposal_json"] = proposal.model_dump_json(indent=2)
         ctx["proposal_diff"] = strategy_diff(current, proposal)
-        ctx["description_outdated"] = description_outdated(ctx["proposal_diff"])
         problems = use_problems(proposal)
         if proposal.market not in settings.markets:
             problems.append(f"{proposal.market} staat niet in je markten (MARKETS)")
@@ -1758,11 +1857,17 @@ async def trading_pause(body: PauseIn, session: Session = Depends(get_session)):
 
 @app.get("/api/positions")
 async def positions(
-    engine: TradingEngine = Depends(get_engine), session: Session = Depends(get_session)
+    mode: Literal["paper", "live"] | None = Query(None),
+    engine: TradingEngine = Depends(get_engine),
+    session: Session = Depends(get_session),
 ):
+    """Positions of the current mode, or of ``mode`` (e.g. the paper positions that the exits
+    still guard while the bot trades live)."""
+    mode = mode or engine.mode
     return {
-        "open": [_position_dict(p) for p in open_positions(session, engine.mode)],
-        "closed": [_position_dict(p) for p in closed_positions(session, engine.mode)],
+        "mode": mode,
+        "open": [_position_dict(p) for p in open_positions(session, mode)],
+        "closed": [_position_dict(p) for p in closed_positions(session, mode)],
     }
 
 
@@ -1838,7 +1943,7 @@ PROPOSAL_MAX_LIVE_BUY_PCT = 50.0
 
 
 def _fmt_pct(value: float | None) -> str:
-    return "geen stop" if value is None else f"{value:g}%"
+    return "geen stop" if value is None else limit_pct(value)
 
 
 def _proposal_guard_problems(current: Strategy, proposal: Strategy, ev: Evaluation) -> list[str]:
@@ -1859,9 +1964,9 @@ def _proposal_guard_problems(current: Strategy, proposal: Strategy, ev: Evaluati
         live_pct = None
     if isinstance(live_pct, int | float) and live_pct > PROPOSAL_MAX_LIVE_BUY_PCT:
         problems.append(
-            f"het voorstel geeft live op {live_pct:g}% van de candles een koopsignaal (meer dan "
-            f"{PROPOSAL_MAX_LIVE_BUY_PCT:g}%); pas dat zelf aan op de strategiepagina als je "
-            "dat wilt"
+            f"het voorstel geeft live op {limit_pct(live_pct)} van de candles een koopsignaal "
+            f"(meer dan {limit_pct(PROPOSAL_MAX_LIVE_BUY_PCT)}); pas dat zelf aan op de "
+            "strategiepagina als je dat wilt"
         )
     return problems
 
@@ -2149,6 +2254,11 @@ def _trading_context(
         "positions": [
             display.position_view(p, prices.get(p.market), engine.fee_pct)
             for p in open_positions(session, engine.mode)
+        ],
+        # UX-01: the other mode's open positions are still guarded by the exits.
+        "other_positions": [
+            display.position_view(p, prices.get(p.market), engine.fee_pct)
+            for p in open_positions(session, other)
         ],
         "prices_at": engine.last_prices_at if prices else None,
         "closed_positions": closed_positions(session, engine.mode)[:20],
@@ -2810,6 +2920,7 @@ async def fetch_market_names(client: BitvavoClient) -> set[str] | None:
         rows = await asyncio.wait_for(client.markets(), MARKET_LIST_TIMEOUT_S)
     except Exception as exc:  # noqa: BLE001 - offline or slow: the save goes on unchecked
         log.info("market list not available for the settings check: %s", exc)
+        _note_outage(client, exc)
         return None
     if not isinstance(rows, list):
         return None
@@ -3137,8 +3248,8 @@ def _live_context(
                 "Kapitaal voor de bot",
                 fmt_eur(capital, 0) if capital > 0 else "0: het hele Bitvavo-account",
             ),
-            ("Maximaal in crypto", f"{fmt_num(settings.max_exposure_pct, 0)}%"),
-            ("Dagverlieslimiet", f"{fmt_num(settings.daily_loss_limit_pct, 1)}%"),
+            ("Maximaal in crypto", limit_pct(settings.max_exposure_pct)),
+            ("Dagverlieslimiet", limit_pct(settings.daily_loss_limit_pct)),
             ("Maximum aantal orders per dag", str(settings.max_trades_per_day)),
             ("Markten", ", ".join(settings.markets)),
             ("Automatisch handelen", "aan" if settings.trading_enabled else "uit"),
@@ -3157,6 +3268,12 @@ def _error_label(key: str, fields: dict[str, dict]) -> str:
     return EXTRA_FORM_FIELDS.get(key, key)
 
 
+def _form_text(text: object) -> str:
+    """A field's text as the page compares it: line ends as \n, no spaces at line ends."""
+    lines = str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    return "\n".join(line.rstrip() for line in lines).strip()
+
+
 def _settings_context(
     request: Request,
     session: Session,
@@ -3171,6 +3288,7 @@ def _settings_context(
     saved_block: str | None = None,
     loosened: list[str] | None = None,
     form_extra: dict | None = None,
+    known_markets: set[str] | None = None,
 ) -> dict:
     """``password_error`` is (form, message): the form ("trading", ..., or "paper") whose
     current-password field gets the message. ``form_group`` is the block that was submitted
@@ -3200,7 +3318,8 @@ def _settings_context(
                 sent_form = str(sent)
             else:
                 sent_form = str(sent)
-            f["changed"] = sent_form.strip() != str(f["saved_text"]).strip()
+            # A textarea comes back with \r\n line ends: compare the text, not the bytes.
+            f["changed"] = _form_text(sent_form) != _form_text(f["saved_text"])
     # Fields that only work while their switch is on (or their number above 0) are dimmed with
     # an explanation while it is off; they keep their value and are still saved.
     for f in fields_by_key.values():
@@ -3213,6 +3332,11 @@ def _settings_context(
                 f["dep_off"] = cfg.parse_decimal(parent["text"]) == 0
             except ValueError:
                 pass
+    markets_field = fields_by_key.get("markets")
+    if markets_field is not None and known_markets:
+        # Saved markets Bitvavo does not list (from MARKETS, or saved while Bitvavo could not
+        # be asked): a warning at the field, the save itself checks new ones (UX-53).
+        markets_field["warning"] = cfg.unknown_markets(list(settings.markets), known_markets)
     plan = fields_by_key.get("cryptopanic_plan")
     if plan is not None and not env.cryptopanic_token:
         plan["dep_off"] = True
@@ -3242,6 +3366,7 @@ def _settings_context(
         )
         group["reset_confirm"] = _reset_confirm_text(group)
     key_state = bitvavo_key_state(request)
+    paper_open = open_positions(session, "paper")
     attempts_left = None
     if password_error and password_status == 403 and step_up_enabled(request):
         attempts_left = step_up_attempts_left(request, session)
@@ -3249,10 +3374,10 @@ def _settings_context(
         "settings": settings,
         "groups": payload["groups"],
         "paper_field": paper_field,
+        # Shown in the Oefenportefeuille block while live: what a reset would close (UX-01).
+        "paper_open_markets": [p.market for p in paper_open],
         "live_blocker": payload["live_blocker"],
-        "live": _live_context(
-            request, settings, key_state, paper_open=len(open_positions(session, "paper"))
-        ),
+        "live": _live_context(request, settings, key_state, paper_open=len(paper_open)),
         "config_warning": payload["warning"],
         "errors": errors,
         "message": message,
@@ -3297,8 +3422,19 @@ async def settings_page(
         session,
         block_flashes=block_flashes,
         saved_block=saved if block_flashes else None,
+        known_markets=await _markets_for_page(request.app),
     )
     return templates.TemplateResponse(request, "settings.html", ctx)
+
+
+async def _markets_for_page(app_: FastAPI) -> set[str] | None:
+    """Bitvavo's market list for a warning on the page (UX-53): markets from MARKETS, or
+    saved while Bitvavo could not be asked, are checked too. Not while Bitvavo just failed:
+    the page does not wait for it then."""
+    if _recent_outage(app_.state.client) is not None:
+        cached = getattr(app_.state, "market_names", None)
+        return cached[1] if cached else None
+    return await _known_markets(app_)
 
 
 def _saved_text(title: str, changes: list[str]) -> str:
@@ -3405,10 +3541,13 @@ async def settings_save(request: Request, session: Session = Depends(get_session
 
 
 async def _reset_paper_action(request, session, form, password, page, step_up_failed):
-    """Reset the paper portfolio, optionally with a new start amount (saved with it)."""
-    if request.app.state.broker.mode != "paper":
-        raise HTTPException(400, "alleen mogelijk in oefenmodus")
-    sent = form.get("paper_start_eur")
+    """Reset the paper portfolio, optionally with a new start amount (saved with it).
+
+    Also while live (UX-01): the exits keep guarding paper positions there, and this is the
+    only way to close them. It touches fictive money only and always needs the password
+    (require_current_password; live is impossible without login). The start amount cannot
+    be changed while live."""
+    sent = form.get("paper_start_eur") if request.app.state.broker.mode == "paper" else None
     submitted = {"paper_start_eur": str(sent)} if sent is not None else None
     values: dict = {}
     if sent is not None and str(sent).strip():
@@ -3752,6 +3891,7 @@ async def _dashboard_prices(
         log.warning("overview: prices not fetched (%s): %s", type(exc).__name__, exc)
         problem = _bitvavo_problem(exc)
         _price_failures[client] = (time.monotonic(), problem)
+        _note_outage(client, exc)  # the charts that load next need not wait again
         return last_known, at, problem
     _price_failures.pop(client, None)
     engine.remember_prices(fresh)
@@ -3933,6 +4073,10 @@ async def _dashboard_context(
         "prices": prices_,
         "prices_at": prices_at,
         "price_problem": price_problem,
+        # Bitvavo answered but had no price for these (a market it does not list, UX-53).
+        "unpriced_markets": []
+        if price_problem
+        else [m for m in settings.markets if not prices_.get(m)],
         "balances": balances,
         "balance_problem": balance_problem,
         "portfolio": portfolio,

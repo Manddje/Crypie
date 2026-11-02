@@ -147,7 +147,7 @@
     {% if paper_positions %}
     {% set n = paper_positions|length %}
     {% call ui.notice("info", "", live=false) %}
-      Nog {{ n }} open {{ "oefenpositie" if n == 1 else "oefenposities" }} met fictief geld: {{ paper_positions|map(attribute="market")|join(", ") }}. Stop-loss en take-profit bewaken {{ "die" if n == 1 else "ze" }} nog, maar {{ "die staat" if n == 1 else "ze staan" }} niet op Bitvavo en {{ "telt" if n == 1 else "tellen" }} niet mee in je live portefeuille. Verkopen of de oefenportefeuille resetten kan alleen in Oefenmodus (<a href="/settings#oefenportefeuille">Instellingen › Oefenportefeuille</a>).
+      Nog {{ n }} open {{ "oefenpositie" if n == 1 else "oefenposities" }} met fictief geld: {{ paper_positions|map(attribute="market")|join(", ") }}. Stop-loss en take-profit bewaken {{ "die" if n == 1 else "ze" }} nog, maar {{ "die staat" if n == 1 else "ze staan" }} niet op Bitvavo en {{ "telt" if n == 1 else "tellen" }} niet mee in je live portefeuille. <a href="/trading#andere-modus">Bekijken op Handelen</a> · <a href="/settings#oefenportefeuille">sluiten met een reset van de oefenportefeuille</a>.
     {% endcall %}
     {% endif %}
   </section>
@@ -165,12 +165,13 @@
         {% set s = sentiments|selectattr("coin", "equalto", coin)|first %}
         <tr>
           <td><strong>{{ coin }}</strong><span class="sub">{{ market }}</span></td>
-          <td class="num">{{ prices[market]|price_eur if prices.get(market) else "–" }}</td>
+          <td class="num">{% if prices.get(market) %}{{ prices[market]|price_eur }}{% elif market in unpriced_markets %}<span class="neg">geen koers</span>{% else %}–{% endif %}</td>
           <td class="num">{% if s %}<span class="pill {{ s.label()|sentiment_pill }}">{{ s.label() }}</span>{% else %}–{% endif %}</td>
         </tr>
         {% endfor %}
       </table>
       {% endcall %}
+      {% if unpriced_markets %}<p class="form-help">Bitvavo gaf geen koers voor {{ unpriced_markets|join(", ") }}: die markt bestaat daar niet (meer) of wordt nu niet verhandeld. De bot slaat {{ "hem" if unpriced_markets|length == 1 else "ze" }} over. <a href="/settings#row-markets">Markten controleren</a>.</p>{% endif %}
       {% else %}
       {{ ui.empty("Geen koersen beschikbaar", "Bitvavo gaf geen antwoord en er is nog geen koers bekend. Probeer het over een minuut opnieuw.", symbol="chart") }}
       {% endif %}
@@ -255,9 +256,9 @@
       {% if strategy.description %}<p class="small dash-oneline mt-2">{{ strategy.description }}</p>{% endif %}
       <div class="chips mt-3">
         {% for ind in strategy.indicators %}<span class="chip">{{ ind|indicator_nl }}</span>{% endfor %}
-        {% if strategy.stop_loss_pct %}<span class="chip">stop-loss {{ strategy.stop_loss_pct|num(0) }}%</span>{% endif %}
-        {% if strategy.trailing_stop_pct %}<span class="chip">trailing stop {{ strategy.trailing_stop_pct|num(0) }}%</span>{% endif %}
-        {% if strategy.take_profit_pct %}<span class="chip">take-profit {{ strategy.take_profit_pct|num(0) }}%</span>{% endif %}
+        {% if strategy.stop_loss_pct %}<span class="chip">stop-loss {{ strategy.stop_loss_pct|pct_limit }}</span>{% endif %}
+        {% if strategy.trailing_stop_pct %}<span class="chip">trailing stop {{ strategy.trailing_stop_pct|pct_limit }}</span>{% endif %}
+        {% if strategy.take_profit_pct %}<span class="chip">take-profit {{ strategy.take_profit_pct|pct_limit }}</span>{% endif %}
       </div>
     </section>
 
@@ -299,7 +300,7 @@
     {% if paused %}{{ ui.notice("warn", "De noodstop staat aan: kopen kan niet, verkopen wel.", live=false) }}{% endif %}
     {% if rn.orders_today >= rn.max_orders_per_day - 1 %}
     {% call ui.notice("warn", "", live=false) %}
-      {% if rn.orders_limit_reached %}Het maximum aantal orders per dag is bereikt ({{ rn.orders_today }} van {{ rn.max_orders_per_day }}). Kopen kan weer vanaf {{ rn.resets_at|dt }}, voor jou en voor de bot; verkopen kan wel.{% else %}Je kunt vandaag nog 1 order plaatsen ({{ rn.orders_today }} van maximaal {{ rn.max_orders_per_day }} gebruikt). Daarna kopen jij en de bot niets meer tot {{ rn.resets_at|dt }}.{% endif %}
+      {% if rn.max_orders_per_day <= 0 %}Het maximum aantal orders per dag staat op 0: kopen kan niet, voor jou en voor de bot, tot je het in <a href="/settings#limits">Instellingen</a> verhoogt. Verkopen kan wel.{% elif rn.orders_limit_reached %}Het maximum aantal orders per dag is bereikt: {{ rn.orders_today }} {{ "order" if rn.orders_today == 1 else "orders" }} vandaag (maximum {{ rn.max_orders_per_day }}). Kopen kan weer vanaf {{ rn.resets_at|dt }}, voor jou en voor de bot; verkopen kan wel, en telt ook mee.{% else %}Je kunt vandaag nog 1 order plaatsen ({{ rn.orders_today }} van maximaal {{ rn.max_orders_per_day }} gebruikt). Daarna kopen jij en de bot niets meer tot {{ rn.resets_at|dt }}.{% endif %}
     {% endcall %}
     {% endif %}
     <form method="post" action="/orders#order" id="order-form" class="dash-order-form"
@@ -338,7 +339,7 @@
     </form>
     <p class="form-help" id="order-help">
       Kopen: {{ order_limits.min_buy|eur }} tot {{ order_limits.max_buy|eur }} per order. Verkopen kan vanaf {{ order_limits.min_sell|eur }}; blijft er minder dan {{ order_limits.min_sell|eur }} over, dan wordt de hele positie verkocht.
-      Handmatige orders tellen mee voor het maximum aantal orders per dag (vandaag {{ rn.orders_today }} van {{ rn.max_orders_per_day }}) en vallen onder alle harde limieten; tijdens de noodstop kun je alleen verkopen.{% if order_needs_password %} Omdat de bot live handelt, vraagt een order om je huidige wachtwoord.{% endif %}
+      Handmatige orders tellen mee voor het maximum aantal orders per dag (vandaag {{ rn.orders_today }}, maximum {{ rn.max_orders_per_day }}) en vallen onder alle harde limieten; tijdens de noodstop kun je alleen verkopen.{% if order_needs_password %} Omdat de bot live handelt, vraagt een order om je huidige wachtwoord.{% endif %}
     </p>
   </section>
 

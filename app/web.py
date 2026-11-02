@@ -11,7 +11,13 @@ from pathlib import Path
 from fastapi.templating import Jinja2Templates
 
 from app.labels import CLOSE_REASONS_NL as _CLOSE_REASONS_NL
-from app.labels import KILL_SWITCH_HELP_NL, daily_loss_rule_nl, max_orders_rule_nl
+from app.labels import (
+    KILL_SWITCH_HELP_NL,
+    daily_loss_rule_nl,
+    limit_pct,
+    max_orders_rule_nl,
+    orders_limit_nl,
+)
 from app.strategy.describe import (  # noqa: F401
     OPERATORS_NL,
     SERIES_NL,
@@ -20,6 +26,7 @@ from app.strategy.describe import (  # noqa: F401
     significant_decimals,
 )
 from app.strategy.model import IndicatorSpec
+from app.strategy.page import description_outdated
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -227,6 +234,15 @@ def pct(value: object, decimals: int = 1, signed: bool = True) -> str:
         v = 0.0
     prefix = "+" if signed and v > 0 else ""
     return f"{prefix}{_dutch_number(v, decimals)}%"
+
+
+def pct_limit(value: object) -> str:
+    """A percentage setting or limit with the decimals it has: '5%', '2,5%' (never rounded to
+    '3%'); '–' without a value."""
+    v = _finite(value)
+    if v is None:
+        return "–"
+    return limit_pct(v)
 
 
 def pnl_class(value: object, decimals: int = 2) -> str:
@@ -641,6 +657,9 @@ templates.env.globals.update(
         # The hard limits in one wording on every page (UX-105).
         "daily_loss_rule_nl": daily_loss_rule_nl,
         "max_orders_rule_nl": max_orders_rule_nl,
+        "orders_limit_nl": orders_limit_nl,
+        # The rules change but the free description does not (UX-12): every diff says so.
+        "description_outdated": description_outdated,
     }
 )
 templates.env.filters.update(
@@ -650,6 +669,7 @@ templates.env.filters.update(
         "eur": eur,
         "eur_short": eur_short,
         "pct": pct,
+        "pct_limit": pct_limit,
         "pnl_class": pnl_class,
         "price": price,
         "price_eur": price_eur,

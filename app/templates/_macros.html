@@ -160,7 +160,7 @@
    Extra rows via {% call %}. #}
 {% macro hard_limits(limits) -%}
 <dt>Per order</dt><dd>minimaal {{ limits.min_trade_eur|eur_short }}, maximaal {{ limits.max_trade_eur|eur_short }}</dd>
-<dt>Maximaal in crypto</dt><dd>{{ limits.max_exposure_pct|num(0) }}% van de portefeuille</dd>
+<dt>Maximaal in crypto</dt><dd>{{ limits.max_exposure_pct|pct_limit }} van de portefeuille</dd>
 <dt>Dagverlieslimiet</dt><dd>{{ daily_loss_rule_nl(limits.daily_loss_limit_pct)|capfirst }}.</dd>
 <dt>Maximum aantal orders per dag</dt><dd>{{ max_orders_rule_nl(limits.max_trades_per_day)|capfirst }}.</dd>
 <dt>Afkoelperiode na stop-loss</dt><dd>{{ limits.cooldown_min_after_stop }} minuten niet opnieuw kopen in een markt waar een stop-loss is geraakt.</dd>
@@ -191,7 +191,9 @@
 {# Field-level differences between the active strategy and a proposal (strategy_diff()).
    level is the heading level of the title in the page outline; old and new name the columns
    ('Nu' / 'Voorstel', or 'Nu' / 'Jouw versie'). #}
-{% macro strategy_diff(diff, title="Verschil met de actieve strategie", level=3, old="Nu", new="Voorstel") -%}
+{#- outdated: the warning when the rules change but the description does not (UX-12); the
+    default fits a strategy you can still edit, the proposal on Handelen passes its own. -#}
+{% macro strategy_diff(diff, title="Verschil met de actieve strategie", level=3, old="Nu", new="Voorstel", outdated="De regels veranderen, maar de omschrijving niet. Pas de omschrijving (description) aan, anders spreekt die straks de regels tegen.") -%}
 {% if diff is not none %}
 <h{{ level }} class="fs-body mt-4">{{ title }}</h{{ level }}>
 {% if diff %}
@@ -206,6 +208,7 @@
 {% else %}
 <p class="small muted mt-2">Geen verschil: het voorstel is gelijk aan de actieve strategie.</p>
 {% endif %}
+{% if outdated and description_outdated(diff) %}<div class="mt-3">{{ notice("warn", outdated, live=false) }}</div>{% endif %}
 {% endif %}
 {%- endmacro %}
 

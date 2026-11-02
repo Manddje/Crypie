@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.bitvavo.broker import PAPER_WALLET_KEY
 from app.db import Setting
-from app.labels import KILL_SWITCH_HELP_NL
+from app.labels import KILL_SWITCH_HELP_NL, orders_limit_nl
 from app.trading import risk
 from app.trading.events import active_event
 
@@ -280,11 +280,9 @@ def bot_health(
     resets = rn.get("resets_at") or next_utc_midnight(now)
     blocked_until = None
     if rn.get("orders_limit_reached"):
-        blockers.append(
-            f"het maximum aantal orders per dag is bereikt ({rn['orders_today']} van "
-            f"{rn['max_orders_per_day']}); kopen kan weer vanaf 00:00 UTC"
-        )
-        blocked_until = resets
+        blockers.append(orders_limit_nl(rn["orders_today"], rn["max_orders_per_day"]))
+        if rn["max_orders_per_day"] > 0:
+            blocked_until = resets
     if rn.get("loss_limit_reached"):
         blockers.append(
             f"de dagverlieslimiet van {_num(rn['daily_loss_limit_pct'])}% is bereikt; kopen "

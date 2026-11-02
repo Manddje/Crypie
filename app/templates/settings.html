@@ -11,7 +11,7 @@
 {%- if f.sensitive and step_up %} {{ fid }}-lock{% endif -%}
 {%- if f.overridden %} {{ fid }}-default{% endif -%}
 {%- if f.ceiling is not none %} {{ fid }}-ceiling{% endif -%}
-{%- if f.kind == "model" %} {{ fid }}-warn{% endif -%}
+{%- if f.kind == "model" or (f.key == "markets" and f.warning) %} {{ fid }}-warn{% endif -%}
 {%- if f.error %} {{ fid }}-error{% endif -%}
 {%- endmacro %}
 
@@ -26,6 +26,7 @@
   {% endif %}
   {% if f.ceiling is not none %}<p class="setting-default" id="{{ fid }}-ceiling">Plafond uit de serveromgeving: <strong>{{ f.ceiling_display }}</strong> <span class="mono">{{ f.ceiling_env }}</span></p>{% endif %}
   {% if f.kind == "model" %}<p class="setting-warn" id="{{ fid }}-warn" data-model-warn{% if not f.warning %} hidden{% endif %}>{{ f.warning or "Onbekend model: controleer de naam. Een typfout merk je pas bij de volgende aanroep, en de kostenschatting rekent dan met het duurste tarief." }}</p>{% endif %}
+  {% if f.key == "markets" and f.warning %}<p class="setting-warn" id="{{ fid }}-warn">Let op: {{ f.warning }} De bot slaat {{ "die markt" if f.warning.count("bestaat niet") == 1 else "die markten" }} in elke cyclus over; haal {{ "hem" if f.warning.count("bestaat niet") == 1 else "ze" }} weg of verbeter de naam.</p>{% endif %}
   {% if f.error %}<p class="setting-error" id="{{ fid }}-error">{{ f.error }}</p>{% endif %}
 {%- endmacro %}
 
@@ -138,7 +139,7 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
         them is only possible in Oefenmodus. Offer to start afresh with the switch. -#}
     <label class="check-row">
       <input type="checkbox" name="reset_paper_on_live" value="1"{% if form_extra.reset_paper_on_live %} checked{% endif %} data-no-draft>
-      <span>Oefenportefeuille meteen resetten{% if live.paper_open %}: {{ live.paper_open }} open {{ "oefenpositie wordt" if live.paper_open == 1 else "oefenposities worden" }} gesloten zonder resultaat{% endif %}. Anders {% if live.paper_open %}{{ "blijft die" if live.paper_open == 1 else "blijven die" }} bewaakt door stop-loss en take-profit, en {% endif %}kun je de oefenportefeuille pas weer resetten in Oefenmodus.</span>
+      <span>Oefenportefeuille meteen resetten{% if live.paper_open %}: {{ live.paper_open }} open {{ "oefenpositie wordt" if live.paper_open == 1 else "oefenposities worden" }} gesloten zonder resultaat{% endif %}. Anders {% if live.paper_open %}{{ "blijft die" if live.paper_open == 1 else "blijven die" }} bewaakt door stop-loss en take-profit; {% endif %}resetten kan later ook nog, bij Oefenportefeuille.</span>
     </label>
   </div>
   {% endif %}
@@ -280,8 +281,19 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
         </div>
       </form>
       {% else %}
-      {{ block_feedback("paper") }}
-      <p class="card-desc">Je handelt live. De oefenportefeuille kun je alleen resetten in oefenmodus. Startbedrag: {{ pf.display }}.</p>
+      {% set n = paper_open_markets|length %}
+      <p class="card-desc">Je handelt live; dit raakt alleen het fictieve geld, er gaat niets naar Bitvavo. {% if n %}Nog {{ n }} open {{ "oefenpositie" if n == 1 else "oefenposities" }} ({{ paper_open_markets|join(", ") }}), nog bewaakt door stop-loss en take-profit. Een reset sluit {{ "die" if n == 1 else "ze" }} zonder resultaat.{% else %}Er zijn geen open oefenposities.{% endif %} Startbedrag: {{ pf.display }} (aan te passen in Oefenmodus).</p>
+      <form method="post" action="/settings#oefenportefeuille" novalidate data-settings-form data-block-title="Oefenportefeuille"{% if form_group == "paper" %} data-submitted{% endif %} data-confirm="Oefenportefeuille resetten? Het oefensaldo gaat terug naar {{ pf.display }}{% if n %} en {{ n }} open {{ 'oefenpositie wordt' if n == 1 else 'oefenposities worden' }} gesloten zonder resultaat{% endif %}. Je live portefeuille verandert niet.">
+        <input type="hidden" name="group" value="paper">
+        {{ block_feedback("paper", paper_failed, [], [], step_up) }}
+        {% if step_up %}{{ password_row("paper", "Nodig om de oefenportefeuille te resetten.") }}{% endif %}
+        <div class="settings-actions" data-actions>
+          <p class="settings-actions-status" data-dirty-status aria-live="polite"></p>
+          <div class="actions">
+            <button class="btn btn-danger" type="submit" name="action" value="reset_paper" data-busy="Resetten…">Oefenportefeuille resetten</button>
+          </div>
+        </div>
+      </form>
       {% endif %}
       <p class="settings-top"><a href="#top">Terug naar boven</a></p>
     </section>

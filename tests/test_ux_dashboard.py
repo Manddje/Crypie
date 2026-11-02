@@ -312,7 +312,7 @@ async def test_the_help_text_follows_the_rules(api):
     _clear_trades()
     card = _order_card((await api.get("/")).text)
     assert "tellen niet mee" not in card
-    assert "tellen mee voor het maximum aantal orders per dag (vandaag 0 van 6)" in card
+    assert "tellen mee voor het maximum aantal orders per dag (vandaag 0, maximum 6)" in card
     assert "Kopen: € 10,00 tot € 100,00 per order" in card
     assert "Verkopen kan vanaf € 5,00" in card
     assert 'data-min-buy="10.0" data-max-buy="100.0" data-min-sell="5.0"' in card
@@ -349,7 +349,7 @@ async def test_the_help_text_follows_the_rules(api):
         )
         s.commit()
     card = _order_card((await api.get("/")).text)
-    assert "Het maximum aantal orders per dag is bereikt (6 van 6)" in card
+    assert "Het maximum aantal orders per dag is bereikt: 6 orders vandaag (maximum 6)" in card
     assert "verkopen kan wel" in card
     _clear_trades()
 

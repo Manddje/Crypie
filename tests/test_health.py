@@ -114,7 +114,8 @@ def test_daily_order_maximum_blocks_until_midnight(session):
     assert figures["orders_today"] == 3 and figures["orders_limit_reached"]
     h = health(eng, session, risk_figures=figures)
     assert h["label"] == "Actief · koopt niet"
-    assert "maximum aantal orders per dag" in h["detail"] and "(3 van 3)" in h["detail"]
+    assert "maximum aantal orders per dag" in h["detail"]
+    assert "(3 orders vandaag, maximum 3)" in h["detail"]
     assert h["blocked_until"] == datetime(2026, 11, 3, tzinfo=UTC)
 
 

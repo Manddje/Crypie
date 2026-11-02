@@ -778,9 +778,11 @@ LIVE-bevestiging); terug op Instellingen kun je ze terugzetten of weggooien.
 
 **Eerste authenticator.** De QR-pagina noemt de tijdslimiet (10 minuten na het wachtwoord) met het
 tijdstip. *Later koppelen* logt je (na een bevestiging) uit. Was er nog nooit een authenticator gekoppeld,
-heeft het account nog nooit ingelogd en is er geen eenmalige code van de server, dan begin je opnieuw met
-de setup-link uit de log plus je wachtwoord; de server zet die link bij het starten weer in de log. Na
-`reset-mfa` of `create-account` werkt alleen de eenmalige code. De herstelcodes kun je downloaden (.txt),
+heeft het account nog nooit ingelogd en is er geen eenmalige code van de server, dan begin je in het
+eerste uur na het aanmaken opnieuw met dezelfde setup-link plus je wachtwoord. Daarna, na een herstart
+(een willekeurig token verandert dan en de log toont het niet meer zodra het account bestaat) en na
+`reset-mfa` of `create-account` werkt alleen de eenmalige code van `python -m app.auth reset-mfa`: wie
+alleen de log kan lezen, kan zo geen eigen authenticator koppelen. De herstelcodes kun je downloaden (.txt),
 afdrukken en kopiëren (via http valt kopiëren terug op selecteren); *Verder* kan pas als je aanvinkt dat
 je ze bewaard hebt. Na een herladen zijn ze weg.
 

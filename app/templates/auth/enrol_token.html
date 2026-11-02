@@ -8,7 +8,7 @@
 <p class="muted">Er is nog geen authenticator gekoppeld. Dat gebeurt als het koppelen na het aanmaken van je account niet binnen {{ stage_minutes }} minuten is afgerond, als je 'Later koppelen' koos, of als de authenticator op de server is gewist. Om veiligheidsredenen kun je dan alleen verder met:</p>
 <ul class="auth-commands small muted">
   <li>de eenmalige code die <span class="mono">python -m app.auth reset-mfa</span> (of <span class="mono">create-account</span>) op de server afdrukt; hij is een uur geldig. Vul hem hieronder in;</li>
-  <li>of, als er nog nooit een authenticator gekoppeld was en je het account via de website maakte: de setup-link uit de serverlogs (<span class="mono">/setup?token=</span>).</li>
+  <li>of, alleen in het eerste uur na het aanmaken van je account via de website en zolang er nog nooit een authenticator gekoppeld was: dezelfde setup-link waarmee je het account maakte (<span class="mono">/setup?token=</span>).</li>
 </ul>
 <form method="post" action="/login/mfa/setup" class="auth-form" data-auth-form>
   <input type="hidden" name="next" value="{{ next }}">

@@ -16,6 +16,7 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select, update
@@ -42,6 +43,13 @@ from app.trading.risk import RiskLimits
 from app.trading.trend import load_trend
 
 log = logging.getLogger(__name__)
+
+
+def plain_number(value: float) -> str:
+    """A float in full, as plain digits without an exponent: 66091.5 -> '66091.5',
+    4.056e-06 -> '0.000004056'."""
+    return format(Decimal(repr(float(value))), "f")
+
 
 # News alone may trigger a Claude consult: a strongly positive, high-impact story can open a
 # (smaller) position, a strongly negative one can close it. Scores run from -1 to 1.
@@ -1351,7 +1359,9 @@ class TradingEngine:
                 action="sell",
             )
         decision.source, decision.action = "mechanical", "sell"
-        decision.reasoning = f"{reason} geraakt op {price:.2f}"
+        # The price in full (plain digits, no exponent): '0.000004056' for SHIB, so the page
+        # can show the stop it hit with significant digits (display._MECHANICAL, UX-29).
+        decision.reasoning = f"{reason} geraakt op {plain_number(price)}"
         market, signal, pid = position.market, decision.signal, position.id
         uncertain = False
         try:

@@ -1,5 +1,26 @@
 {% extends "base.html" %}
 {% import "_macros.html" as ui %}
+{% macro positions_table(positions, region) -%}
+    {% call ui.table_wrap(region) %}
+    <table class="table-stack positions">
+      <thead><tr><th scope="col">Markt</th><th scope="col">Geopend</th><th scope="col" class="num">Hoeveelheid</th><th scope="col" class="num">Instap</th><th scope="col" class="num">Nu</th><th scope="col" class="num">Resultaat (netto)</th><th scope="col" class="num">Stop-loss</th><th scope="col" class="num">Take-profit</th></tr></thead>
+      <tbody>
+      {% for v in positions %}{% set p = v.p %}
+      <tr>
+        <td><strong>{{ p.market }}</strong></td>
+        <td class="nowrap">{{ p.opened_at|dt }}</td>
+        <td class="num">{{ p.amount|amount }}</td>
+        <td class="num"><span class="cell">{{ p.entry_price|price_eur }}<span class="sub">{{ p.entry_quote|eur }} ingelegd</span></span></td>
+        <td class="num"><span class="cell">{% if v.price %}{{ v.price|price_eur }}{% if v.value_eur is not none %}<span class="sub">{{ v.value_eur|eur }} waard</span>{% endif %}{% else %}<span class="muted">nog niet bekend</span>{% endif %}</span></td>
+        <td class="num {{ v.pnl_eur|pnl_class if v.pnl_eur is not none else '' }}"><span class="cell">{% if v.pnl_eur is not none %}{{ v.pnl_eur|eur(2, true) }}<span class="sub {{ v.pnl_pct|pnl_class(1) }}">{{ v.pnl_pct|pct }}</span>{% else %}–{% endif %}</span></td>
+        <td class="num"><span class="cell">{% if p.stop_price %}{{ p.stop_price|price_eur }}{% if v.stop_gap_pct is not none %}<span class="sub">{% if v.stop_gap_pct > 0 %}{{ v.stop_gap_pct|pct(1, false) }} onder de koers{% else %}koers op of onder de stop{% endif %}</span>{% endif %}{% else %}<span class="neg">geen</span>{% endif %}</span></td>
+        <td class="num"><span class="cell">{% if p.take_profit_price %}{{ p.take_profit_price|price_eur }}{% if v.tp_gap_pct is not none and v.tp_gap_pct > 0 %}<span class="sub">{{ v.tp_gap_pct|pct(1, false) }} boven de koers</span>{% endif %}{% else %}<span class="muted">geen</span>{% endif %}</span></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endcall %}
+{%- endmacro %}
 {% block title %}Crypie · Handelen{% endblock %}
 {% block content %}
 {%- set h = health -%}
@@ -41,7 +62,7 @@
 <p class="small muted mt-3">De backtest van dit voorstel lukte niet.</p>
 {% endif %}
 {% if not e.applied %}
-  {{ ui.strategy_diff(e.diff, "Wat er verandert als je dit voorstel toepast", level) }}
+  {{ ui.strategy_diff(e.diff, "Wat er verandert als je dit voorstel toepast", level, outdated="De regels veranderen, maar de omschrijving niet: na het toepassen beschrijft de omschrijving nog de oude regels. Pas hem daarna aan op Strategie, of laat Claude een nieuw voorstel maken.") }}
   {% if e.problems %}
   <div class="mt-4">{{ ui.notice("warn", "Dit voorstel kan niet worden toegepast: " ~ e.problems|join("; ") ~ ".", live=false) }}</div>
   {% elif e.proposal_name %}
@@ -166,28 +187,19 @@
   <section class="card" id="open-posities" aria-labelledby="open-posities-title">
     {{ ui.card_header("Open posities", 2, meta=(("koersen van " ~ prices_at|dt) if prices_at and positions else none), id="open-posities-title") }}
     {% if positions %}
-    {% call ui.table_wrap("Open posities") %}
-    <table class="table-stack positions">
-      <thead><tr><th scope="col">Markt</th><th scope="col">Geopend</th><th scope="col" class="num">Hoeveelheid</th><th scope="col" class="num">Instap</th><th scope="col" class="num">Nu</th><th scope="col" class="num">Resultaat (netto)</th><th scope="col" class="num">Stop-loss</th><th scope="col" class="num">Take-profit</th></tr></thead>
-      <tbody>
-      {% for v in positions %}{% set p = v.p %}
-      <tr>
-        <td><strong>{{ p.market }}</strong></td>
-        <td class="nowrap">{{ p.opened_at|dt }}</td>
-        <td class="num">{{ p.amount|amount }}</td>
-        <td class="num"><span class="cell">{{ p.entry_price|price_eur }}<span class="sub">{{ p.entry_quote|eur }} ingelegd</span></span></td>
-        <td class="num"><span class="cell">{% if v.price %}{{ v.price|price_eur }}{% if v.value_eur is not none %}<span class="sub">{{ v.value_eur|eur }} waard</span>{% endif %}{% else %}<span class="muted">nog niet bekend</span>{% endif %}</span></td>
-        <td class="num {{ v.pnl_eur|pnl_class if v.pnl_eur is not none else '' }}"><span class="cell">{% if v.pnl_eur is not none %}{{ v.pnl_eur|eur(2, true) }}<span class="sub {{ v.pnl_pct|pnl_class(1) }}">{{ v.pnl_pct|pct }}</span>{% else %}–{% endif %}</span></td>
-        <td class="num"><span class="cell">{% if p.stop_price %}{{ p.stop_price|price_eur }}{% if v.stop_gap_pct is not none %}<span class="sub">{% if v.stop_gap_pct > 0 %}{{ v.stop_gap_pct|pct(1, false) }} onder de koers{% else %}koers op of onder de stop{% endif %}</span>{% endif %}{% else %}<span class="neg">geen</span>{% endif %}</span></td>
-        <td class="num"><span class="cell">{% if p.take_profit_price %}{{ p.take_profit_price|price_eur }}{% if v.tp_gap_pct is not none and v.tp_gap_pct > 0 %}<span class="sub">{{ v.tp_gap_pct|pct(1, false) }} boven de koers</span>{% endif %}{% else %}<span class="muted">geen</span>{% endif %}</span></td>
-      </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% endcall %}
+{{ positions_table(positions, "Open posities") }}
     <p class="form-help">Netto: na de kosten van de aankoop en van een verkoop nu ({{ status.fee_pct|num(2) }}% per order). Onder de stop-loss verkoopt de bot; een trailing stop schuift mee omhoog met de hoogste koers sinds de aankoop.</p>
     {% else %}
-    {{ ui.empty("Geen open posities", "Zodra de bot koopt, zie je hier de positie met haar resultaat, stop-loss en take-profit.", symbol="wallet") }}
+    {{ ui.empty("Geen open posities" ~ (" in live" if live else ""), "Zodra de bot koopt, zie je hier de positie met haar resultaat, stop-loss en take-profit.", symbol="wallet") }}
+    {% endif %}
+    {#- UX-01: positions of the other mode are still guarded by the exits; show them apart. -#}
+    {% if other_positions %}
+    {% set n = other_positions|length %}
+    <div class="other-mode mt-5" id="andere-modus">
+      <h3 class="fs-body">Ook open in {{ "Oefenmodus" if live else "Live" }} <span class="pill {{ 'pill-paper' if live else 'pill-red' }}">{{ "fictief geld" if live else "echt geld" }}</span></h3>
+      <p class="form-help">{% if live %}{{ "Deze oefenpositie wordt" if n == 1 else "Deze oefenposities worden" }} nog bewaakt door stop-loss, trailing stop en take-profit, met fictief geld: {{ "ze staat" if n == 1 else "ze staan" }} niet op Bitvavo en {{ "telt" if n == 1 else "tellen" }} niet mee in je live portefeuille of limieten. Sluiten kan met een reset in <a href="/settings#oefenportefeuille">Instellingen › Oefenportefeuille</a>.{% else %}{{ "Deze live positie wordt" if n == 1 else "Deze live posities worden" }} met echt geld op Bitvavo bewaakt door stop-loss, trailing stop en take-profit, ook nu je in Oefenmodus zit. Zelf verkopen kan in Live of op Bitvavo.{% endif %}</p>
+{{ positions_table(other_positions, "Open posities in " ~ ("Oefenmodus" if live else "Live")) }}
+    </div>
     {% endif %}
   </section>
 
@@ -201,7 +213,7 @@
         <div class="label" id="meter-exposure">In crypto</div>
         {% if rn.exposure_pct is not none %}
         {%- set used = rn.exposure_pct / rn.max_exposure_pct * 100 if rn.max_exposure_pct else 100 -%}
-        <div class="value">{{ rn.exposure_pct|pct(0, false) }} <span class="metric-sub">van max. {{ rn.max_exposure_pct|num(0) }}%</span></div>
+        <div class="value">{{ rn.exposure_pct|pct(0, false) }} <span class="metric-sub">van max. {{ rn.max_exposure_pct|pct_limit }}</span></div>
         <progress class="meter{{ ' is-bad' if rn.exposure_limit_reached else (' is-warn' if used >= 80 else '') }}" max="{{ rn.max_exposure_pct }}" value="{{ [rn.exposure_pct, rn.max_exposure_pct]|min }}" aria-labelledby="meter-exposure">{{ rn.exposure_pct|pct(0, false) }}</progress>
         <div class="sub">{{ rn.exposure_eur|eur(0) }} van {{ rn.portfolio_eur|eur(0) }}{% if rn.exposure_limit_reached %} · <span class="neg">limiet bereikt</span>{% endif %}</div>
         {% else %}
@@ -213,7 +225,7 @@
         <div class="label" id="meter-loss">Resultaat vandaag</div>
         {% if rn.day_result_pct is not none %}
         {%- set loss = [0 - rn.day_result_pct, 0]|max -%}
-        <div class="value {{ rn.day_result_pct|pnl_class }}">{{ rn.day_result_pct|pct(2) }} <span class="metric-sub">grens -{{ rn.daily_loss_limit_pct|num(0) }}%</span></div>
+        <div class="value {{ rn.day_result_pct|pnl_class }}">{{ rn.day_result_pct|pct(2) }} <span class="metric-sub">grens -{{ rn.daily_loss_limit_pct|pct_limit }}</span></div>
         <progress class="meter{{ ' is-bad' if rn.loss_limit_reached else (' is-warn' if loss >= rn.daily_loss_limit_pct / 2 else '') }}" max="{{ rn.daily_loss_limit_pct }}" value="{{ [loss, rn.daily_loss_limit_pct]|min }}" aria-labelledby="meter-loss">{{ loss|pct(2, false) }} verlies</progress>
         {% else %}
         <div class="value {{ rn.day_result_eur|pnl_class }}">{{ rn.day_result_eur|eur(2, true) }}</div>
@@ -222,9 +234,9 @@
       </div>
       <div class="stat limit">
         <div class="label" id="meter-orders">Orders vandaag</div>
-        <div class="value">{{ rn.orders_today }} <span class="metric-sub">van max. {{ rn.max_orders_per_day }}</span></div>
-        <progress class="meter{{ ' is-bad' if rn.orders_limit_reached else (' is-warn' if rn.max_orders_per_day and rn.orders_today / rn.max_orders_per_day >= 0.8 else '') }}" max="{{ rn.max_orders_per_day }}" value="{{ [rn.orders_today, rn.max_orders_per_day]|min }}" aria-labelledby="meter-orders">{{ rn.orders_today }} van {{ rn.max_orders_per_day }}</progress>
-        <div class="sub">Maximum aantal orders per dag{% if rn.orders_limit_reached %} · <span class="neg">bereikt</span>{% endif %}</div>
+        <div class="value">{{ rn.orders_today }} <span class="metric-sub">maximum {{ rn.max_orders_per_day }}</span></div>
+        <progress class="meter{{ ' is-bad' if rn.orders_limit_reached else (' is-warn' if rn.max_orders_per_day and rn.orders_today / rn.max_orders_per_day >= 0.8 else '') }}" max="{{ [rn.max_orders_per_day, 1]|max }}" value="{{ [rn.orders_today, rn.max_orders_per_day]|min if rn.max_orders_per_day else 1 }}" aria-labelledby="meter-orders">{{ rn.orders_today }} orders, maximum {{ rn.max_orders_per_day }}</progress>
+        <div class="sub">{% if rn.max_orders_per_day <= 0 %}Maximum aantal orders per dag staat op 0 · <span class="neg">kopen kan niet</span>{% else %}Maximum aantal orders per dag{% if rn.orders_limit_reached %} · <span class="neg">bereikt; verkopen kan wel en telt mee</span>{% endif %}{% endif %}</div>
       </div>
     </div>
     <p class="form-help">{% if rn.as_of %}Stand van {{ rn.as_of|dt }}. {% endif %}De dagtellers beginnen opnieuw om {{ rn.resets_at|dt }}. Deze grenzen worden in code afgedwongen; Claude kan ze niet omzeilen.</p>
