@@ -306,7 +306,7 @@
         </div>
         {% if order_needs_password %}
         <label class="field">Huidig wachtwoord
-          <input type="password" name="current_password" autocomplete="current-password" maxlength="1024" required>
+          <input type="password" name="current_password" autocomplete="current-password" maxlength="1024" required{% if order_password_error %} aria-invalid="true"{% endif %}>
         </label>
         {% endif %}
       </div>

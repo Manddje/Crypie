@@ -14,7 +14,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, select
 
-from app import main
+from app import flash, main
 from app.bitvavo.broker import PAPER_WALLET_KEY, OrderUncertain, recent_orders
 from app.bitvavo.client import BitvavoError, BitvavoNetworkError
 from app.db import Decision, Order, Position, SessionLocal, Setting, init_db
@@ -567,3 +567,21 @@ def test_dashboard_markup_follows_the_rules():
     assert "Winstkans" not in text and "Winnende trades" in text
     assert "'pos' if" not in text and "pnl_class" in text
     assert "/static/dashboard.js?v={{ asset_version }}" in text
+
+
+async def test_a_refused_password_marks_the_field(api, monkeypatch):
+    class LiveStub:
+        mode = "live"
+
+        async def balances(self, session):
+            return {"EUR": 500.0}
+
+    monkeypatch.setattr(app.state.engine, "broker", LiveStub())
+    monkeypatch.setattr(main, "step_up_enabled", lambda request: True)
+    page = (await api.get("/")).text
+    assert 'name="current_password"' in page and 'aria-invalid="true"' not in page
+    wrong = [{"kind": "error", "text": "Order niet geplaatst: Het wachtwoord klopt niet."}]
+    api.cookies.set(flash.COOKIE_NAME, flash.encode(wrong))
+    page = (await api.get("/", headers=HTML)).text
+    assert "Het wachtwoord klopt niet" in _order_card(page)
+    assert 'autocomplete="current-password" maxlength="1024" required aria-invalid="true"' in page

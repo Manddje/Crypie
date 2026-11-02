@@ -2580,6 +2580,11 @@ async def _dashboard_context(
         "order_form": order_form or _order_form(settings, limits),
         "order_default_amount": _default_amount(limits),
         "order_flashes": order_flashes or [],
+        # A refused password: the field is marked, so app.js puts the focus there.
+        "order_password_error": any(
+            f.get("kind") == "error" and "wachtwoord" in str(f.get("text", "")).lower()
+            for f in order_flashes or []
+        ),
         "order_limits": {
             "min_buy": max(limits.min_trade_eur, EXCHANGE_MIN_ORDER_EUR),
             "max_buy": limits.max_trade_eur,

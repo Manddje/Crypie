@@ -195,10 +195,17 @@
         throw err;
       });
   }
-  // What went wrong, for people; the technical text goes into a <details>.
-  function friendly(err) {
+  // What went wrong, for people; the technical text goes into a <details>. "what" is what
+  // this chart needs from Bitvavo.
+  function friendly(err, what) {
     if (err && err.name === "AbortError") return "Bitvavo antwoordde niet op tijd.";
-    if (err && err.status === 502) return "Koersen konden niet worden opgehaald bij Bitvavo.";
+    if (err && err.status === 502 && /Bitvavo 40[13]\b/.test(err.detail || "")) {
+      return "Bitvavo weigert de API-sleutel, dus " + (what || "de koersen") + " konden niet worden opgehaald.";
+    }
+    if (err && err.status === 502) {
+      var text = (what || "de koersen") + " konden niet worden opgehaald bij Bitvavo.";
+      return text.charAt(0).toUpperCase() + text.slice(1);
+    }
     if (err && err.status === 401) return "Je bent niet meer ingelogd. Vernieuw de pagina om opnieuw in te loggen.";
     if (err && err.status === 404) return "Deze markt wordt niet meer gevolgd.";
     if (err && err.status) return "De grafiek kon niet worden geladen (fout " + err.status + ").";
@@ -358,6 +365,27 @@
     renderPriceTable();
   }
 
+  // Like app.js does for the tables on the page: a table that scrolls sideways becomes a named
+  // region that the keyboard can reach. Checked again when the <details> opens (closed, it has
+  // no width) and app.js re-checks on resize.
+  function scrollRegion(wrap) {
+    var scrolls = wrap.scrollWidth > wrap.clientWidth + 1;
+    if (scrolls) {
+      wrap.setAttribute("tabindex", "0");
+      wrap.setAttribute("role", "region");
+      wrap.setAttribute("aria-label", wrap.getAttribute("data-region") + " (schuift zijwaarts)");
+    } else {
+      wrap.removeAttribute("tabindex");
+      wrap.removeAttribute("role");
+      wrap.removeAttribute("aria-label");
+    }
+  }
+  if (priceDetails) {
+    priceDetails.addEventListener("toggle", function () {
+      Array.prototype.forEach.call(priceList.querySelectorAll(".table-wrap"), scrollRegion);
+    });
+  }
+
   // The day a candle belongs to: a UTC day for daily candles, else the local day.
   function dayKey(ts) {
     if (priceData.interval === "1d") return utcDay(ts);
@@ -405,6 +433,7 @@
       wrap.setAttribute("data-region", "Koersen per dag");
       priceList.appendChild(el("h3", "mt-2", "Per dag" + (priceData.interval === "1d" ? " (UTC-dagen)" : " (" + zoneNow() + ")")));
       priceList.appendChild(wrap);
+      scrollRegion(wrap);
     }
     var acts = visibleActions().slice().reverse();
     priceList.appendChild(el("h3", "mt-4", "Acties"));
@@ -634,9 +663,9 @@
       .catch(function (err) {
         if (id !== portfolioSeq) return;
         setBusy(portfolioWrap, false);
-        var message = friendly(err);
+        var message = friendly(err, "de koersen of het saldo");
         if (portfolioData.period) message += " Je ziet nog de laatste " + PERIOD_NAMES[portfolioData.period] + ".";
-        else overlay(portfolioWrap, "Geen grafiek: " + friendly(err));
+        else overlay(portfolioWrap, "Geen grafiek: " + message);
         showError(portfolioStatus, message, err, function () { loadPortfolio(period); });
       });
   }
