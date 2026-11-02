@@ -311,6 +311,10 @@ ROOT = TEMPLATES.parent.parent
         "MAX_TRADE_EUR_CEILING",
         "MAX_EXPOSURE_PCT_CEILING",
         "MAX_TRADES_PER_DAY_CEILING",
+        "NOTIFY_URL",
+        "NOTIFY_TOKEN",
+        "NOTIFY_FORMAT",
+        "NOTIFY_EXIT_FAIL_MIN",
     ],
 )
 def test_new_settings_are_passed_through_compose_and_documented(var):

@@ -1641,3 +1641,122 @@ UX-02, UX-03, UX-05, UX-06, UX-07, UX-08, UX-09, UX-10, UX-11, UX-16, UX-19, UX-
 Herindeling van pagina's en instellingen, het ontwerpsysteem, en afwerking.
 
 UX-12, UX-15, UX-17, UX-18, UX-25, UX-27, UX-32, UX-35, UX-40, UX-43, UX-44, UX-45, UX-46, UX-47, UX-53, UX-55, UX-56, UX-57, UX-58, UX-59, UX-61, UX-63, UX-65, UX-66, UX-67, UX-68, UX-75, UX-76, UX-79, UX-80, UX-81, UX-82, UX-83, UX-84, UX-85, UX-86, UX-87, UX-88, UX-89, UX-90, UX-91, UX-92, UX-96, UX-97, UX-98, UX-102, UX-103, UX-107
+
+
+## Opvolging
+
+Stand na de uitvoering (november 2026, branch `claude/happy-cannon-b2obag`): wat er met elke bevinding is
+gebeurd. *Opgelost* betekent dat het probleem weg is, ook als de oplossing afwijkt van de aanbeveling (dat
+staat er dan bij). *Deels* betekent dat een deel bewust of noodgedwongen bleef liggen. De controles:
+de tests (`pytest`), axe-core op alle pagina's (licht en donker, 1440 en 390 px, 0 bevindingen), een
+toetsenbord- en reflowronde, en steekproeven in de draaiende app.
+
+| Id | Status | Toelichting |
+|----|--------|-------------|
+| UX-01 | opgelost | Overzicht, Handelen en het journaal tonen alleen de huidige modus; in live een regel over open oefenposities, en bij de overstap naar live kun je de oefenportefeuille meteen resetten. |
+| UX-02 | opgelost | Na een weigering houdt het formulier markt, richting en bedrag; de bevestiging noemt modus, markt, richting en bedrag. |
+| UX-03 | opgelost | Bedrag- en limietvelden accepteren een decimale komma; onduidelijke getallen (1.000, 2,500) worden geweigerd, met één regel voor orders en instellingen. |
+| UX-04 | opgelost | Een blokreset zet nooit de modus terug; een reset die naar live zou schakelen wordt geweigerd, ook via de API (409). |
+| UX-05 | opgelost | Rode balk "LIVE · echt geld op Bitvavo" op elke pagina, eigen indigo voor Oefenmodus, de modus in tabtitel en ondertitels, en LIVE-bevestigingen bij cyclus en strategie. |
+| UX-06 | opgelost | Eén status uit `bot_health()` (Actief, Actief · koopt niet, Noodstop actief, Uitgeschakeld, Storing) op Overzicht, Handelen en `/api/status`. |
+| UX-07 | opgelost | Bij een koersstoring staan alle posities als onbewaakt; "Bewaking … laatst gelukt" met interval, en drie limietmeters op Handelen. |
+| UX-08 | opgelost | `NOTIFY_URL` (ntfy of webhook) met de acht voorgestelde meldingen, begrensd per onderwerp en per uur, plus *Testmelding sturen*. |
+| UX-09 | opgelost | Eén naam (Noodstop) en één uitlegzin uit één bron, op Overzicht en Handelen, zonder wachtwoord; navigatie, tabtitel en icoon tonen hem op elke pagina. |
+| UX-10 | opgelost | Opslaan slaat de geteste versie op, met bevestiging in live of bij een zwakke backtest, een versiecontrole tegen oude tabbladen en *Vorige strategie terugzetten*. |
+| UX-11 | opgelost | Het plan zegt of Claude het nu leest en wat er zonder Claude gebeurt; de melding na opslaan belooft niets wat niet gebeurt. |
+| UX-12 | opgelost | Regels eerst, de omschrijving klein als toelichting, met een waarschuwing als de regels veranderen en de omschrijving niet. |
+| UX-13 | opgelost | Navigatielinks breken naar een eigen regel; op de telefoon één scrollende rij met een vervagende rand en de huidige pagina in beeld. |
+| UX-14 | opgelost | `scroll-padding` volgt de gemeten hoogte van de kop; ankers en focus vallen niet meer onder de kop of de opslaanbalk. |
+| UX-15 | opgelost | Overzicht vat samen, Handelen toont de details (status, voorstel, posities, limieten, cycli), Strategie linkt naar een wachtend voorstel. |
+| UX-16 | opgelost | Post/Redirect/Get voor alle formulieren met eenmalige meldingen, testen en voorstellen op `/strategy?result=…`, GET op formulieradressen naar de pagina, `?saved=` uit de adresbalk. |
+| UX-17 | opgelost | Kaart *Aan de slag* met vijf stappen, klaar of niet, te verbergen (ook zonder JavaScript). |
+| UX-18 | opgelost | Informatie als `card-meta`, en per kaart hoogstens één link als werkwoord plus bestemming. |
+| UX-19 | opgelost | Orderfouten in de orderkaart, met eigen teksten voor eigen regels, time-out, geweigerde sleutel, weigering door Bitvavo en een onbekende uitkomst. |
+| UX-20 | opgelost | De helptekst klopt: grenzen per richting, telt mee voor de orders per dag, alleen verkopen tijdens de noodstop, met waarschuwingen bij de grens. |
+| UX-21 | opgelost | *Alle cycli* staat standaard op Belangrijk, met een marktfilter en 25 per pagina (in SQL gepagineerd), onderaan de pagina; op de telefoon geen zijwaartse tabel. |
+| UX-22 | opgelost | Controle per richting in het formulier; een verkoop toont de positie, waarschuwt bij een rest onder € 5 en biedt *Hele positie verkopen*. |
+| UX-23 | opgelost | Voorstel bovenaan Handelen met verschil en bevestiging, een melding na toepassen, een blijvende Vóór/Na-tabel en *Vorige strategie terugzetten*. |
+| UX-24 | opgelost | De uitgeschakelde knop zegt waarom; zonder sleutel staan ook de automatische evaluaties uit, en dat staat erbij. |
+| UX-25 | opgelost | Laatste en volgende cyclus overleven een herstart, lopen live mee en worden oranje als de planner stilvalt; de pagina's vragen elke minuut `/api/status` op. |
+| UX-26 | opgelost | Open posities netto (kosten van aan- én verkoop) met één formule; *Sinds start* en *Gesloten trades · 30 dagen* zeggen wat ze meetellen. |
+| UX-27 | opgelost | Status en noodstop bovenaan (op de telefoon eerst), open posities direct daarna; geen inline stijlen meer. |
+| UX-28 | opgelost | Een veilige markdown-subset (filter `md`: eerst escapen, geen links, afbeeldingen of HTML) voor het rapport en de toelichting van Claude. |
+| UX-29 | opgelost | Vier significante cijfers in koersen, stops, checklist en grafieken (getest met SHIB). |
+| UX-30 | opgelost | Anders dan aanbevolen: geen `DISPLAY_TZ`. De HTML zegt "UTC" en de browser toont elke tijd in je eigen zone met de zonenaam; de agenda blijft UTC-invoer, en dat staat erbij. |
+| UX-31 | opgelost | `pnl_class` op de afgeronde waarde, geen negatieve nul, nul en '–' nooit groen; chart.js volgt dezelfde regel. |
+| UX-32 | opgelost | Eén notatie (teken vóór €, harde spatie, '$ 0,00 van $ 100'), ook in chart.js; bedragen breken niet af. |
+| UX-33 | opgelost | De grafiek dimt tijdens het laden, toont een begrijpelijke fout met *Opnieuw proberen* en springt terug naar wat getoond wordt. |
+| UX-34 | opgelost | *Claude-adviezen tonen* staat naast zijn tekst, is zichtbaar voor schermlezers en verbergt alleen adviezen. |
+| UX-35 | opgelost | De as zoomt niet verder in dan ±1% rond de start; orders per candle gebundeld, met een legenda. |
+| UX-36 | opgelost | *alles* en een leeg veld betekenen geen periodefilter; geen JSON-fout meer. |
+| UX-37 | opgelost | Alle berichten van de periode geteld (tot 5000, en dat staat erbij), aantallen in de filters, 30 per pagina, standaard 48 uur. |
+| UX-38 | opgelost | Eén Nederlandse lijst sluitredenen, ook voor de grafiek; handmatig en trailing stop zijn filterbaar en een onbekend filter wordt gemeld. |
+| UX-39 | opgelost | Handmatige trades heten "Jij, handmatig" met "Jouw reden"; filter *Geopend door* met totalen per bron. |
+| UX-40 | opgelost | Actieve filters als wegklikbare labels, filters ingeklapt op de telefoon; de eerste trade staat op ~1150 px in plaats van ~2000. |
+| UX-41 | opgelost | Geen sleutel is geen fout meer: één info-melding na verversen en "Nieuwsbeoordeling: uit" in de voettekst. |
+| UX-42 | opgelost | "Geldt voor BTC-EUR, ETH-EUR" op Strategie en Overzicht; `market` uitgelegd als backtestmarkt, met een keuze bij testen. |
+| UX-43 | opgelost | Backtest met periode, oordeel tegenover kopen en vasthouden, grafiek met tekstalternatief, waarschuwing bij weinig trades en bruto/netto benoemd. |
+| UX-44 | opgelost | Validatiefouten in gewoon Nederlands met het pad en de regels rond een syntaxfout, onder de editor, met focus. |
+| UX-45 | opgelost | Nieuwsdetails zonder herhaling, in het Nederlands, met één impactschaal; externe links gemarkeerd. |
+| UX-46 | opgelost | Zonder sleutel geen halflege Claude-kaart en een open editor; "Gelijk aan de actieve strategie" bij een test zonder wijziging. |
+| UX-47 | opgelost | Bewerkbaar en automatisch gescheiden, "nog leeg" klopt, tekenteller en een fout bij het veld. |
+| UX-48 | opgelost | "Niet opgeslagen: …" bovenaan het blok, fout en focus bij het wachtwoordveld, resterende pogingen, en de bewerkingen blijven gemarkeerd. |
+| UX-49 | opgelost | Niet-opgeslagen wijzigingen gemarkeerd per veld en blok, een vaste opslaanbalk met terugdraaien en een waarschuwing bij weggaan. |
+| UX-50 | opgelost | Een apart formulier *Herstelcode gebruiken* met een gewoon toetsenbord; werkt zonder JavaScript. |
+| UX-51 | opgelost | Alle live-voorwaarden tegelijk met hun oplossing, advies met links, een paneel met de limieten en "Typ LIVE". |
+| UX-52 | opgelost | Een geweigerde sleutel wordt onthouden en met de reden getoond in Instellingen, de voettekst en het overzicht; knop *Verbinding testen*. |
+| UX-53 | opgelost | Nieuwe markten worden gecontroleerd tegen Bitvavo, met een suggestie; een falende markt krijgt een kaart "Mislukt" en wordt in de grafiek overgeslagen. |
+| UX-54 | opgelost | Fouten, eenheden en uitleg via `aria-describedby` aan het veld, `aria-invalid`, en een foutsamenvatting met links die de focus krijgt. |
+| UX-55 | opgelost | Label "vraagt wachtwoord" per veld, uitleg per blok, en de pagina zegt vooraf of jouw wijziging het wachtwoord nodig heeft. |
+| UX-56 | opgelost | Een lijst met links (geen tabbladen), vanaf 1100 px vast in een kolom, met het huidige en de gewijzigde blokken gemarkeerd. |
+| UX-57 | deels | Nieuwe indeling in delen, met de blokken Kosten en Oefenportefeuille. Niet gedaan: Bescherming en Weergave als eigen blok, en de handelskosten niet-gevoelig maken; dat zou de wachtwoordregels veranderen die de beveiligingstests vastleggen. |
+| UX-58 | opgelost | Afhankelijke velden zijn grijs en alleen-lezen zolang hun schakelaar uit staat; de waarde blijft bewaard. |
+| UX-59 | opgelost | *Terug naar standaard* per veld; de blokreset noemt elke wijziging, laat de modus staan en staat uit als er niets is aangepast. |
+| UX-60 | opgelost | Een onbekend model wordt opgeslagen met een waarschuwing bij het veld, ook tijdens het typen en in `/api/settings`. |
+| UX-61 | opgelost | Tijdslimiet met tijdstip, *Later koppelen* met bevestiging, en opnieuw beginnen via de setup-link zolang er nooit een authenticator was. De limiet zelf bleef 10 minuten. |
+| UX-62 | opgelost | Wachttijd in minuten met tijdstip, een waarschuwing bij nog 1-2 pogingen, en de uitweg (`clear-throttle`) op /login en /account. |
+| UX-63 | opgelost | /login zegt waarom je er bent en stuurt je terug; niet-opgeslagen instellingen blijven in het tabblad bewaard en zijn terug te zetten. |
+| UX-64 | opgelost | Downloaden, afdrukken en kopiëren met een terugval en een statusregel; *Verder* pas na "Ik heb de codes bewaard". De codes zelf blijven het antwoord op een POST: vernieuwen laat de browser opnieuw versturen. |
+| UX-65 | opgelost | Account ingedeeld in Status, Beveiliging wijzigen, Overal uitloggen en hulp; destructieve acties rood met bevestiging; het accounticoon is gemarkeerd op /account. |
+| UX-66 | opgelost | Na een login met een herstelcode staat hoeveel codes er over zijn, als waarschuwing bij 2 of minder. |
+| UX-67 | opgelost | Stappen consequent genummerd, één lijst op de QR-pagina, de QR-code met tekstalternatief, focus op het wachtwoord na een fout. |
+| UX-68 | opgelost | Eenheden in vaste kolommen, Nederlandse notatie bij plafonds en standaarden, agenda en feeds breed en monospace. |
+| UX-69 | opgelost | Nieuwe kleurtokens voor licht en donker; axe color-contrast 0 op alle pagina's. |
+| UX-70 | opgelost | Een globale focusring van 2 px, ook op schakelaars, de moduskeuze en het grafiekvinkje. |
+| UX-71 | opgelost | Geen doorzichtigheid meer; gedimde rijen hebben een leesbare grijze tekst. |
+| UX-72 | opgelost | Links in lopende tekst zijn onderstreept; axe link-in-text-block 0. |
+| UX-73 | opgelost | Eén label per schakelaar (`role=switch`), Modus als fieldset met legend, de delen als fieldsets. |
+| UX-74 | opgelost | De rand van invoervelden en uitgeschakelde schakelaars haalt 3:1. |
+| UX-75 | opgelost | Regels voor `forced-colors`: native schakelaars en randen rond gekozen opties, meldingen en knoppen. |
+| UX-76 | opgelost | Het `aria-label` van de grafiek wordt na elke lading herschreven, de status is een live region, en er is een tabel met koersen per dag. |
+| UX-77 | opgelost | Koppen zonder overgeslagen niveaus op elke pagina; trades en nieuwsfeiten hebben een kop; axe heading-order 0. |
+| UX-78 | opgelost | Filters als `role=group` met een naam, `aria-current` en aantallen; de lege staat bij Nieuws klopt. |
+| UX-79 | opgelost | Engelse titels krijgen `lang="en"`. |
+| UX-80 | opgelost | *Naar de inhoud* is de eerste tabstop. |
+| UX-81 | opgelost | Belangrijke uitleg staat zichtbaar in de pagina; geen `title`-tooltips meer als enige bron. |
+| UX-82 | opgelost | `ui.notice` kiest alert, status of geen rol; blijvende toestanden worden niet meer als dringend aangekondigd. |
+| UX-83 | opgelost | Tokens voor de typeschaal, één maat voor kaarttitels, grijze subteksten. |
+| UX-84 | opgelost | Vaste knoprollen (primair, grijs, tint, gevaar, stop); uitgeschakeld met een stippelrand in plaats van doorzichtigheid. |
+| UX-85 | opgelost | De modus is uit het blauw, neutrale pillen zijn grijs, oranje en rood zijn beter te onderscheiden. |
+| UX-86 | opgelost | Kaarten worden niet meer uitgerekt; de strategiekaart op Overzicht is ingekort. |
+| UX-87 | opgelost | Tegels en velden uitgelijnd (subgrid), velden 44 px hoog. |
+| UX-88 | opgelost | Het gekozen segment is in donkere modus lichter dan de balk, en vet. |
+| UX-89 | opgelost | Eén set SVG-iconen en één uitklappijltje. |
+| UX-90 | opgelost | De themaknop wisselt tussen automatisch, licht en donker; de browserbalk volgt. |
+| UX-91 | opgelost | Tabtitel met LIVE en Noodstop, varianten van het tabbladicoon, een manifest en app-iconen. |
+| UX-92 | opgelost | Ontwerptokens en hulpklassen; nul inline stijlen in de templates, bewaakt door een test. |
+| UX-93 | opgelost | Scrollschaduw, benoemde en focusbare scrollvakken, tabellen als kaarten op de telefoon; *Laatste orders* over de volle breedte. |
+| UX-94 | opgelost | Geen zijwaarts scrollen op 320-390 px, op alle pagina's. |
+| UX-95 | opgelost | De marktknoppen breken af binnen de kaart; de voettekst noemt er drie plus "en N andere". |
+| UX-96 | opgelost | Helptekst per apparaat, de tooltip sluit bij loslaten, en het label wordt niet meer afgekapt. |
+| UX-97 | opgelost | Tikvlakken van 40 px op touch, invoer van 16 px onder 640 px, ruimte voor de notch. |
+| UX-98 | opgelost | Lange woorden en URL's breken af; adressen in notities zijn klikbaar. |
+| UX-99 | opgelost | Eenmalige meldingen na elke actie (gesigneerd cookie), in het blok of de kaart waar het om ging. |
+| UX-100 | opgelost | Formulieren zijn na de eerste klik vergrendeld met een bezigtekst; een eenmalig `order_token` voorkomt een dubbele order. |
+| UX-101 | opgelost | HTML-foutpagina's met een weg terug (JSON voor `/api`); een Bitvavo-fout bij een formulier wordt een melding. |
+| UX-102 | opgelost | Koersen en saldo parallel met een grens van 3 s, de laatst bekende koersen met hun tijdstip, het oefensaldo altijd zichtbaar. |
+| UX-103 | opgelost | Een jaar cache voor statische bestanden met versie, gzip behalve op de inlog- en accountpagina's. |
+| UX-104 | opgelost | Eerst een samenvatting, dan leesbare voorwaarden met tekst voor ✓/✗/~ en één legenda. Vakjargon staat in *Begrippen uitgelegd* in plaats van `<abbr>`. |
+| UX-105 | opgelost | Eén bron per regel: de noodstopzin, de harde limieten (één macro voor Handelen en Plan, met de namen uit Instellingen) en de impactschaal "middel of groot". |
+| UX-106 | opgelost | "Maximum aantal orders per dag", "Winnende trades" (netto, en bruto bij de backtest), "cycli", "per order", enkelvoud bij 1. De engine houdt intern "trades per dag" en "kill switch" (vastgelegd door beveiligingstests): elke pagina vertaalt dat, foutmeldingen van `/api/orders` niet. |
+| UX-107 | deels | Nieuws en Journaal ingekort, met uitklapblokken en de kerncijfers in de filters; ondertitels zijn kort. Instellingen heeft nog veel uitleg per veld (wel per deel gegroepeerd en de langste teksten ingekort). |

@@ -156,9 +156,8 @@ SPECS: tuple[Spec, ...] = (
         "trading_enabled",
         "trading",
         "Bot automatisch laten handelen",
-        "Uit: de bot draait geen cycli meer, behalve als je er zelf een start. Stop-loss, "
-        "trailing stop en take-profit van open posities blijven wel elke paar minuten draaien. "
-        "Wil je alleen direct stoppen met kopen, gebruik dan de Noodstop op Handelen: die werkt "
+        "Uit: geen geplande cycli meer; je kunt er zelf een starten. Stop-loss, trailing stop en "
+        "take-profit blijven werken. Alleen stoppen met kopen? Gebruik de noodstop: die werkt "
         "meteen en zonder wachtwoord.",
         kind="bool",
         section="modus",
@@ -212,9 +211,9 @@ SPECS: tuple[Spec, ...] = (
         "watch_interval_min",
         "trading",
         "Dipbewaking: controle elke",
-        "Zodra de dip-voorwaarden van de strategie gelden (bijvoorbeeld RSI onder 35) maar de "
-        "draai nog niet, kijkt de bot zo vaak opnieuw naar die markt. Komt de draai, dan "
-        "draait de bot meteen een cyclus voor die markt. 0 zet de bewaking uit.",
+        "Gelden de dip-voorwaarden van de strategie (bijvoorbeeld RSI onder 35) maar de draai "
+        "nog niet, dan kijkt de bot zo vaak opnieuw naar die markt. Komt de draai, dan draait "
+        "hij meteen een cyclus. 0 = uit.",
         kind="int",
         min=0,
         max=60,
@@ -238,9 +237,9 @@ SPECS: tuple[Spec, ...] = (
         "exit_check_interval_min",
         "trading",
         "Stop-loss en take-profit: controle elke",
-        "Hoe vaak de bot de stop-loss, trailing stop en take-profit van álle open posities "
-        "controleert op de actuele koers. Dit loopt altijd door, ook als automatisch handelen "
-        "uit staat, de noodstop aan staat of de markt niet meer in de lijst staat.",
+        "Hoe vaak de bot stop-loss, trailing stop en take-profit van álle open posities "
+        "controleert. Dit loopt altijd door: ook met automatisch handelen uit, de noodstop aan "
+        "of een markt die niet meer in de lijst staat.",
         kind="int",
         min=1,
         max=60,
