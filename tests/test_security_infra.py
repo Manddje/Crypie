@@ -101,8 +101,15 @@ def test_local_override_publishes_on_localhost_only():
 
 def test_compose_limits_and_hardening():
     compose = _read("docker-compose.yaml")
-    for needle in ("mem_limit:", "memswap_limit:", "pids_limit:", "read_only: true",
-                   "no-new-privileges:true", "- ALL", "/srv/data"):
+    for needle in (
+        "mem_limit:",
+        "memswap_limit:",
+        "pids_limit:",
+        "read_only: true",
+        "no-new-privileges:true",
+        "- ALL",
+        "/srv/data",
+    ):
         assert needle in compose, needle
     cmd = _read("Dockerfile")
     assert '"--limit-concurrency"' in cmd and '"--timeout-keep-alive"' in cmd
@@ -190,7 +197,8 @@ def test_ci_actions_pinned_and_token_read_only():
 
 def test_vendored_files_match_sha256sums():
     lines = [
-        line for line in _read("app/static/vendor/SHA256SUMS").splitlines()
+        line
+        for line in _read("app/static/vendor/SHA256SUMS").splitlines()
         if line.strip() and not line.startswith("#")
     ]
     assert lines
