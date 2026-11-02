@@ -1522,7 +1522,7 @@ def _applied_history(session: Session) -> list[dict]:
 def _belongs_to(entry: dict | None, ev: Evaluation | None) -> bool:
     """Whether a history entry is about this evaluation (same id and the same moment, so an
     entry never sticks to a new evaluation that reuses the id of a deleted one)."""
-    if entry is None or ev is None or entry.get("evaluation_id") != ev.id:
+    if entry is None or ev is None or entry.get("evaluation_id") != ev.id or not ev.created_at:
         return False
     created = _parse_moment(entry.get("evaluation_at"))
     own = ev.created_at if ev.created_at.tzinfo else ev.created_at.replace(tzinfo=UTC)
@@ -1575,7 +1575,7 @@ def _apply_proposal(request: Request, session: Session, evaluation_id: int) -> S
     history.append(
         {
             "evaluation_id": ev.id,
-            "evaluation_at": ev.created_at.isoformat(),
+            "evaluation_at": ev.created_at.isoformat() if ev.created_at else None,
             "applied_at": datetime.now(UTC).isoformat(),
             # An unusable stored strategy is not offered back (the default stood in for it).
             "previous": None if load_warning else current.model_dump(mode="json"),
