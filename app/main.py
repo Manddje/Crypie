@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Literal
@@ -34,6 +35,7 @@ from app.auth.routes import (
     _safe_next,
     require_current_password,
     require_login,
+    step_up_attempts_left,
     step_up_enabled,
 )
 from app.auth.routes import router as auth_router
@@ -60,7 +62,7 @@ from app.news.service import (
     requeue_items_without_event_key,
 )
 from app.news.sources import NewsFetcher
-from app.notify import Notifier, notify_configured
+from app.notify import Notifier, notify_configured, send_test
 from app.security import NO_STORE_PREFIXES, BodySizeLimit, CrossOriginProtection, SecurityHeaders
 from app.settings_store import SettingsError
 from app.strategy.describe import levels_summary, strategy_diff
@@ -112,7 +114,7 @@ from app.trading.journal import (
 from app.trading.plan import PLAN_FIELDS, PLAN_MAX_LENGTH, TradingPlan, load_plan, save_plan
 from app.trading.risk import RiskLimits
 from app.trading.trend import load_trends, refresh_trends
-from app.web import STATIC_DIR, templates
+from app.web import STATIC_DIR, eur, num, templates
 
 log = logging.getLogger("crypie")
 # Uvicorn only configures its own loggers; without this the cycle and news results never show
@@ -1832,9 +1834,145 @@ async def journal_note_form(
 
 # -- Settings -------------------------------------------------------------------------
 
+# How long a settings save may wait for Bitvavo's market list (to refuse a market that does not
+# exist); when Bitvavo does not answer in time the save goes on without that check.
+MARKET_LIST_TIMEOUT_S = 3.0
+MARKET_LIST_TTL_S = 3600.0
+MARKET_LIST_RETRY_S = 60.0
+BITVAVO_TEST_TIMEOUT_S = 8.0
+BITVAVO_TEST_REPEAT_S = 10.0
+# Flash texts are cut at 400 characters (app/flash.py); keep a list of changes below that.
+CHANGES_TEXT_MAX = 330
+# The blocks of the settings page that can show a message after an action (?saved=<block>).
+SETTINGS_BLOCKS = (*cfg.GROUPS, cfg.PAPER_GROUP, "omgeving")
+
 
 def _editable_values(settings: Settings) -> dict:
     return {key: getattr(settings, key) for key in cfg.EDITABLE_KEYS}
+
+
+def live_requirements(settings: Settings, client: BitvavoClient) -> list[dict]:
+    """Every condition for live trading, met or not, with what to do about it. All of them live
+    in the server environment on purpose; live_blocker() gives the first one that is missing."""
+    return [
+        {
+            "key": "login",
+            "ok": settings.auth_enabled,
+            "label": "De login staat aan",
+            "missing": "de login staat uit (AUTH_ENABLED=false)",
+            "fix": "Zet AUTH_ENABLED=true in de serveromgeving en herstart de app.",
+            "env": "AUTH_ENABLED",
+        },
+        {
+            "key": "bitvavo_key",
+            "ok": client.authenticated,
+            "label": "Er is een Bitvavo-sleutel",
+            "missing": "er is geen Bitvavo-sleutel (BITVAVO_API_KEY en BITVAVO_API_SECRET)",
+            "fix": "Maak bij Bitvavo een API-sleutel met rechten om te lezen en te handelen, "
+            "zonder opnemen, en zet hem in de serveromgeving.",
+            "env": "BITVAVO_API_KEY, BITVAVO_API_SECRET",
+        },
+        {
+            "key": "ack",
+            "ok": settings.live_trading_ack,
+            "label": "Live handelen is op de server bevestigd",
+            "missing": "LIVE_TRADING_ACK staat niet op true in de serveromgeving",
+            "fix": "Zet LIVE_TRADING_ACK=true in de serveromgeving en herstart de app.",
+            "env": "LIVE_TRADING_ACK",
+        },
+    ]
+
+
+def _live_missing_text(env: Settings, client: BitvavoClient) -> str | None:
+    missing = [r["missing"] for r in live_requirements(env, client) if not r["ok"]]
+    return "; ".join(missing) or None
+
+
+# Bitvavo error codes for a refused key, in plain Dutch (the code itself is shown as detail).
+KEY_PROBLEMS_NL = {
+    301: "de sleutel heeft niet de goede lengte; controleer BITVAVO_API_KEY",
+    302: "de klok van de server loopt niet gelijk",
+    304: "de klok van de server loopt niet gelijk",
+    305: "Bitvavo kent deze sleutel niet (meer)",
+    306: "de sleutel is nog niet per e-mail bevestigd",
+    307: "de sleutel mag niet vanaf het IP-adres van deze server",
+    308: "de handtekening klopt niet; controleer BITVAVO_API_SECRET",
+    309: "de handtekening klopt niet; controleer BITVAVO_API_SECRET",
+    310: "de sleutel mag niet handelen",
+    311: "de sleutel mag je accountgegevens niet lezen",
+    317: "je Bitvavo-account is geblokkeerd",
+    318: "je Bitvavo-account moet nog worden geverifieerd",
+}
+
+
+def _key_problem_nl(problem: dict) -> str:
+    code = problem.get("code")
+    if code in KEY_PROBLEMS_NL:
+        return KEY_PROBLEMS_NL[code]
+    if problem.get("status") == 401:
+        return "Bitvavo vraagt om een geldige sleutel"
+    return "Bitvavo weigert de sleutel"
+
+
+def bitvavo_key_state(request: Request) -> dict:
+    """What is known about the Bitvavo key: missing, set (not checked yet), ok, refused
+    ("rejected"), or set but without trading rights ("no_trading"). The client notes every
+    refusal of a signed request (app/bitvavo/client.py), so a key Bitvavo rejects never shows
+    as plain 'ingesteld'. Used on the settings page and in the footer of every page."""
+    state = getattr(getattr(request, "app", None), "state", None)
+    client = state._state.get("client") if state is not None else None
+    if client is None or not getattr(client, "authenticated", False):
+        return {"state": "missing", "label": "niet ingesteld", "reason": None, "at": None}
+
+    def refused(problem: dict, kind: str, label: str) -> dict:
+        detail = f"Bitvavo {problem.get('status')}"
+        if problem.get("code") is not None:
+            detail += f", code {problem.get('code')}"
+        if problem.get("error"):
+            detail += f": {problem['error']}"
+        return {
+            "state": kind,
+            "label": label,
+            "reason": _key_problem_nl(problem),
+            "detail": detail,
+            "at": datetime.fromtimestamp(problem.get("at") or 0, UTC),
+        }
+
+    if client.key_problem:
+        return refused(client.key_problem, "rejected", "ingesteld, maar geweigerd door Bitvavo")
+    if client.trade_problem:
+        return refused(client.trade_problem, "no_trading", "ingesteld, maar mag niet handelen")
+    if client.key_ok_at:
+        at = datetime.fromtimestamp(client.key_ok_at, UTC)
+        return {"state": "ok", "label": "ingesteld en werkt", "reason": None, "at": at}
+    return {"state": "set", "label": "ingesteld", "reason": None, "at": None}
+
+
+templates.env.globals["bitvavo_key_state"] = bitvavo_key_state
+
+
+async def fetch_market_names(client: BitvavoClient) -> set[str] | None:
+    """Every market Bitvavo lists, or None when the list cannot be fetched quickly."""
+    try:
+        rows = await asyncio.wait_for(client.markets(), MARKET_LIST_TIMEOUT_S)
+    except Exception as exc:  # noqa: BLE001 - offline or slow: the save goes on unchecked
+        log.info("market list not available for the settings check: %s", exc)
+        return None
+    if not isinstance(rows, list):
+        return None
+    names = {r["market"] for r in rows if isinstance(r, dict) and isinstance(r.get("market"), str)}
+    return names or None
+
+
+async def _known_markets(app_: FastAPI) -> set[str] | None:
+    """Bitvavo's market list, kept for an hour (a failed fetch is retried after a minute)."""
+    cached = getattr(app_.state, "market_names", None)
+    now = time.monotonic()
+    if cached is not None and cached[0] > now:
+        return cached[1]
+    names = await fetch_market_names(app_.state.client)
+    app_.state.market_names = (now + (MARKET_LIST_TTL_S if names else MARKET_LIST_RETRY_S), names)
+    return names
 
 
 def _settings_payload(request: Request, session: Session) -> dict:
@@ -1845,27 +1983,46 @@ def _settings_payload(request: Request, session: Session) -> dict:
         "warning": request.app.state.config_warning,
         "values": _editable_values(settings),
         "groups": cfg.describe(session, settings, request.app.state.env),
+        "warnings": {
+            key: text
+            for key in cfg.EDITABLE_KEYS
+            if cfg.SPEC_BY_KEY[key].kind == "model"
+            and (text := cfg.model_warning(getattr(settings, key)))
+        },
     }
 
 
-async def _save_settings(
-    request: Request, session: Session, raw: dict, password: str | None = None
-) -> Settings:
-    """Parse, validate, store and apply; raises SettingsError with per-field messages, or
-    StepUpError when a sensitive setting changes without the right current password."""
+async def _check_settings(request: Request, session: Session, raw: dict) -> tuple[dict, Settings]:
+    """Parse and validate ``raw`` into (values, the settings they would give). Raises
+    SettingsError with Dutch messages per field; nothing is stored."""
     app_ = request.app
     values = cfg.parse_values(raw)
     candidate = cfg.preview(session, values, app_.state.env)
     if candidate.trading_mode == "live" and app_.state.broker.mode != "live":
-        blocker = live_blocker(app_.state.env, app_.state.client)
-        if blocker:
-            raise SettingsError({"trading_mode": f"live handelen kan nog niet: {blocker}"})
+        missing = _live_missing_text(app_.state.env, app_.state.client)
+        if missing:
+            raise SettingsError({"trading_mode": f"live handelen kan nog niet: {missing}"})
+    new_markets = [m for m in values.get("markets", []) if m not in app_.state.settings.markets]
+    if new_markets:
+        known = await _known_markets(app_)
+        problem = cfg.unknown_markets(new_markets, known) if known else None
+        if problem:
+            raise SettingsError({"markets": problem})
     if "trading_fee_pct" not in values:
         # Keep the account's real Bitvavo fee found at startup; a save of another setting
         # must not swap it back for TRADING_FEE_PCT.
         candidate = candidate.model_copy(
             update={"trading_fee_pct": app_.state.settings.trading_fee_pct}
         )
+    return values, candidate
+
+
+async def _commit_settings(
+    request: Request, session: Session, values: dict, candidate: Settings, password: str | None
+) -> Settings:
+    """Store and apply checked values; raises StepUpError when a sensitive setting changes
+    without the right current password."""
+    app_ = request.app
     if _sensitive_changes(session, app_.state, candidate):
         await require_current_password(request, session, password)
     cfg.save_overrides(session, values, app_.state.env)
@@ -1874,6 +2031,15 @@ async def _save_settings(
     _drop_disabled_mood(session, candidate)
     app_.state.config_warning = None
     return candidate
+
+
+async def _save_settings(
+    request: Request, session: Session, raw: dict, password: str | None = None
+) -> Settings:
+    """Parse, validate, store and apply; raises SettingsError with per-field messages, or
+    StepUpError when a sensitive setting changes without the right current password."""
+    values, candidate = await _check_settings(request, session, raw)
+    return await _commit_settings(request, session, values, candidate, password)
 
 
 def _sensitive_changes(session: Session, state, candidate: Settings) -> list[str]:
@@ -1914,24 +2080,44 @@ def _resets_sensitive(session: Session, keys: list[str] | None) -> bool:
     return any(k in cfg.SENSITIVE_KEYS and (keys is None or k in keys) for k in stored)
 
 
+RESET_TO_LIVE = (
+    "Niet teruggezet: de serveromgeving staat op TRADING_MODE=live, dus terugzetten zou de bot "
+    "naar Live (echt geld) zetten. Kies de modus zelf bij Handelen › Modus."
+)
+
+
 async def _reset_settings(
     request: Request, session: Session, keys: list[str] | None, password: str | None = None
-) -> int:
+) -> tuple[int, list[str]]:
+    """Forget stored values; returns (how many, the changes as 'Label: oud → nieuw').
+
+    A reset never switches the bot to live: when the environment says live (and live is
+    possible) while the portal holds paper mode, the reset is refused (SettingsError); the
+    mode then only changes through its own choice with the live confirmation.
+    """
+    old: Settings = request.app.state.settings
+    env: Settings = request.app.state.env
+    new = cfg.preview_reset(session, keys, env)
+    if (
+        new.trading_mode == "live"
+        and request.app.state.broker.mode != "live"
+        and not live_blocker(env, request.app.state.client)
+    ):
+        raise SettingsError({"trading_mode": RESET_TO_LIVE})
     if _resets_sensitive(session, keys):
         await require_current_password(request, session, password)
-    old: Settings = request.app.state.settings
     removed = cfg.reset_overrides(session, keys)
-    new = cfg.effective_settings(session, request.app.state.env)
+    new = cfg.effective_settings(session, env)
     if keys is not None and "trading_fee_pct" not in keys:
-        # Keep the account's real Bitvavo fee found at startup (see _save_settings).
+        # Keep the account's real Bitvavo fee found at startup (see _check_settings).
         new = new.model_copy(update={"trading_fee_pct": old.trading_fee_pct})
-    if new.trading_mode == "live" and live_blocker(request.app.state.env, request.app.state.client):
+    if new.trading_mode == "live" and live_blocker(env, request.app.state.client):
         # The environment itself says live but live is not possible: stay in paper mode.
         new = new.model_copy(update={"trading_mode": "paper"})
     _log_setting_changes(old, new)
     apply_settings(request.app, new)
     _drop_disabled_mood(session, new)
-    return removed
+    return removed, cfg.changes(old, new, keys)
 
 
 async def _api_password(request: Request, body: dict | None = None) -> str | None:
@@ -1977,6 +2163,8 @@ async def api_reset_settings(request: Request, session: Session = Depends(get_se
     password = await _api_password(request)
     try:
         await _reset_settings(request, session, None, password)
+    except SettingsError as exc:
+        raise HTTPException(409, exc.errors) from exc
     except StepUpError as exc:
         raise HTTPException(exc.status, exc.message) from exc
     return _settings_payload(request, session)
@@ -1989,6 +2177,8 @@ async def api_reset_setting(key: str, request: Request, session: Session = Depen
     password = await _api_password(request)
     try:
         await _reset_settings(request, session, [key], password)
+    except SettingsError as exc:
+        raise HTTPException(409, exc.errors) from exc
     except StepUpError as exc:
         raise HTTPException(exc.status, exc.message) from exc
     return _settings_payload(request, session)
@@ -2013,6 +2203,103 @@ def _reset_paper_portfolio(session: Session) -> int:
     return closed
 
 
+def _join_changes(changes: list[str]) -> str:
+    """'A: 1 → 2; B: aan → uit', cut to fit a flash, with 'en nog 3 wijzigingen'."""
+    shown: list[str] = []
+    for i, text in enumerate(changes):
+        if shown and len("; ".join([*shown, text])) > CHANGES_TEXT_MAX:
+            rest = len(changes) - i
+            return "; ".join(shown) + f"; en nog {rest} wijziging{'' if rest == 1 else 'en'}"
+        shown.append(text)
+    return "; ".join(shown)
+
+
+def _reset_confirm_text(group: dict) -> str:
+    """The question before 'Standaard herstellen' of a block: exactly what goes back."""
+    lines = [
+        f"• {f['label']}: {f['display']} → {f['default_display']}"
+        for f in group["fields"]
+        if f["overridden"] and f["key"] != "trading_mode"
+    ]
+    text = f"Deze instellingen in '{group['title']}' gaan terug naar de standaard uit de " + (
+        "serveromgeving:\n" + "\n".join(lines)
+    )
+    if any(f["key"] == "trading_mode" and f["overridden"] for f in group["fields"]):
+        text += "\n\nDe modus verandert niet; die kies je alleen zelf."
+    return text
+
+
+def _live_context(request: Request, settings: Settings, key_state: dict) -> dict:
+    """The checklist and confirmation panel for switching to live."""
+    env: Settings = request.app.state.env
+    requirements = live_requirements(env, request.app.state.client)
+    capital = settings.live_capital_eur
+    advice = [
+        {
+            "ok": capital > 0,
+            "label": f"Kapitaal voor de bot: {eur(capital, 0)}"
+            if capital > 0
+            else "Kapitaal voor de bot staat op 0: de limieten rekenen dan met je hele "
+            "Bitvavo-account",
+            "fix": "Stel een bedrag in bij Harde limieten › Kapitaal voor de bot (live).",
+            "href": "#f-live_capital_eur",
+            "link": "Kapitaal instellen",
+        },
+        {
+            "ok": key_state["state"] == "ok",
+            "label": {
+                "ok": "De Bitvavo-sleutel werkt",
+                "rejected": "Bitvavo weigert de sleutel: " + str(key_state.get("reason")),
+                "no_trading": "De Bitvavo-sleutel mag niet handelen",
+                "set": "De Bitvavo-sleutel is nog niet getest",
+                "missing": "Er is nog geen Bitvavo-sleutel om te testen",
+            }[key_state["state"]],
+            "fix": "Test de verbinding onder 'Uit de omgeving'. Geef de sleutel geen rechten "
+            "om geld op te nemen; Crypie kan dat zelf niet controleren.",
+            "href": "#omgeving",
+            "link": "Verbinding testen",
+        },
+        {
+            "ok": notify_configured(env),
+            "label": "Meldingen buiten de app staan aan"
+            if notify_configured(env)
+            else "Er is geen meldingskanaal: bij een storing hoor je niets buiten de app",
+            "fix": "Zet NOTIFY_URL in de serveromgeving (bijvoorbeeld een ntfy-topic).",
+            "href": "#omgeving",
+            "link": "Meldingen bekijken",
+        },
+    ]
+    return {
+        "requirements": requirements,
+        "missing": [r for r in requirements if not r["ok"]],
+        "advice": advice,
+        "can_switch": settings.trading_mode != "live" and all(r["ok"] for r in requirements),
+        "summary": [
+            ("Maximum per order", eur(settings.max_trade_eur, 0)),
+            (
+                "Kapitaal voor de bot",
+                eur(capital, 0) if capital > 0 else "0: het hele Bitvavo-account",
+            ),
+            ("Maximaal in crypto", f"{num(settings.max_exposure_pct, 0)}%"),
+            ("Dagverlieslimiet", f"{num(settings.daily_loss_limit_pct, 1)}%"),
+            ("Maximum aantal orders per dag", str(settings.max_trades_per_day)),
+            ("Markten", ", ".join(settings.markets)),
+            ("Automatisch handelen", "aan" if settings.trading_enabled else "uit"),
+        ],
+        "capital_zero": capital <= 0,
+    }
+
+
+# Form fields that are no setting: the typed live confirmation (input id "confirm_live").
+EXTRA_FORM_FIELDS = {"confirm_live": "Bevestiging voor Live"}
+
+
+def _error_label(key: str, fields: dict[str, dict]) -> str:
+    if key in fields:
+        return fields[key]["label"]
+    return EXTRA_FORM_FIELDS.get(key, key)
+
+
 def _settings_context(
     request: Request,
     session: Session,
@@ -2020,38 +2307,111 @@ def _settings_context(
     submitted: dict | None = None,
     message: str | None = None,
     password_error: tuple[str, str] | None = None,
+    *,
+    form_group: str | None = None,
+    password_status: int | None = None,
+    block_flashes: list[dict] | None = None,
+    saved_block: str | None = None,
+    loosened: list[str] | None = None,
+    form_extra: dict | None = None,
 ) -> dict:
     """``password_error`` is (form, message): the form ("trading", ..., or "paper") whose
-    current-password field gets the message."""
+    current-password field gets the message. ``form_group`` is the block that was submitted
+    (its fields show what was sent and which of them are not saved), ``block_flashes`` the
+    messages for the block named by ``saved_block``."""
     payload = _settings_payload(request, session)
-    if submitted:
-        for group in payload["groups"]:
-            for f in group["fields"]:
-                if f["key"] in submitted:
-                    f["text"] = submitted[f["key"]]
-                    if f["kind"] == "bool":
-                        f["value"] = str(submitted[f["key"]]).lower() in ("true", "1", "on")
-                    elif f["kind"] in ("choice", "model"):
-                        f["value"] = submitted[f["key"]]
+    settings: Settings = request.app.state.settings
     env: Settings = request.app.state.env
+    errors = errors or {}
+    paper_field = cfg.describe_field(session, settings, "paper_start_eur", env)
+    fields_by_key = {f["key"]: f for g in payload["groups"] for f in g["fields"]}
+    fields_by_key[paper_field["key"]] = paper_field
+    for f in fields_by_key.values():
+        f["changed"] = False
+        f["error"] = errors.get(f["key"])
+    if submitted:
+        for key, sent in submitted.items():
+            f = fields_by_key.get(key)
+            if f is None:
+                continue
+            f["text"] = sent
+            if f["kind"] == "bool":
+                f["value"] = str(sent).lower() in ("true", "1", "on")
+                sent_form = "true" if f["value"] else "false"
+            elif f["kind"] in ("choice", "model"):
+                f["value"] = sent
+                sent_form = str(sent)
+            else:
+                sent_form = str(sent)
+            f["changed"] = sent_form.strip() != str(f["saved_text"]).strip()
+    # Fields that only work while their switch is on (or their number above 0) are dimmed with
+    # an explanation while it is off; they keep their value and are still saved.
+    for f in fields_by_key.values():
+        parent = fields_by_key.get(f["depends"]) if f["depends"] else None
+        f["dep_off"] = False
+        if parent is not None and parent["kind"] == "bool":
+            f["dep_off"] = not parent["value"]
+        elif parent is not None:
+            try:
+                f["dep_off"] = cfg.parse_decimal(parent["text"]) == 0
+            except ValueError:
+                pass
+    plan = fields_by_key.get("cryptopanic_plan")
+    if plan is not None and not env.cryptopanic_token:
+        plan["dep_off"] = True
+        plan["depends_text"] = (
+            "Geldt alleen als er een CryptoPanic-token in de serveromgeving staat; nu is er geen."
+        )
+    for group in payload["groups"]:
+        group["changed"] = [f for f in group["fields"] if f["overridden"]]
+        group["resettable"] = [f for f in group["changed"] if f["key"] != "trading_mode"]
+        group["reset_needs_password"] = any(f["sensitive"] for f in group["resettable"])
+        group["unsaved"] = [f for f in group["fields"] if f["changed"]]
+        # The error summary at the top of the submitted block: one link per field.
+        group["errors"] = (
+            [
+                {"key": key, "label": _error_label(key, fields_by_key)}
+                for key in errors
+                if key in {f["key"] for f in group["fields"]} or key in EXTRA_FORM_FIELDS
+            ]
+            if group["key"] == form_group
+            else []
+        )
+        group["reset_confirm"] = _reset_confirm_text(group)
+    key_state = bitvavo_key_state(request)
+    attempts_left = None
+    if password_error and password_status == 403 and step_up_enabled(request):
+        attempts_left = step_up_attempts_left(request, session)
     return {
-        "settings": request.app.state.settings,
+        "settings": settings,
         "groups": payload["groups"],
+        "paper_field": paper_field,
         "live_blocker": payload["live_blocker"],
+        "live": _live_context(request, settings, key_state),
         "config_warning": payload["warning"],
-        "errors": errors or {},
+        "errors": errors,
         "message": message,
         "password_error": password_error,
+        "password_throttled": password_status == 429,
+        "attempts_left": attempts_left,
+        "form_group": form_group,
+        "form_extra": form_extra or {},
+        "loosened": loosened or [],
+        "block_flashes": block_flashes or [],
+        "saved_block": saved_block,
         "step_up": step_up_enabled(request),
         "sensitive_groups": [g for g in cfg.GROUPS if cfg.group_has_sensitive(g)],
         "model_choices": [m for m, _ in cfg.MODEL_CHOICES],
+        "key_state": key_state,
         "environment": {
             "bitvavo_key": env.has_bitvavo_credentials,
             "anthropic_key": bool(env.anthropic_api_key),
             "cryptopanic_token": bool(env.cryptopanic_token),
             "live_ack": env.live_trading_ack,
+            "auth": env.auth_enabled,
             "database": env.database_url.split(":", 1)[0],
             "notify": notify_configured(env),
+            "notify_format": env.notify_format,
         },
     }
 
@@ -2060,18 +2420,26 @@ def _settings_context(
 async def settings_page(
     request: Request, saved: str | None = None, session: Session = Depends(get_session)
 ):
-    message = None
-    if saved in cfg.GROUPS:
-        message = f"Instellingen voor '{cfg.GROUPS[saved][0]}' opgeslagen. Ze gelden direct."
-    elif saved == "reset":
-        message = "Standaardwaarden hersteld; de waarden uit de serveromgeving gelden weer."
-    elif saved == "paper":
-        message = (
-            "Oefenportefeuille gereset. Het saldo staat weer op het startbedrag en open "
-            "oefenposities zijn gesloten."
-        )
-    ctx = _settings_context(request, session, message=message)
+    # A message after an action (a flash) is shown in the block it is about, where the browser
+    # lands (#block), instead of at the top of the page. Without the flash (a reload later on)
+    # ?saved= shows nothing: it never confirms something twice.
+    block_flashes: list[dict] = []
+    if saved in SETTINGS_BLOCKS:
+        block_flashes = list(getattr(request.state, "flashes", []) or [])
+        request.state.flashes = []
+    ctx = _settings_context(
+        request,
+        session,
+        block_flashes=block_flashes,
+        saved_block=saved if block_flashes else None,
+    )
     return templates.TemplateResponse(request, "settings.html", ctx)
+
+
+def _saved_text(title: str, changes: list[str]) -> str:
+    if not changes:
+        return f"{title} opgeslagen. Er was niets gewijzigd."
+    return f"{title} opgeslagen; het geldt direct. {_join_changes(changes)}."
 
 
 @app.post("/settings", response_class=HTMLResponse)
@@ -2081,30 +2449,39 @@ async def settings_save(request: Request, session: Session = Depends(get_session
     action = str(form.get("action") or "save")
     password = str(form.get("current_password") or "")
 
+    def page(status: int, **kw):
+        ctx = _settings_context(request, session, **kw)
+        return templates.TemplateResponse(request, "settings.html", ctx, status_code=status)
+
     def step_up_failed(form_key: str, exc: StepUpError, submitted: dict | None = None):
-        ctx = _settings_context(
-            request, session, submitted=submitted, password_error=(form_key, exc.message)
+        return page(
+            exc.status,
+            submitted=submitted,
+            password_error=(form_key, exc.message),
+            password_status=exc.status,
+            form_group=form_key,
         )
-        return templates.TemplateResponse(request, "settings.html", ctx, status_code=exc.status)
 
     if action == "reset_paper":
-        if request.app.state.broker.mode != "paper":
-            raise HTTPException(400, "alleen mogelijk in oefenmodus")
-        try:
-            await require_current_password(request, session, password)
-        except StepUpError as exc:
-            return step_up_failed("paper", exc)
-        _reset_paper_portfolio(session)
-        log.info("paper portfolio reset in the portal")
-        return RedirectResponse("/settings?saved=paper", status_code=303)
+        return await _reset_paper_action(request, session, form, password, page, step_up_failed)
     if group not in cfg.GROUPS:
         raise HTTPException(400, "onbekende groep")
+    title = cfg.GROUPS[group][0]
     if action == "reset":
+        # The mode is never part of a block reset: it changes only through its own choice.
+        keys = [k for k in cfg.keys_in_group(group) if k != "trading_mode"]
         try:
-            await _reset_settings(request, session, cfg.keys_in_group(group), password)
+            _, changed = await _reset_settings(request, session, keys, password)
         except StepUpError as exc:
             return step_up_failed(group, exc)
-        return RedirectResponse(f"/settings?saved=reset#{group}", status_code=303)
+        except SettingsError as exc:
+            return page(409, errors=exc.errors, form_group=group)
+        text = (
+            f"Standaardwaarden hersteld in {title}: {_join_changes(changed)}."
+            if changed
+            else f"In {title} stond alles al op de standaard."
+        )
+        return flash.redirect_with_flash(f"/settings?saved={group}#{group}", "ok", text)
     raw: dict[str, str] = {}
     for key in cfg.keys_in_group(group):
         sent = form.getlist(key)
@@ -2112,14 +2489,145 @@ async def settings_save(request: Request, session: Session = Depends(get_session
             raw[key] = str(sent[-1])  # a checkbox posts after its hidden "false" twin
         elif cfg.SPEC_BY_KEY[key].kind == "bool":
             raw[key] = "false"
+    extra = {"confirm_live": str(form.get("confirm_live") or "")[:20]}
+    old: Settings = request.app.state.settings
     try:
-        await _save_settings(request, session, raw, password)
+        values, candidate = await _check_settings(request, session, raw)
+        if candidate.trading_mode == "live" and request.app.state.broker.mode != "live":
+            # Switching to real money in the portal: the live confirmation is typed, not clicked.
+            if extra["confirm_live"].strip().upper() != "LIVE":
+                raise SettingsError(
+                    {
+                        "confirm_live": "Typ LIVE in het vak onder de modus om te bevestigen dat "
+                        "de bot met echt geld gaat handelen."
+                    }
+                )
+        loosened = cfg.loosened_limits(old, candidate)
+        if loosened and str(form.get("confirm_loosen") or "") != "1":
+            # A hard limit more than twice as loose in one go: ask once more (before the
+            # password, so nothing is checked or counted yet).
+            return page(409, submitted=raw, form_group=group, loosened=loosened)
+        await _commit_settings(request, session, values, candidate, password)
     except SettingsError as exc:
-        ctx = _settings_context(request, session, errors=exc.errors, submitted=raw)
-        return templates.TemplateResponse(request, "settings.html", ctx, status_code=400)
+        return page(400, errors=exc.errors, submitted=raw, form_group=group, form_extra=extra)
     except StepUpError as exc:
         return step_up_failed(group, exc, submitted=raw)
-    return RedirectResponse(f"/settings?saved={group}#{group}", status_code=303)
+    response = flash.redirect_with_flash(
+        f"/settings?saved={group}#{group}",
+        "ok",
+        _saved_text(title, cfg.changes(old, candidate, cfg.keys_in_group(group))),
+    )
+    for key in cfg.keys_in_group(group):
+        warning = cfg.model_warning(getattr(candidate, key)) if key in values else None
+        if warning and cfg.SPEC_BY_KEY[key].kind == "model":
+            flash.add_flash(
+                response,
+                "warn",
+                f"{cfg.SPEC_BY_KEY[key].label} ({getattr(candidate, key)}): " + warning,
+            )
+    return response
+
+
+async def _reset_paper_action(request, session, form, password, page, step_up_failed):
+    """Reset the paper portfolio, optionally with a new start amount (saved with it)."""
+    if request.app.state.broker.mode != "paper":
+        raise HTTPException(400, "alleen mogelijk in oefenmodus")
+    sent = form.get("paper_start_eur")
+    submitted = {"paper_start_eur": str(sent)} if sent is not None else None
+    values: dict = {}
+    if sent is not None and str(sent).strip():
+        try:
+            values = cfg.parse_values({"paper_start_eur": str(sent)})
+            cfg.preview(session, values, request.app.state.env)
+        except SettingsError as exc:
+            return page(400, errors=exc.errors, submitted=submitted, form_group=cfg.PAPER_GROUP)
+    try:
+        await require_current_password(request, session, password)
+    except StepUpError as exc:
+        return step_up_failed("paper", exc, submitted)
+    current: Settings = request.app.state.settings
+    if values and values["paper_start_eur"] != current.paper_start_eur:
+        cfg.save_overrides(session, values, request.app.state.env)
+        new = current.model_copy(update=values)
+        _log_setting_changes(current, new)
+        apply_settings(request.app, new)
+    closed = _reset_paper_portfolio(session)
+    log.info("paper portfolio reset in the portal")
+    start = request.app.state.settings.paper_start_eur
+    positions = (
+        f" {closed} open oefenpositie{'' if closed == 1 else 's'} gesloten zonder resultaat."
+        if closed
+        else ""
+    )
+    return flash.redirect_with_flash(
+        "/settings?saved=paper",
+        "ok",
+        f"Oefenportefeuille gereset. Het saldo staat weer op {eur(start, 0)}.{positions}",
+    )
+
+
+_last_bitvavo_test = 0.0
+
+
+@app.post("/settings/bitvavo-test")
+async def settings_bitvavo_test(request: Request):
+    """'Verbinding testen': one signed request (account and fee) with the configured key."""
+    global _last_bitvavo_test
+    target = "/settings?saved=omgeving#omgeving"
+    client: BitvavoClient = request.app.state.client
+    if not client.authenticated:
+        return flash.redirect_with_flash(
+            target, "error", "Er is geen Bitvavo-sleutel om te testen (BITVAVO_API_KEY)."
+        )
+    clock = time.monotonic()
+    if _last_bitvavo_test and clock - _last_bitvavo_test < BITVAVO_TEST_REPEAT_S:
+        return flash.redirect_with_flash(
+            target, "warn", "Er is net een test gedaan. Wacht een paar seconden."
+        )
+    _last_bitvavo_test = clock
+    try:
+        account = await asyncio.wait_for(client.account(), BITVAVO_TEST_TIMEOUT_S)
+    except BitvavoError as exc:
+        if client.key_problem or client.trade_problem:
+            state = bitvavo_key_state(request)
+            return flash.redirect_with_flash(
+                target, "error", f"Geweigerd door Bitvavo: {state['reason']} ({state['detail']})."
+            )
+        return flash.redirect_with_flash(
+            target,
+            "error",
+            f"Niet getest: {errors.bitvavo_text(exc)} Probeer het over een paar minuten opnieuw.",
+        )
+    except Exception as exc:  # noqa: BLE001 - a time-out or worse: shown, never raised
+        log.info("Bitvavo connection test failed: %s", exc)
+        return flash.redirect_with_flash(
+            target,
+            "error",
+            "Niet getest: Bitvavo antwoordde niet op tijd. Probeer het over een paar minuten "
+            "opnieuw.",
+        )
+    fee = None
+    try:
+        fee = float((account.get("fees") or {})["taker"]) * 100
+    except (KeyError, TypeError, ValueError, AttributeError):
+        pass
+    fee_text = f" Kosten per order (taker): {num(fee, 2)}%." if fee is not None else ""
+    return flash.redirect_with_flash(
+        target,
+        "ok",
+        f"De sleutel werkt: Bitvavo gaf je accountgegevens.{fee_text} Crypie kan niet zien of "
+        "de sleutel mag handelen of geld mag opnemen; controleer bij Bitvavo dat hij alleen "
+        "mag lezen en handelen.",
+    )
+
+
+@app.post("/settings/notify-test")
+async def settings_notify_test(request: Request):
+    """'Testmelding sturen' to the channel set in NOTIFY_URL."""
+    ok, text = await send_test(request.app.state.env)
+    return flash.redirect_with_flash(
+        "/settings?saved=omgeving#omgeving", "ok" if ok else "error", text
+    )
 
 
 # -- Dashboard -------------------------------------------------------------------------

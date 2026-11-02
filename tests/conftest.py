@@ -22,3 +22,16 @@ def _public_dns(monkeypatch):
         return ["93.184.215.14"]
 
     monkeypatch.setattr(sources, "resolve_host", resolve)
+
+
+@pytest.fixture(autouse=True)
+def _no_market_list(monkeypatch):
+    """A settings save checks new markets against Bitvavo's market list (app.main). Tests do not
+    reach Bitvavo for that: the list counts as unavailable (no check) unless a test sets one."""
+    from app import main
+
+    async def unavailable(client) -> None:
+        return None
+
+    monkeypatch.setattr(main, "fetch_market_names", unavailable)
+    main.app.state.market_names = None

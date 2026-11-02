@@ -1197,29 +1197,152 @@ footer.site {
 }
 
 /* ==== Pagina: Instellingen ==== */
-/* Regels die alleen settings.html gebruikt: de blokken met instellingen. */
+/* Regels die alleen settings.html gebruikt: de blokken met instellingen, de inhoudsopgave, de
+ * live-checklist en de balk met Opslaan. .setting-help gebruikt ook plan.html. */
 
-.settings-nav { flex-wrap: wrap; }
+/* Layout: a list of links beside the blocks on wide screens, above them on small ones. */
+.settings-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-5); }
+.settings-main > * + * { margin-top: var(--space-6); }
+.settings-toc { font-size: var(--fs-help); }
+.settings-toc-title { font-weight: 600; color: var(--text-2); font-size: var(--fs-detail); margin-bottom: var(--space-2); }
+.settings-toc ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.settings-toc a { display: inline-flex; align-items: center; min-height: 32px; color: var(--accent); text-decoration: underline; text-underline-offset: 0.2em; }
+.settings-toc a[aria-current="true"] { color: var(--text); font-weight: 600; text-decoration: none; }
+.toc-dirty { color: var(--orange); font-weight: 500; white-space: nowrap; margin-left: 0.35em; }
+@media (min-width: 1100px) {
+  .settings-layout { grid-template-columns: 190px minmax(0, 1fr); gap: 32px; align-items: start; }
+  .settings-toc { position: sticky; top: calc(var(--header-h) + var(--banner-h, 0px) + 16px); }
+  .settings-toc ul { flex-direction: column; gap: 2px; }
+  .settings-toc a { padding: 4px 0 4px 12px; margin-left: -14px; border-left: 2px solid transparent; }
+  .settings-toc a[aria-current="true"] { border-left-color: var(--accent); }
+}
+
+/* A block: header, explanation, feedback where you land, then its parts and fields. */
+.settings-block { scroll-margin-top: calc(var(--header-h) + var(--banner-h, 0px) + 12px); }
+.settings-changed { color: var(--text-2); font-size: var(--fs-detail); margin: -6px 0 var(--space-3); }
+.settings-lock-note { display: flex; gap: 6px; align-items: flex-start; color: var(--text-2); font-size: var(--fs-detail); margin-bottom: var(--space-4); }
+.settings-lock-note .icon, .lock-tag .icon, .setting--password .setting-label .icon { width: 14px; height: 14px; flex: none; margin-top: 2px; }
+.settings-feedback:empty { display: none; }
+.settings-feedback { display: flex; flex-direction: column; gap: var(--space-3); margin-bottom: var(--space-4); }
+.settings-feedback .notice a { font-weight: 600; }
+.settings-unsaved-note { color: var(--orange); font-size: var(--fs-detail); font-weight: 500; }
+.loosen-confirm { margin-bottom: var(--space-4); }
+.check-row { display: inline-flex; align-items: center; gap: 10px; font-size: var(--fs-body); color: var(--text); min-height: var(--tap); cursor: pointer; }
+
+.settings-section { border: 0; margin: 0; padding: 0; min-width: 0; }
+.settings-section + .settings-section, .settings-list + .settings-section { margin-top: var(--space-6); }
+.settings-section > legend { padding: 0; margin-bottom: var(--space-1); }
+.settings-section-title { font-size: var(--fs-lead); font-weight: 650; color: var(--text); letter-spacing: -0.01em; }
+.settings-section-help { color: var(--text-2); font-size: var(--fs-detail); margin-bottom: var(--space-2); max-width: 60ch; }
+
 .settings-list { border-top: 1px solid var(--hairline); }
 .setting {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
   gap: 8px 28px;
   align-items: center;
   padding: 16px 0;
   border-bottom: 1px solid var(--hairline);
 }
-.setting-text label { font-size: var(--fs-body); font-weight: 500; color: var(--text); }
+.setting-label { font-size: var(--fs-body); font-weight: 500; color: var(--text); display: inline-flex; gap: 6px; align-items: flex-start; }
+.setting-text { min-width: 0; }
 .setting-help { color: var(--text-2); font-size: var(--fs-detail); margin-top: 3px; max-width: 60ch; }
 .setting-default { color: var(--text-2); font-size: var(--fs-caption); margin-top: 5px; overflow-wrap: anywhere; }
+.setting-default .mono, .setting-text .mono, .env-name { font-size: var(--fs-caption); color: var(--text-2); }
 .setting-error { color: var(--red); font-size: var(--fs-detail); font-weight: 500; margin-top: 5px; }
+.setting-warn, .setting-check { color: var(--orange); font-size: var(--fs-detail); font-weight: 500; margin-top: 5px; }
+.setting-dep { color: var(--text-2); font-size: var(--fs-detail); margin-top: 5px; font-style: italic; }
+.setting-need { color: var(--orange); font-size: var(--fs-detail); font-weight: 500; margin-top: 5px; }
+.lock-tag { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 1px 8px; border-radius: var(--radius-pill); background: var(--fill); color: var(--text-2); font-size: var(--fs-caption); font-weight: 500; }
+.link-btn { background: none; border: 0; padding: 4px 0; margin-top: 2px; font: inherit; font-size: var(--fs-detail); color: var(--accent); text-decoration: underline; text-underline-offset: 0.2em; cursor: pointer; min-height: 32px; }
 .setting-control { display: flex; flex-direction: column; align-items: flex-end; min-width: 0; }
 .setting-control > input, .setting-control > select, .setting-control > textarea, .setting-control .unit-input { width: 100%; }
-.setting.has-error input, .setting.has-error select, .setting.has-error textarea { border-color: var(--red); }
-@media (max-width: 640px) {
-  .setting { grid-template-columns: minmax(0, 1fr); }
-  .setting-control { align-items: stretch; }
+.setting.has-error :is(input, select, textarea) { border-color: var(--red); }
+.input-upper { text-transform: uppercase; }
+.input-upper::placeholder { text-transform: none; }
+
+/* Numbers: the unit in a fixed column on both sides, so every field ends on the same line. */
+.setting .unit-input { display: grid; grid-template-columns: 1.4em minmax(0, 1fr) 5.6em; gap: 8px; align-items: center; }
+.setting .unit-input input { text-align: right; width: 100%; font-variant-numeric: tabular-nums; }
+.setting .unit-input .unit { color: var(--text-2); font-size: var(--fs-help); white-space: nowrap; min-width: 0; }
+.setting .unit-prefix { text-align: right; }
+
+/* Long lists (agenda, feeds): the full width of the block, monospace. */
+.setting--wide { grid-template-columns: minmax(0, 1fr); }
+.setting--wide .setting-control { align-items: stretch; }
+.setting-textarea { font-family: var(--mono); font-size: 13px; line-height: 1.55; min-height: 9rem; }
+
+/* A switch: one label (the setting's name); the whole track is the click target. */
+.setting .switch input { width: 100%; height: 100%; inset: 0; z-index: 1; cursor: pointer; }
+.setting .switch { min-width: 92px; justify-content: flex-start; }
+
+/* Modus: a fieldset whose legend is the setting's name. */
+.setting--group { margin: 0; min-width: 0; border: 0; border-bottom: 1px solid var(--hairline); padding: 16px 0; grid-template-rows: auto auto; }
+.setting--group > legend { float: left; grid-column: 1; grid-row: 1; padding: 0; }
+.setting--group > .setting-text { grid-column: 1; grid-row: 2; }
+.setting--group > .setting-control { grid-column: 2; grid-row: 1 / span 2; }
+.setting--group > .live-check { grid-column: 1 / -1; }
+
+/* A field that only works while its switch is on: grey text, a dashed edge, value kept. */
+.setting.is-off .setting-label, .setting.is-off .setting-help { color: var(--text-2); }
+.setting.is-off .setting-dep { color: var(--text); font-style: normal; font-weight: 500; }
+.setting.is-off :is(input, textarea)[readonly] { border-style: dashed; background: var(--fill); color: var(--text-2); }
+.setting.is-off .unit-input input { border-style: dashed; }
+
+/* Live: what is needed, what is advised, and the typed confirmation. */
+.live-check { margin-top: var(--space-3); padding: var(--space-4); border-radius: var(--radius-sm); background: var(--card-2); }
+.live-check-title { font-weight: 600; font-size: var(--fs-help); }
+.live-check-sub { font-weight: 600; font-size: var(--fs-detail); color: var(--text-2); margin-top: var(--space-3); }
+.live-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-detail); }
+.live-list li { display: flex; gap: 8px; align-items: flex-start; }
+.live-list .icon { width: 16px; height: 16px; flex: none; margin-top: 2px; }
+.live-list .is-ok .icon { color: var(--green); }
+.live-list .is-missing .icon { color: var(--red); }
+.live-list .is-advice .icon { color: var(--orange); }
+.live-list .mono { font-size: var(--fs-caption); color: var(--text-2); }
+.live-fix { color: var(--text-2); }
+.live-confirm { margin-top: var(--space-4); padding: var(--space-4); border-radius: var(--radius-sm); border: 2px solid var(--red-fill); background: var(--card); }
+.live-confirm-title { font-weight: 600; font-size: var(--fs-help); margin-bottom: var(--space-3); }
+.live-summary { margin-bottom: var(--space-3); }
+.live-confirm-field { margin-top: var(--space-3); }
+.live-confirm-field label { color: var(--text); font-size: var(--fs-help); }
+.live-confirm.has-error input { border-color: var(--red); }
+
+/* Opslaan per block; sticks to the bottom of the screen while the block has unsaved edits. */
+.settings-actions { margin-top: var(--space-5); display: flex; flex-direction: column; gap: var(--space-2); }
+.settings-actions-status:empty { display: none; }
+.settings-actions-status { color: var(--orange); font-weight: 600; font-size: var(--fs-help); }
+.settings-actions-note { color: var(--text-2); font-size: var(--fs-detail); }
+form.is-dirty .settings-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  margin: var(--space-5) -12px 0;
+  padding: 12px 12px max(12px, env(safe-area-inset-bottom));
+  background: var(--card);
+  border-top: 2px solid var(--orange);
+  box-shadow: 0 -8px 16px -12px rgba(0, 0, 0, 0.35);
 }
+.settings-top { margin-top: var(--space-4); font-size: var(--fs-detail); text-align: right; }
+
+/* Uit de omgeving: pill, sentence, variable name and an action per row. */
+.env-list dd { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.env-text { color: var(--text-2); font-size: var(--fs-detail); flex: 1 1 240px; min-width: 0; }
+.env-name { flex-basis: 100%; }
+.env-action { margin: 0; flex-basis: 100%; }
+/* The footer line about a refused Bitvavo key (base.html, every page; the sweep may move it to
+ * section 7). */
+footer.site .footer-alert { color: var(--red); font-weight: 500; }
+
+@media (max-width: 640px) {
+  .setting, .setting--group { grid-template-columns: minmax(0, 1fr); }
+  .setting--group > .setting-control { grid-column: 1; grid-row: auto; }
+  .setting-control { align-items: stretch; }
+  .setting .switch { align-self: flex-start; }
+  .settings-top { text-align: left; }
+  form.is-dirty .settings-actions { margin-left: -18px; margin-right: -18px; padding-left: 18px; padding-right: 18px; }
+}
+
 
 /* ==== Pagina: Inloggen en account ==== */
 /* Regels voor de inlogflow (auth/*.html) en de accountpagina. */

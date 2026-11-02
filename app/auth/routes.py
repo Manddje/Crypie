@@ -751,6 +751,16 @@ async def require_current_password(request: Request, db: Session, password: str 
     auth.throttle.reset(db, key)
 
 
+def step_up_attempts_left(request: Request, db: Session) -> int | None:
+    """How many wrong passwords this address may still try before the wait starts (the same
+    count as the login), or None without the login."""
+    auth: AuthService | None = getattr(request.app.state, "auth", None)
+    if auth is None:
+        return None
+    used = auth.throttle.failures(db, _client_key(request))
+    return max(auth.throttle.max_failures - used, 0)
+
+
 def _reauth_ok(request: Request, auth: AuthService, user: AuthUser) -> bool:
     data = auth.signer.decode(_read_cookie(request, REAUTH_COOKIE), purpose=REAUTH)
     return auth.session_valid(user, data)
