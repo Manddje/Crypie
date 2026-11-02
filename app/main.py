@@ -17,7 +17,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from starlette.datastructures import MutableHeaders
+from starlette.middleware.gzip import GZipMiddleware
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app import errors, flash
 from app import settings_store as cfg
 from app.ai.budget import BudgetExceeded, BudgetGuard
 from app.ai.decision_maker import DecisionMaker
@@ -56,7 +60,7 @@ from app.news.service import (
 )
 from app.news.sources import NewsFetcher
 from app.notify import Notifier, notify_configured
-from app.security import BodySizeLimit, CrossOriginProtection, SecurityHeaders
+from app.security import NO_STORE_PREFIXES, BodySizeLimit, CrossOriginProtection, SecurityHeaders
 from app.settings_store import SettingsError
 from app.strategy.describe import levels_summary, strategy_diff
 from app.strategy.engine import backtest, latest_snapshot
@@ -258,6 +262,7 @@ async def lifespan(app: FastAPI):
     # Login settings come from the environment only; they are not editable in the portal.
     app.state.auth = build_auth(env)
     app.state.session_secret_weak = env.auth_enabled and session_secret_is_weak(env)
+    flash.configure(_flash_secret(env, app.state.auth))
     with SessionLocal() as session:
         settings = cfg.effective_settings(session, env)
         requeued = requeue_items_without_event_key(session)
@@ -383,6 +388,21 @@ async def lifespan(app: FastAPI):
         await notifier.drain(timeout=2)
         await fetcher.aclose()
         await client.aclose()
+
+
+def _flash_secret(env: Settings, auth: AuthService | None) -> str | None:
+    """The secret the flash cookies are signed with: SESSION_SECRET, else the stored session
+    secret when the login is on; None means a random key per process."""
+    if env.session_secret:
+        return env.session_secret
+    if auth is None:
+        return None
+    try:
+        with SessionLocal() as session:
+            return load_or_create_session_secret(session)
+    except Exception:  # noqa: BLE001
+        log.warning("could not read the session secret for flash messages")
+        return None
 
 
 def _notify_start(app: FastAPI, session: Session) -> None:
@@ -603,6 +623,47 @@ async def evaluation_scheduler(app: FastAPI) -> None:
     )
 
 
+# Versioned static files (?v=<ASSET_VERSION>, ?v=5.2.1) never change under the same URL.
+STATIC_IMMUTABLE = "public, max-age=31536000, immutable"
+
+
+class StaticCacheHeaders:
+    """Long-lived caching for versioned files under /static/; the rest is revalidated (ETag)."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not scope.get("path", "").startswith("/static/"):
+            await self.app(scope, receive, send)
+            return
+        query = scope.get("query_string", b"").decode("latin-1")
+        versioned = any(part.startswith("v=") and len(part) > 2 for part in query.split("&"))
+
+        async def send_cached(message: Message) -> None:
+            if message["type"] == "http.response.start" and message["status"] in (200, 304):
+                headers = MutableHeaders(scope=message)
+                headers["Cache-Control"] = STATIC_IMMUTABLE if versioned else "no-cache"
+            await send(message)
+
+        await self.app(scope, receive, send_cached)
+
+
+class Compression:
+    """Gzip for pages, JSON and static files, except the login and account pages: those hold
+    secrets (an authenticator key, recovery codes) and stay uncompressed (BREACH)."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+        self.gzip = GZipMiddleware(app, minimum_size=1024, compresslevel=6)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and not scope.get("path", "").startswith(NO_STORE_PREFIXES):
+            await self.gzip(scope, receive, send)
+        else:
+            await self.app(scope, receive, send)
+
+
 _docs = get_settings().api_docs_enabled  # API docs only on request, and behind the login
 app = FastAPI(
     title="Crypie",
@@ -618,11 +679,18 @@ if _docs:
     app.get("/redoc", include_in_schema=False)(lambda: redoc_page(app.title, app.openapi_url))
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.middleware("http")(require_login)
-# Added last = runs first: headers on every response, then the body limit, then the origin
-# check, all before the login check and before any body is parsed.
+# Added last = runs first: compression around everything, headers on every response (also
+# the error pages), cache headers for /static, then the body limit and the origin check, all
+# before the login check and before any body is parsed. Inside those: the 500 page, and the
+# one-time messages (flash cookie) around the login check and the routes.
+app.add_middleware(flash.FlashMiddleware)
+app.add_middleware(errors.ServerErrorPages)
 app.add_middleware(CrossOriginProtection)
 app.add_middleware(BodySizeLimit)
+app.add_middleware(StaticCacheHeaders)
 app.add_middleware(SecurityHeaders)
+app.add_middleware(Compression)
+errors.install(app)
 app.include_router(auth_router)
 
 
@@ -1584,18 +1652,16 @@ async def api_put_plan(plan: TradingPlan, session: Session = Depends(get_session
     return save_plan(session, plan).model_dump()
 
 
+PLAN_SAVED = "Tradingplan opgeslagen. Claude krijgt het vanaf de volgende beslissing mee."
+
+
 @app.get("/plan", response_class=HTMLResponse)
 async def plan_page(
     request: Request,
-    saved: str | None = None,
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
     ctx = _plan_context(request, engine, session)
-    if saved:
-        ctx["message"] = (
-            "Tradingplan opgeslagen. Claude krijgt het vanaf de volgende beslissing mee."
-        )
     return templates.TemplateResponse(request, "plan.html", ctx)
 
 
@@ -1618,7 +1684,8 @@ async def plan_save(
         )
         return templates.TemplateResponse(request, "plan.html", ctx, status_code=400)
     save_plan(session, plan)
-    return RedirectResponse("/plan?saved=1", status_code=303)
+    # A one-time message (not ?saved=1): a reload or a restored tab shows no stale "saved".
+    return flash.redirect_with_flash("/plan", "ok", PLAN_SAVED)
 
 
 # -- Trade journal --------------------------------------------------------------------
