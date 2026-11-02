@@ -85,6 +85,9 @@ log = logging.getLogger("crypie")
 # Uvicorn only configures its own loggers; without this the cycle and news results never show
 # up in the container logs.
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# httpx logs every request URL at INFO, query string included (the CryptoPanic auth_token).
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def live_blocker(settings: Settings, client: BitvavoClient) -> str | None:
@@ -852,7 +855,7 @@ async def news_page(
             "n_counted": sum(1 for g in groups if g.status.counts),
             "n_total": len(groups),
             "sentiments": [market_sentiment(session, c, 48) for c in settings.coins],
-            "market_mood": load_market_mood(session),
+            "market_mood": load_market_mood(session) if settings.fear_greed_enabled else None,
             "last_run": news.last_run,
             "last_error": news.last_error,
             "analyst_available": news.analyst.available,

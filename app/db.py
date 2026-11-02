@@ -98,9 +98,27 @@ class NewsItem(Base):
     summary_nl: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Same news fact in several outlets -> same key, so the sentiment counts it once.
     event_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # Failed Claude assessments; after a few the item is set aside instead of retried forever.
+    assess_attempts: Mapped[int] = mapped_column(Integer, default=0)
 
     def coin_list(self) -> list[str]:
         return [c for c in (self.coins or "").split(",") if c]
+
+    @property
+    def safe_url(self) -> str | None:
+        """The article link when it is plain http(s), else None (never a javascript: link)."""
+        from urllib.parse import urlsplit
+
+        url = (self.url or "").strip()
+        try:
+            parts = urlsplit(url)
+        except ValueError:
+            return None
+        if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+            return None
+        if any(ord(ch) < 33 or ch == "\x7f" for ch in url):
+            return None
+        return url
 
 
 class Position(Base):
