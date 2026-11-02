@@ -1,3 +1,4 @@
+import itertools
 import math
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -6,7 +7,13 @@ import pytest
 from sqlalchemy.orm import sessionmaker
 
 from app.ai.budget import BudgetGuard
-from app.ai.news_analyst import Assessment, AssessmentBatch, NewsAnalyst, apply_assessments
+from app.ai.news_analyst import (
+    Assessment,
+    AssessmentBatch,
+    NewsAnalyst,
+    apply_assessments,
+    normalize_key,
+)
 from app.db import Base, NewsItem, make_engine
 from app.news.service import (
     NewsService,
@@ -21,6 +28,7 @@ from app.news.service import (
 from app.news.sources import RawItem
 
 NOW = datetime(2026, 10, 31, 12, tzinfo=UTC)
+_ids = itertools.count()
 
 
 @pytest.fixture
@@ -35,7 +43,7 @@ def raw(url, title="t", hours_ago=1.0, coins=None, source="rss"):
     return RawItem(
         source=source,
         source_name="Src",
-        url=url,
+        url=url if "://" in url else f"https://news.test/{url}",
         title=title,
         published_at=datetime.now(UTC) - timedelta(hours=hours_ago),
         coins=coins or [],
@@ -54,7 +62,8 @@ def _item(session, title, sentiment, impact, coins, hours_ago, horizon="days", r
     it = NewsItem(
         source="rss",
         source_name="Src",
-        url=f"https://x/{title}",
+        # One outlet per title (the host), and a unique URL per article.
+        url=f"https://{normalize_key(title) or 'x'}.test/{next(_ids)}",
         title=title,
         published_at=NOW - timedelta(hours=hours_ago),
         assessed=True,
@@ -71,28 +80,32 @@ def _item(session, title, sentiment, impact, coins, hours_ago, horizon="days", r
 
 def test_market_sentiment_weights_impact_and_recency(session):
     assert market_sentiment(session, "XRP", 48, NOW).label() == "geen nieuws"
-    _item(session, "hack", -1.0, 3, "ALL", hours_ago=1)
+    # A market-wide hack reported by two outlets (same event key).
+    _item(session, "hack", -1.0, 3, "ALL", hours_ago=1).event_key = "exchange-hack"
+    _item(session, "hack-2", -1.0, 3, "ALL", hours_ago=1).event_key = "exchange-hack"
+    session.commit()
     _item(session, "etf", 1.0, 1, "BTC", hours_ago=1)
-    _item(session, "eth-only", 1.0, 3, "ETH", hours_ago=1)
+    _item(session, "eth-only", 1.0, 3, "ETH", hours_ago=1)  # one outlet: counts as impact 2
     _item(session, "noise", 1.0, 0, "BTC", hours_ago=1)  # impact 0 -> ignored
     _item(session, "irrelevant", 1.0, 3, "BTC", hours_ago=1, relevant=False)
     btc = market_sentiment(session, "BTC", 48, NOW)
-    assert btc.items == 2 and btc.high_impact == 1
+    assert btc.items == 2 and btc.high_impact == 1 and btc.confirmed_high_impact == 1
     assert btc.score == pytest.approx((-3 + 1) / 4, abs=0.01)
     assert btc.label() == "negatief"
     assert btc.top[0].title == "hack"
 
     eth = market_sentiment(session, "ETH", 48, NOW)
-    assert eth.items == 2 and eth.score == pytest.approx(0.0, abs=0.01)
+    assert eth.items == 2 and eth.score == pytest.approx((-3 + 2) / 5, abs=0.01)
 
     # Old high-impact news fades: a 36h-old "days" item has half the weight.
-    # The market-wide "hack" item (ALL) counts for SOL too, with 1h of decay.
+    # The market-wide hack (ALL) counts for SOL too, with 1h of decay; the single-outlet SOL
+    # items weigh as impact 2.
     _item(session, "old-good", 1.0, 3, "SOL", hours_ago=36)
     _item(session, "new-bad", -1.0, 3, "SOL", hours_ago=0)
     sol = market_sentiment(session, "SOL", 48, NOW)
     w_hack = 3 * math.exp(-math.log(2) * 1 / 36)
     assert sol.items == 3
-    assert sol.score == pytest.approx((-3 + 1.5 - w_hack) / (4.5 + w_hack), abs=0.001)
+    assert sol.score == pytest.approx((-2 + 1 - w_hack) / (3 + w_hack), abs=0.001)
 
     # Market-wide news reaches coins without their own items too.
     assert market_sentiment(session, "XRP", 48, NOW).label() == "negatief"
@@ -223,7 +236,8 @@ def test_market_sentiment_counts_one_news_fact_once(session):
     session.commit()
     btc = market_sentiment(session, "BTC", 48, NOW)
     assert btc.items == 2 and btc.articles == 7 and btc.high_impact == 2
-    assert btc.score == pytest.approx(0.0, abs=0.01)  # one bad fact, one good fact
+    # One bad fact (six outlets, impact 3), one good fact (one outlet: impact at most 2).
+    assert btc.score == pytest.approx((-3 + 2) / 5, abs=0.01)
     assert btc.top[0].sources == 6 and btc.top[1].sources == 1
     assert btc.as_dict()["top"][0]["sources"] == 6 and btc.as_dict()["articles"] == 7
 

@@ -351,7 +351,7 @@ async def test_news_exit_when_high_impact_negative_news(session):
             sentiment=-0.9,
             impact=3,
             horizon="days",
-            coins="ALL",
+            coins="BTC",  # a market-wide claim from a single outlet would not count
         )
     )
     session.commit()

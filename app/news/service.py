@@ -2,54 +2,139 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
+from urllib.parse import urlsplit
 
-from sqlalchemy import func, select
+import anthropic
+from sqlalchemy import delete, func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.ai.budget import BudgetExceeded
+from app.ai.budget import BudgetExceeded, prune_usage
 from app.ai.news_analyst import NewsAnalyst, apply_assessments, normalize_key
 from app.db import NewsItem, Setting
-from app.news.sources import NewsFetcher, RawItem
+from app.news.sources import (
+    MAX_VOTES_JSON,
+    NewsFetcher,
+    RawItem,
+    aware,
+    clean_tickers,
+    describe_error,
+    fear_greed_label,
+    published_at,
+    safe_url,
+)
 
 log = logging.getLogger(__name__)
 
+TITLE_MAX = 500
+SUMMARY_MAX = 2000
 
-def store_items(session: Session, raw: list[RawItem], max_age_hours: int) -> int:
-    """Insert unseen items (by URL). Returns the number inserted."""
+
+def _row_for(r: RawItem, now: datetime) -> dict[str, Any] | None:
+    """Column values for one fetched item, validated and bounded to the columns; None to skip."""
+    url = safe_url(r.url)
+    title = r.title.strip()[:TITLE_MAX] if isinstance(r.title, str) else ""
+    if not url or not title or not isinstance(r.published_at, datetime):
+        return None
+    votes = None
+    if isinstance(r.votes, dict):
+        votes = json.dumps(r.votes, default=str)
+        if len(votes) > MAX_VOTES_JSON:
+            votes = None
+    source_name = r.source_name.strip() if isinstance(r.source_name, str) else ""
+    return {
+        "source": (r.source if isinstance(r.source, str) else "")[:32] or "rss",
+        "source_name": source_name[:128] or "?",
+        "url": url,
+        "title": title,
+        "summary": r.summary[:SUMMARY_MAX] if isinstance(r.summary, str) and r.summary else None,
+        "published_at": published_at(r.published_at, now),
+        "source_coins": ",".join(clean_tickers(r.coins))[:128] or None,
+        "source_votes": votes,
+    }
+
+
+def store_items(
+    session: Session, raw: list[RawItem], max_age_hours: int, now: datetime | None = None
+) -> int:
+    """Insert unseen items (by URL). Returns the number inserted.
+
+    Every item is validated on its own: a bad one is logged and skipped, never fatal for the
+    rest. Publication dates become aware UTC and never lie after the fetch time.
+    """
     if not raw:
         return 0
-    cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
-    fresh = {r.url: r for r in raw if r.published_at >= cutoff}
+    now = now or datetime.now(UTC)
+    cutoff = now - timedelta(hours=max_age_hours)
+    fresh: dict[str, dict[str, Any]] = {}
+    for r in raw:
+        try:
+            row = _row_for(r, now)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("news item skipped: %s", describe_error(exc))
+            continue
+        if row is None or row["published_at"] < cutoff:
+            continue
+        fresh.setdefault(row["url"], row)
     if not fresh:
         return 0
     existing = set(session.scalars(select(NewsItem.url).where(NewsItem.url.in_(list(fresh)))).all())
+    rows = [row for url, row in fresh.items() if url not in existing]
+    if not rows:
+        return 0
+    try:
+        session.add_all([NewsItem(**row) for row in rows])
+        session.commit()
+        return len(rows)
+    except SQLAlchemyError as exc:
+        session.rollback()
+        log.warning("news batch insert failed (%s); inserting one by one", describe_error(exc))
     inserted = 0
-    for url, r in fresh.items():
-        if url in existing:
-            continue
-        session.add(
-            NewsItem(
-                source=r.source,
-                source_name=r.source_name,
-                url=url,
-                title=r.title,
-                summary=r.summary,
-                published_at=r.published_at,
-                source_coins=",".join(r.coins) or None,
-                source_votes=json.dumps(r.votes) if r.votes else None,
-            )
-        )
-        inserted += 1
-    session.commit()
+    for row in rows:
+        try:
+            session.add(NewsItem(**row))
+            session.commit()
+            inserted += 1
+        except SQLAlchemyError as exc:
+            session.rollback()
+            log.warning("news item %s skipped: %s", row["url"][:200], describe_error(exc))
     return inserted
 
 
+def clamp_future_items(session: Session, now: datetime | None = None) -> int:
+    """Pull stored items dated in the future back to their fetch time (rows from before the
+    ingestion clamp existed)."""
+    now = now or datetime.now(UTC)
+    rows = session.scalars(select(NewsItem).where(NewsItem.published_at > now)).all()
+    for it in rows:
+        fetched = aware(it.fetched_at) if it.fetched_at else now
+        it.published_at = min(fetched, now)
+    if rows:
+        session.commit()
+    return len(rows)
+
+
+NEWS_RETENTION_DAYS = 30  # far beyond the 48-hour windows and the 3 days on /news
+
+
+def prune_old_news(session: Session, now: datetime | None = None) -> int:
+    cutoff = (now or datetime.now(UTC)) - timedelta(days=NEWS_RETENTION_DAYS)
+    # No in-session evaluation: SQLite hands back naive datetimes, the cutoff is aware.
+    stmt = delete(NewsItem).where(NewsItem.published_at < cutoff)
+    result = session.execute(stmt.execution_options(synchronize_session=False))
+    session.commit()
+    return int(result.rowcount or 0)
+
+
 MARKET_MOOD_KEY = "market_mood"
+MARKET_MOOD_MAX_AGE = timedelta(hours=48)
 
 
 def save_market_mood(session: Session, mood: dict) -> None:
@@ -59,21 +144,58 @@ def save_market_mood(session: Session, mood: dict) -> None:
         session.add(Setting(key=MARKET_MOOD_KEY, value=payload))
     else:
         row.value = payload
+        row.updated_at = datetime.now(UTC)
     session.commit()
 
 
-def load_market_mood(session: Session) -> dict | None:
+def clear_market_mood(session: Session) -> None:
     row = session.get(Setting, MARKET_MOOD_KEY)
-    return json.loads(row.value) if row else None
+    if row is not None:
+        session.delete(row)
+        session.commit()
 
 
-def pending_items(session: Session, limit: int) -> list[NewsItem]:
+def load_market_mood(session: Session, now: datetime | None = None) -> dict | None:
+    """The stored Fear & Greed index, or None when there is none, it is unreadable or older
+    than 48 hours. The value is clamped to 0-100 and the label derived from it."""
+    row = session.get(Setting, MARKET_MOOD_KEY)
+    if row is None:
+        return None
+    try:
+        data = json.loads(row.value)
+        raw = float(data["value"])
+    except (TypeError, ValueError, KeyError):
+        return None
+    if not math.isfinite(raw):
+        return None
+    value = int(min(max(round(raw), 0), 100))
+    at = data.get("at")
+    when = None
+    if isinstance(at, str):
+        try:
+            when = aware(datetime.fromisoformat(at))
+        except ValueError:
+            when = None
+    if when is None and row.updated_at is not None:
+        when = aware(row.updated_at)
+    now = now or datetime.now(UTC)
+    if when is None or now - when > MARKET_MOOD_MAX_AGE:
+        return None
+    return {"value": value, "label": fear_greed_label(value), "at": at}
+
+
+def pending_items(session: Session, limit: int, since: datetime | None = None) -> list[NewsItem]:
+    """Unassessed items: never-tried ones first, newest fetched first."""
+    stmt = select(NewsItem).where(NewsItem.assessed.is_(False))
+    if since is not None:
+        stmt = stmt.where(NewsItem.published_at >= since)
     return list(
         session.scalars(
-            select(NewsItem)
-            .where(NewsItem.assessed.is_(False))
-            .order_by(NewsItem.published_at.desc())
-            .limit(limit)
+            stmt.order_by(
+                func.coalesce(NewsItem.assess_attempts, 0).asc(),
+                NewsItem.fetched_at.desc(),
+                NewsItem.id.desc(),
+            ).limit(limit)
         )
     )
 
@@ -93,6 +215,52 @@ def recent_items(session: Session, hours: int = 24, limit: int = 100) -> list[Ne
 def event_key_for(item: NewsItem) -> str:
     """Claude's event key, or the normalised title for items assessed before keys existed."""
     return item.event_key or ("title:" + normalize_key(item.title))
+
+
+_SECOND_LEVEL = {"co", "com", "org", "net", "ac", "gov", "edu", "ne", "or"}
+
+
+def outlet_of(item: NewsItem) -> str:
+    """Who published an article: the site's domain, or the publisher name for Google News
+    (whose links all point at news.google.com). Subdomains of one site count as one outlet."""
+    host = (urlsplit(item.url or "").hostname or "").lower().removeprefix("www.")
+    if item.source == "googlenews" or not host or host.endswith("news.google.com"):
+        return "name:" + (item.source_name or "").strip().lower()
+    labels = host.split(".")
+    keep = 3 if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in _SECOND_LEVEL else 2
+    return ".".join(labels[-keep:])
+
+
+# One outlet alone cannot make a news fact "groot" (impact 3), nor make a market-wide ("ALL")
+# claim count for every coin: that needs a second, independent outlet.
+MIN_CONFIRMING_OUTLETS = 2
+UNCONFIRMED_MAX_IMPACT = 2
+
+
+def _lead(members: list[NewsItem]) -> NewsItem:
+    """The article shown for a news fact: the first one published (not the most dramatic)."""
+    return min(members, key=lambda m: (_published(m), m.id or 0))
+
+
+def _outlet_mean_sentiment(members: list[NewsItem]) -> float | None:
+    """Mean sentiment with one vote per outlet (the mean of that outlet's articles)."""
+    per_outlet: dict[str, list[float]] = {}
+    for m in members:
+        if m.sentiment is not None:
+            per_outlet.setdefault(outlet_of(m), []).append(m.sentiment)
+    if not per_outlet:
+        return None
+    return sum(sum(v) / len(v) for v in per_outlet.values()) / len(per_outlet)
+
+
+def _event_impact(members: list[NewsItem]) -> int | None:
+    impacts = [m.impact for m in members if m.impact is not None]
+    if not impacts:
+        return None
+    impact = max(impacts)
+    if len({outlet_of(m) for m in members}) < MIN_CONFIRMING_OUTLETS:
+        impact = min(impact, UNCONFIRMED_MAX_IMPACT)
+    return impact
 
 
 def requeue_items_without_event_key(session: Session, hours: int = 48) -> int:
@@ -124,7 +292,7 @@ class CountStatus:
     """Whether an article weighs in the market sentiment, and why (not), in Dutch."""
 
     counts: bool
-    code: str  # counted | pending | irrelevant | too_old | other_coins | no_impact
+    code: str  # counted | pending | irrelevant | too_old | other_coins | no_impact | unconfirmed
     reason_nl: str
     coins: tuple[str, ...] = ()  # the tracked coins this article weighs for
 
@@ -158,13 +326,14 @@ class NewsGroup:
     """Articles about one news fact, for the /news list: the lead plus the other outlets."""
 
     key: str
-    lead: NewsItem  # highest impact, then newest
+    lead: NewsItem  # the first article published
     items: list[NewsItem]  # all articles, newest first
     status: CountStatus | None = None  # set by :func:`annotate_groups`
 
     @property
     def sources(self) -> int:
-        return len(self.items)
+        """Distinct outlets that ran this fact (several articles of one site count once)."""
+        return len({outlet_of(it) for it in self.items})
 
     @property
     def others(self) -> list[NewsItem]:
@@ -180,13 +349,11 @@ class NewsGroup:
 
     @property
     def sentiment(self) -> float | None:
-        scores = [it.sentiment for it in self.items if it.relevant and it.sentiment is not None]
-        return sum(scores) / len(scores) if scores else None
+        return _outlet_mean_sentiment([it for it in self.items if it.relevant])
 
     @property
     def impact(self) -> int | None:
-        impacts = [it.impact for it in self.items if it.relevant and it.impact is not None]
-        return max(impacts) if impacts else None
+        return _event_impact([it for it in self.items if it.relevant])
 
     def coin_list(self) -> list[str]:
         coins: list[str] = []
@@ -202,10 +369,19 @@ class NewsGroup:
         counting = [st for st in statuses if st.counts]
         if not counting:
             return statuses[self.items.index(self.lead)]
+        explicit = {c for it in self.items for c in it.coin_list() if c != "ALL"}
+        if not explicit & set(tracked) and self.sources < MIN_CONFIRMING_OUTLETS:
+            return CountStatus(
+                False,
+                "unconfirmed",
+                "marktbreed nieuws uit één bron: telt pas mee als een tweede bron het meldt",
+            )
         coins = tuple(dict.fromkeys(c for st in counting for c in st.coins))
+        if self.sources < MIN_CONFIRMING_OUTLETS:
+            coins = tuple(c for c in coins if c in explicit)
         reason = "telt mee voor " + ", ".join(coins)
-        if len(counting) > 1:
-            reason += f" · sentiment gemiddeld over {len(counting)} bronnen, hoogste impact"
+        if self.sources > 1 and len(counting) > 1:
+            reason += f" · sentiment gemiddeld over {self.sources} bronnen, hoogste impact"
         return CountStatus(True, "counted", reason, coins)
 
 
@@ -214,11 +390,7 @@ def group_items(items: list[NewsItem]) -> list[NewsGroup]:
     groups: dict[str, list[NewsItem]] = {}
     for it in items:
         groups.setdefault(event_key_for(it), []).append(it)
-    out = []
-    for key, members in groups.items():
-        lead = max(members, key=lambda m: (m.impact or 0, _published(m)))
-        out.append(NewsGroup(key, lead, members))
-    return out
+    return [NewsGroup(key, _lead(members), members) for key, members in groups.items()]
 
 
 def annotate_groups(
@@ -266,6 +438,8 @@ class MarketSentiment:
     high_impact: int
     top: list[NewsItem]  # the lead article per news fact; ``sources`` = how many outlets ran it
     articles: int = 0  # ``items`` counts news facts; this counts the articles behind them
+    # High-impact facts reported by at least two independent outlets.
+    confirmed_high_impact: int = 0
 
     def label(self) -> str:
         if self.items == 0:
@@ -288,13 +462,14 @@ class MarketSentiment:
             "items": self.items,
             "articles": self.articles,
             "high_impact": self.high_impact,
+            "confirmed_high_impact": self.confirmed_high_impact,
             "top": [
                 {
                     "title": t.title,
                     "sources": getattr(t, "sources", 1),
                     "summary_nl": t.summary_nl,
-                    "sentiment": t.sentiment,
-                    "impact": t.impact,
+                    "sentiment": getattr(t, "event_sentiment", t.sentiment),
+                    "impact": getattr(t, "event_impact", t.impact),
                     "url": t.url,
                     "published_at": t.published_at,
                 }
@@ -315,8 +490,10 @@ def market_sentiment(
     """Impact-weighted, time-decayed average sentiment of relevant news for one coin.
 
     Articles about the same news fact (same event key) are folded into one event first, so a
-    hack that twelve outlets report weighs like one hack, not twelve. The event takes the
-    highest impact and the average sentiment of its articles, and ages from its newest article.
+    hack that twelve outlets report weighs like one hack, not twelve. Within an event every
+    outlet has one vote on the sentiment; the impact is the highest of its articles, but at most
+    2 while only one outlet reports it; a market-wide ("ALL") fact needs two outlets before it
+    counts for a coin it does not name. The event ages from its newest article.
     """
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(hours=hours)
@@ -325,6 +502,7 @@ def market_sentiment(
             NewsItem.assessed.is_(True),
             NewsItem.relevant.is_(True),
             NewsItem.published_at >= cutoff,
+            NewsItem.published_at <= now,
         )
     ).all()
     events: dict[str, list[NewsItem]] = {}
@@ -339,12 +517,17 @@ def market_sentiment(
     weighted = 0.0
     total_w = 0.0
     high = 0
+    confirmed_high = 0
     articles = 0
     scored: list[tuple[float, NewsItem]] = []
     for members in events.values():
-        lead = max(members, key=lambda m: (m.impact or 0, _published(m)))
-        impact = lead.impact or 0
-        sentiment = sum(m.sentiment or 0.0 for m in members) / len(members)
+        outlets = len({outlet_of(m) for m in members})
+        named = any(coin in m.coin_list() for m in members)
+        if not named and outlets < MIN_CONFIRMING_OUTLETS:
+            continue  # a market-wide claim from a single outlet
+        lead = _lead(members)
+        impact = _event_impact(members) or 0
+        sentiment = _outlet_mean_sentiment(members) or 0.0
         age_h = max((now - max(_published(m) for m in members)).total_seconds() / 3600, 0.0)
         half_life = HORIZON_HALF_LIFE_H.get(lead.horizon or "days", 36.0)
         decay = math.exp(-math.log(2) * age_h / half_life)
@@ -352,18 +535,32 @@ def market_sentiment(
         weighted += sentiment * w
         total_w += w
         high += 1 if impact >= 2 else 0
+        confirmed_high += 1 if impact >= 2 and outlets >= MIN_CONFIRMING_OUTLETS else 0
         articles += len(members)
-        lead.sources = len(members)  # type: ignore[attr-defined]  # shown as "n bronnen"
+        lead.sources = outlets  # type: ignore[attr-defined]  # shown as "n bronnen"
+        lead.event_sentiment = sentiment  # type: ignore[attr-defined]
+        lead.event_impact = impact  # type: ignore[attr-defined]
         scored.append((w, lead))
     scored.sort(key=lambda x: -x[0])
     score = weighted / total_w if total_w > 0 else 0.0
     return MarketSentiment(
-        coin, score, len(events), high, [it for _, it in scored[:5]], articles=articles
+        coin,
+        score,
+        len(scored),
+        high,
+        [it for _, it in scored[:5]],
+        articles=articles,
+        confirmed_high_impact=confirmed_high,
     )
 
 
 def _published(item: NewsItem) -> datetime:
     return item.published_at if item.published_at.tzinfo else item.published_at.replace(tzinfo=UTC)
+
+
+# After this many failed Claude assessments an item is set aside instead of retried forever.
+MAX_ASSESS_ATTEMPTS = 3
+FAILED_SUMMARY_NL = "Beoordeling door Claude mislukt; bericht overgeslagen."
 
 
 class NewsService:
@@ -382,45 +579,115 @@ class NewsService:
         self.batch_size = batch_size
         self.last_run: datetime | None = None
         self.last_error: str | None = None
+        self._lock = asyncio.Lock()  # one refresh at a time (scheduler and the button)
+
+    def _next_batch(self, session: Session, since: datetime) -> list[NewsItem]:
+        """Fresh items in one batch; items that failed before go one at a time, so one bad
+        article cannot keep a whole batch from being scored."""
+        batch = pending_items(session, max(self.batch_size, 1), since=since)
+        fresh = [it for it in batch if not it.assess_attempts]
+        return fresh or batch[:1]
+
+    def _count_failure(self, session: Session, items: list[NewsItem], now: datetime) -> int:
+        """Add one failed attempt to ``items``; quarantine those at MAX_ASSESS_ATTEMPTS."""
+        quarantined = 0
+        for it in items:
+            if it.assessed:
+                continue
+            it.assess_attempts = (it.assess_attempts or 0) + 1
+            if it.assess_attempts >= MAX_ASSESS_ATTEMPTS:
+                it.assessed, it.assessed_at = True, now
+                it.assessment_model = self.analyst.model
+                it.relevant, it.sentiment, it.impact = False, 0.0, 0
+                it.coins, it.event_key = "", None
+                it.summary_nl = FAILED_SUMMARY_NL
+                quarantined += 1
+                log.warning(
+                    "news item %s set aside after %d failed assessments",
+                    it.id,
+                    MAX_ASSESS_ATTEMPTS,
+                )
+        session.commit()
+        return quarantined
 
     async def refresh(self, session: Session, max_batches: int = 4) -> dict[str, int | str | None]:
         """Fetch new items and assess pending ones. Safe to call from the scheduler or UI."""
-        fetched = await self.fetcher.fetch_all()
-        inserted = store_items(session, fetched, self.max_age_hours)
+        async with self._lock:
+            return await self._refresh(session, max_batches)
+
+    async def _refresh(self, session: Session, max_batches: int) -> dict[str, int | str | None]:
+        errors: list[str] = []
+        now = datetime.now(UTC)
+        fetched: list[RawItem] = []
+        inserted = 0
+        try:
+            fetched = await self.fetcher.fetch_all()
+            inserted = store_items(session, fetched, self.max_age_hours, now)
+        except Exception as exc:  # keep going: Fear & Greed and the assessment still run
+            session.rollback()
+            errors.append(f"nieuws ophalen mislukt: {describe_error(exc)}")
+            log.exception("News fetch failed")
+        try:
+            clamp_future_items(session, now)
+            prune_old_news(session, now)
+            prune_usage(session, now)
+        except Exception:  # noqa: BLE001
+            session.rollback()
+            log.exception("News housekeeping failed")
         fetch_mood = getattr(self.fetcher, "fetch_fear_greed", None)
-        mood = await fetch_mood() if fetch_mood else None
-        if mood:
-            save_market_mood(session, mood)
+        if fetch_mood is not None:
+            try:
+                mood = await fetch_mood()
+                if mood:
+                    save_market_mood(session, mood)
+                else:  # switched off or failed: no stale value for Claude
+                    clear_market_mood(session)
+            except Exception:  # noqa: BLE001
+                session.rollback()
+                log.exception("Fear & Greed update failed")
         assessed = 0
-        self.last_error = None
+        since = now - timedelta(hours=self.max_age_hours)
         if self.analyst.available:
             for _ in range(max_batches):
-                batch = pending_items(session, self.batch_size)
+                batch = self._next_batch(session, since)
                 if not batch:
                     break
                 try:
                     results = await self.analyst.assess(
                         session, batch, self.coins, known_keys=recent_event_keys(session)
                     )
+                    n = apply_assessments(session, batch, results, self.analyst.model, self.coins)
                 except BudgetExceeded as exc:
-                    self.last_error = str(exc)
+                    session.rollback()
+                    errors.append(str(exc))
                     log.warning("News assessment stopped: %s", exc)
                     break
-                except Exception as exc:  # keep the scheduler alive
-                    self.last_error = f"Claude-beoordeling mislukt: {exc}"
-                    log.exception("News assessment failed")
+                except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:
+                    # The API is down or slow: not the articles' fault, try again next run.
+                    session.rollback()
+                    errors.append(f"Claude-beoordeling mislukt: {describe_error(exc)}")
+                    log.warning("News assessment failed: %s", describe_error(exc))
                     break
-                n = apply_assessments(session, batch, results, self.analyst.model)
+                except Exception as exc:  # a batch Claude could not score: count it
+                    session.rollback()
+                    errors.append(f"Claude-beoordeling mislukt: {describe_error(exc)}")
+                    log.warning("News assessment failed: %s", describe_error(exc))
+                    self._count_failure(session, batch, now)
+                    continue
                 assessed += n
+                skipped = [it for it in batch if not it.assessed]
+                if skipped:  # Claude left these out; count it so they cannot loop forever
+                    self._count_failure(session, skipped, now)
                 if n == 0:
                     break  # Claude returned nothing usable; do not loop forever
         else:
-            self.last_error = "ANTHROPIC_API_KEY ontbreekt; nieuws wordt niet beoordeeld"
+            errors.append("ANTHROPIC_API_KEY ontbreekt; nieuws wordt niet beoordeeld")
+        self.last_error = "; ".join(dict.fromkeys(errors)) or None
         self.last_run = datetime.now(UTC)
         return {
             "fetched": len(fetched),
             "inserted": inserted,
             "assessed": assessed,
-            "pending": len(pending_items(session, 1000)),
+            "pending": len(pending_items(session, 1000, since=since)),
             "error": self.last_error,
         }

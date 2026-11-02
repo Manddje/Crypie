@@ -42,7 +42,7 @@
       <p class="small muted">Score {{ s.score|num }} op een schaal van -1 tot +1 · {{ s.items }} nieuwsfeit{{ "en" if s.items != 1 }} uit {{ s.articles }} bericht{{ "en" if s.articles != 1 }}{% if s.high_impact %}, waarvan {{ s.high_impact }} met grote impact{% endif %} · laatste 48 uur</p>
       {% if s.top %}
       <ul class="list small" style="margin-top: 12px">
-        {% for t in s.top[:3] %}<li><a href="{{ t.url }}" target="_blank" rel="noopener" style="color: inherit">{{ t.summary_nl or t.title }}</a>{% if t.sources is defined and t.sources > 1 %} <span class="muted nowrap">· {{ t.sources }} bronnen</span>{% endif %}</li>{% endfor %}
+        {% for t in s.top[:3] %}<li>{% if t.safe_url %}<a href="{{ t.safe_url }}" target="_blank" rel="noopener noreferrer" style="color: inherit">{{ t.summary_nl or t.title }}</a>{% else %}{{ t.summary_nl or t.title }}{% endif %}{% if t.sources is defined and t.sources > 1 %} <span class="muted nowrap">· {{ t.sources }} bronnen</span>{% endif %}</li>{% endfor %}
       </ul>
       {% endif %}
     </section>
@@ -66,7 +66,7 @@
         </nav>
       </div>
     </div>
-    <p class="card-desc">Berichten over hetzelfde nieuwsfeit staan bij elkaar; het sentiment is dan het gemiddelde van die bronnen, de impact de hoogste. Bij elk nieuwsfeit staat of het nu meetelt in het sentiment van jouw coins en zo niet, waarom: nog niet beoordeeld, niet koersrelevant, ouder dan 48 uur, over andere coins, of impact 0. Van de {{ n_total }} nieuwsfeit{{ "en" if n_total != 1 }} in deze periode {{ "telt" if n_counted == 1 else "tellen" }} er {{ n_counted }} mee. Bronnen: {{ settings.news_rss_feeds|length }} RSS-feeds{% if settings.gdelt_enabled %}, GDELT (wereldnieuws){% endif %}{% if settings.cryptopanic_token %}, CryptoPanic{% endif %}.</p>
+    <p class="card-desc">Berichten over hetzelfde nieuwsfeit staan bij elkaar; het sentiment is dan het gemiddelde van die bronnen (één stem per bron), de impact de hoogste. Meldt maar één bron een feit, dan telt het hooguit als impact middel, en marktbreed nieuws telt pas mee als een tweede bron het meldt. Bij elk nieuwsfeit staat of het nu meetelt in het sentiment van jouw coins en zo niet, waarom: nog niet beoordeeld, niet koersrelevant, ouder dan 48 uur, over andere coins, of impact 0. Van de {{ n_total }} nieuwsfeit{{ "en" if n_total != 1 }} in deze periode {{ "telt" if n_counted == 1 else "tellen" }} er {{ n_counted }} mee. Bronnen: {{ settings.news_rss_feeds|length }} RSS-feeds{% if settings.gdelt_enabled %}, GDELT (wereldnieuws){% endif %}{% if settings.cryptopanic_token %}, CryptoPanic{% endif %}.</p>
     {% for g in groups %}
     {% set it = g.lead %}
     <article class="news-item {{ 'dim' if not g.status.counts and g.status.code != 'pending' else '' }}">
@@ -80,14 +80,14 @@
           {% if g.status.counts %}<span class="pill pill-green" title="{{ g.status.reason_nl }}">telt mee</span>{% else %}<span class="pill" title="{{ g.status.reason_nl }}">telt niet mee</span>{% endif %}
           <span class="count-reason">{{ g.status.reason_nl }}</span>
         </div>
-        <a class="title" href="{{ it.url }}" target="_blank" rel="noopener">{{ it.title }}</a>
+        {% if it.safe_url %}<a class="title" href="{{ it.safe_url }}" target="_blank" rel="noopener noreferrer">{{ it.title }}</a>{% else %}<span class="title">{{ it.title }}</span>{% endif %}
         {% if it.summary_nl %}<div class="summary">{{ it.summary_nl }}</div>{% endif %}
-        {% if g.sources > 1 %}
+        {% if g.others %}
         <details class="news-others">
           <summary>Ook gemeld door {{ g.others|map(attribute="source_name")|unique|join(", ") }}</summary>
           <ul>
             {% for o in g.others %}
-            <li><span class="muted nowrap">{{ o.published_at|dt }} · {{ o.source_name }}</span> <a href="{{ o.url }}" target="_blank" rel="noopener">{{ o.title }}</a>{% if o.sentiment is not none and o.relevant %} <span class="muted nowrap">({{ o.sentiment|num }})</span>{% endif %}{% if o.counting is defined and o.counting.code != g.status.code %} <span class="muted">· {{ o.counting.reason_nl }}</span>{% endif %}</li>
+            <li><span class="muted nowrap">{{ o.published_at|dt }} · {{ o.source_name }}</span> {% if o.safe_url %}<a href="{{ o.safe_url }}" target="_blank" rel="noopener noreferrer">{{ o.title }}</a>{% else %}{{ o.title }}{% endif %}{% if o.sentiment is not none and o.relevant %} <span class="muted nowrap">({{ o.sentiment|num }})</span>{% endif %}{% if o.counting is defined and o.counting.code != g.status.code %} <span class="muted">· {{ o.counting.reason_nl }}</span>{% endif %}</li>
             {% endfor %}
           </ul>
         </details>
