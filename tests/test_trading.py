@@ -339,21 +339,24 @@ async def test_news_exit_when_high_impact_negative_news(session):
     engine = make_engine_(session, {"BTC-EUR": candles(FLAT_SERIES)}, {"BTC-EUR": 10.0}, decider)
     await engine.broker.market_order(session, "BTC-EUR", "buy", 50, reason="setup")
     session.add(Position(mode="paper", market="BTC-EUR", amount=5, entry_price=10, entry_quote=50))
-    session.add(
-        NewsItem(
-            source="rss",
-            source_name="x",
-            url="u",
-            title="Exchange hacked",
-            published_at=datetime.now(UTC) - timedelta(hours=1),
-            assessed=True,
-            relevant=True,
-            sentiment=-0.9,
-            impact=3,
-            horizon="days",
-            coins="ALL",
+    # News alone only moves money when two different outlets report it (F36).
+    for outlet in ("CoinDesk", "The Block"):
+        session.add(
+            NewsItem(
+                source="rss",
+                source_name=outlet,
+                url=f"https://{outlet}/hack",
+                title="Exchange hacked",
+                published_at=datetime.now(UTC) - timedelta(hours=1),
+                assessed=True,
+                relevant=True,
+                sentiment=-0.9,
+                impact=3,
+                horizon="days",
+                coins="ALL",
+                event_key="exchange-hack",
+            )
         )
-    )
     session.commit()
     (result,) = await engine.run_cycle(session)
     assert result.executed and result.action == "sell"
@@ -361,11 +364,11 @@ async def test_news_exit_when_high_impact_negative_news(session):
     assert session.query(Position).one().close_reason == "news_exit"
 
 
-def positive_news(sentiment=0.9):
+def positive_news(sentiment=0.9, outlet="x"):
     return NewsItem(
         source="rss",
-        source_name="x",
-        url="u2",
+        source_name=outlet,
+        url=f"https://{outlet}/etf",
         title="Spot ETF approved",
         published_at=datetime.now(UTC) - timedelta(hours=1),
         assessed=True,
@@ -382,7 +385,7 @@ async def test_strong_positive_news_lets_claude_buy_a_smaller_position(session):
         TradeDecision(action="buy", confidence=0.8, amount_quote=100, reasoning_nl="ETF.")
     )
     engine = make_engine_(session, {"BTC-EUR": candles(FLAT_SERIES)}, {"BTC-EUR": 10.0}, decider)
-    session.add(positive_news())
+    session.add_all([positive_news(outlet="CoinDesk"), positive_news(outlet="Decrypt")])
     session.commit()
     (result,) = await engine.run_cycle(session)
     assert result.signal == "hold" and result.executed and result.action == "buy"
@@ -546,7 +549,8 @@ async def test_fallback_indicators_follows_signal_when_budget_exhausted(session)
     )
     (result,) = await engine.run_cycle(session)
     assert result.action == "buy" and result.executed and result.source == "rules"
-    assert open_position(session, "paper", "BTC-EUR").entry_quote == 100.0
+    # Without Claude the signal is followed with half the budget (F43).
+    assert open_position(session, "paper", "BTC-EUR").entry_quote == 50.0
 
 
 async def test_paused_blocks_buys_but_allows_signal_sell(session):

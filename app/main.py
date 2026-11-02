@@ -7,6 +7,7 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -109,6 +110,23 @@ def build_broker(settings: Settings, client: BitvavoClient) -> Broker:
     return PaperBroker(client, settings.paper_start_eur, settings.trading_fee_pct)
 
 
+def exit_broker(app: FastAPI, mode: str) -> Broker | None:
+    """The broker that protects open positions of ``mode`` when it is not the active mode.
+
+    Live positions stay protected after a switch to paper for as long as the environment
+    still allows live trading (key plus LIVE_TRADING_ACK); otherwise None: unprotected.
+    """
+    state = app.state
+    if mode == "live":
+        if live_blocker(state.env, state.client):
+            return None
+        return LiveBroker(state.client)
+    if mode == "paper":
+        settings: Settings = state.settings
+        return PaperBroker(state.client, settings.paper_start_eur, settings.trading_fee_pct)
+    return None
+
+
 def build_auth(settings: Settings) -> AuthService | None:
     """Login is on unless AUTH_ENABLED=false; the account itself is created at /setup."""
     if not settings.auth_enabled:
@@ -151,6 +169,7 @@ def apply_settings(app: FastAPI, new: Settings) -> None:
     engine.fee_pct = new.trading_fee_pct
     engine.watch_max_min = new.watch_max_min
     engine.trend_context = new.trend_context_enabled
+    engine.live_capital_eur = new.live_capital_eur
     _apply_risk_off(engine, new)
     if new.watch_interval_min <= 0:
         engine.watch.clear()
@@ -198,7 +217,13 @@ async def lifespan(app: FastAPI):
     app.state.client = client
     if client.authenticated:
         # Use the account's real taker fee when Bitvavo tells us; otherwise the configured one.
-        real_fee = await client.taker_fee_pct()
+        # Best-effort: an unreachable Bitvavo must never keep the app (and its kill switch)
+        # from starting.
+        try:
+            real_fee = await asyncio.wait_for(client.taker_fee_pct(), FEE_PROBE_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Bitvavo fee probe failed (%s); using TRADING_FEE_PCT", exc)
+            real_fee = None
         if real_fee is not None and real_fee != settings.trading_fee_pct:
             log.info("Bitvavo taker fee is %.4f%%, overriding TRADING_FEE_PCT", real_fee)
             settings = settings.model_copy(update={"trading_fee_pct": real_fee})
@@ -258,11 +283,24 @@ async def lifespan(app: FastAPI):
         settings.trading_fee_pct,
         settings.watch_max_min,
     )
-    app.state.engine.trend_context = settings.trend_context_enabled
-    _apply_risk_off(app.state.engine, settings)
+    engine: TradingEngine = app.state.engine
+    engine.trend_context = settings.trend_context_enabled
+    engine.live_capital_eur = settings.live_capital_eur
+    engine.broker_for_mode = lambda mode: exit_broker(app, mode)
+    _apply_risk_off(engine, settings)
+    with SessionLocal() as session:
+        engine.load_state(session)
+        # Orders sent before a crash or restart whose outcome was never recorded.
+        try:
+            settled = await asyncio.wait_for(engine.reconcile(session), RECONCILE_TIMEOUT_S)
+            if settled:
+                log.info("reconciled %d order(s) at startup", settled)
+        except Exception:  # noqa: BLE001 - retried by the exit loop
+            log.exception("order reconciliation at startup failed")
     # The schedulers read the interval and on/off switch from app.state.settings on every
     # tick, so a change in the portal takes effect within a tick, without a restart.
     tasks = [
+        asyncio.create_task(exit_scheduler(app)),
         asyncio.create_task(news_scheduler(app)),
         asyncio.create_task(trading_scheduler(app)),
         asyncio.create_task(watch_scheduler(app)),
@@ -279,6 +317,37 @@ async def lifespan(app: FastAPI):
 
 
 SCHEDULER_TICK_S = 30
+SCHED_LAST_PREFIX = "sched:last:"
+FEE_PROBE_TIMEOUT_S = 5.0
+RECONCILE_TIMEOUT_S = 60.0
+JOB_TIMEOUT_S = 1800.0  # no scheduled job may hang forever
+
+
+def _load_last_run(name: str) -> datetime | None:
+    """When ``name`` last started, as stored in the database (None when unknown)."""
+    try:
+        with SessionLocal() as session:
+            row = session.get(Setting, SCHED_LAST_PREFIX + name)
+            if row is None:
+                return None
+            when = datetime.fromisoformat(row.value)
+    except Exception:  # noqa: BLE001 - unreadable state means "unknown", never a crash
+        log.warning("ignoring unreadable scheduler state for %s", name)
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=UTC)
+
+
+def _save_last_run(name: str, when: datetime) -> None:
+    try:
+        with SessionLocal() as session:
+            row = session.get(Setting, SCHED_LAST_PREFIX + name)
+            if row is None:
+                session.add(Setting(key=SCHED_LAST_PREFIX + name, value=when.isoformat()))
+            else:
+                row.value = when.isoformat()
+            session.commit()
+    except Exception:  # noqa: BLE001
+        log.exception("could not store scheduler state for %s", name)
 
 
 async def _run_periodically(
@@ -288,28 +357,69 @@ async def _run_periodically(
     seconds_between,
     initial_delay: float,
     run_at_start: bool = True,
+    persist: bool = True,
+    timeout: float | None = JOB_TIMEOUT_S,
 ) -> None:
     """Run ``job(session)`` whenever ``seconds_between(settings)`` has passed since the last run.
 
     ``seconds_between`` returns 0 or less to switch the job off; it is re-read every tick.
-    With ``run_at_start`` False the first run waits one full interval.
+    With ``run_at_start`` False the first run waits one full interval. With ``persist`` the
+    start time of the last run is kept in the database, so a restart waits for the next due
+    time instead of running the job (and asking Claude) again right away. ``timeout`` stops a
+    run that hangs.
     """
     await asyncio.sleep(initial_delay)
-    loop = asyncio.get_running_loop()
-    last: float | None = None if run_at_start else loop.time()
+    last = _load_last_run(name) if persist else None
+    now = datetime.now(UTC)
+    if last is not None and last > now:
+        last = now  # a clock that went back: wait one interval rather than never run
+    if last is None and not run_at_start:
+        last = now
+        if persist:
+            _save_last_run(name, now)
     while True:
         interval = seconds_between(app.state.settings)
-        now = loop.time()
-        if interval > 0 and (last is None or now - last >= interval):
+        now = datetime.now(UTC)
+        if interval > 0 and (last is None or (now - last).total_seconds() >= interval):
             last = now
+            if persist:
+                _save_last_run(name, now)  # before the run: a crash loop does not re-run it
             try:
                 with SessionLocal() as session:
-                    await job(session)
+                    await asyncio.wait_for(job(session), timeout)
             except asyncio.CancelledError:
                 raise
+            except TimeoutError:
+                log.error("%s took longer than %.0f s and was stopped", name, timeout or 0)
             except Exception:
                 log.exception("%s failed", name)
         await asyncio.sleep(SCHEDULER_TICK_S)
+
+
+async def exit_scheduler(app: FastAPI) -> None:
+    """Every EXIT_CHECK_INTERVAL_MIN: settle unknown orders, then check the stop-loss, trailing
+    stop and take-profit of every open position.
+
+    Deliberately independent of TRADING_ENABLED, the kill switch, MARKETS, candles and Claude:
+    a position must stay protected whatever else is switched off or broken.
+    """
+
+    async def job(session: Session) -> None:
+        engine: TradingEngine = app.state.engine
+        await engine.reconcile(session)
+        results = await engine.run_exits(session)
+        if results:
+            log.info("exit check: %s", [r.as_dict() for r in results])
+
+    await _run_periodically(
+        app,
+        "exit check",
+        job,
+        lambda s: max(s.exit_check_interval_min, 1) * 60,
+        initial_delay=15,
+        persist=False,
+        timeout=300,
+    )
 
 
 async def news_scheduler(app: FastAPI) -> None:
@@ -340,6 +450,7 @@ async def trading_scheduler(app: FastAPI) -> None:
         job,
         lambda s: s.trade_interval_min * 60 if s.trading_enabled else 0,
         initial_delay=20,  # let news land first
+        timeout=None,  # every market already has its own deadline
     )
 
 
@@ -361,6 +472,7 @@ async def watch_scheduler(app: FastAPI) -> None:
         ),
         initial_delay=60,
         run_at_start=False,
+        timeout=None,  # every market already has its own deadline
     )
 
 
@@ -532,10 +644,12 @@ async def balance(broker: Broker = Depends(get_broker), session: Session = Depen
 
 
 class OrderIn(BaseModel):
-    market: str
-    side: str = Field(pattern="^(buy|sell)$")
-    amount_quote: float = Field(gt=0, description="Amount in EUR")
-    reason: str | None = None
+    market: str = Field(max_length=32)
+    side: Literal["buy", "sell"]
+    # Range and finiteness are checked by TradingEngine.manual_order (400 with a reason); a
+    # pydantic error would echo a NaN input back and fail to serialise.
+    amount_quote: float = Field(description="Amount in EUR")
+    reason: str | None = Field(default=None, max_length=200)
 
 
 @app.get("/api/orders")
@@ -561,15 +675,14 @@ async def list_orders(session: Session = Depends(get_session)):
 @app.post("/api/orders", status_code=201)
 async def create_order(
     order: OrderIn,
-    request: Request,
-    broker: Broker = Depends(get_broker),
+    engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
-    market = order.market.upper()
-    if market not in request.app.state.settings.markets:
-        raise HTTPException(400, f"{market} is not in MARKETS")
+    """A manual order under the bot's rules: see ``TradingEngine.manual_order``."""
     try:
-        o = await broker.market_order(session, market, order.side, order.amount_quote, order.reason)
+        o = await engine.manual_order(
+            session, order.market, order.side, order.amount_quote, order.reason
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except BitvavoError as exc:
@@ -933,6 +1046,11 @@ def _trading_status(engine: TradingEngine, session: Session, settings: Settings)
         "trades_today": risk.trades_today(session, engine.mode),
         "realized_pnl_today": round(risk.realized_pnl_today(session, engine.mode), 2),
         "performance_30d": performance_summary(session, engine.mode),
+        "exit_interval_min": settings.exit_check_interval_min,
+        "last_exit_run": engine.last_exit_run,
+        # Open positions the exit loop could not protect (their mode cannot trade now).
+        "unprotected_positions": engine.unprotected,
+        "live_capital_eur": engine.live_capital_eur,
     }
 
 
@@ -1537,10 +1655,11 @@ async def dashboard_order(
     client: BitvavoClient = Depends(get_client),
     broker: Broker = Depends(get_broker),
     budget: BudgetGuard = Depends(get_budget),
+    engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
     try:
-        await broker.market_order(session, market.upper(), side, amount_quote, reason="manual")
+        await engine.manual_order(session, market, side, amount_quote)
     except (ValueError, BitvavoError) as exc:
         ctx = await _dashboard_context(
             request, client, broker, budget, session, error=f"Order niet geplaatst: {exc}"

@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     shock_pause_hours: int = 6  # after highest-impact, strongly negative news; 0 = off
     event_calendar: Annotated[list[str], NoDecode] = default_calendar_lines()
     live_trading_ack: bool = False  # must be true to start in live mode
+    # Exit loop: stop-loss, trailing stop and take-profit of every open position, this often.
+    exit_check_interval_min: int = 2
+    # Live: EUR the bot may manage. 0 = the whole Bitvavo account (exposure and the daily loss
+    # limit are then computed over every balance on the account).
+    live_capital_eur: float = 0.0
     max_trade_eur: float = 100.0  # per order
     max_exposure_pct: float = 50.0  # of total portfolio value in coins
     daily_loss_limit_pct: float = 5.0  # realized+unrealized loss today -> pause for the day
@@ -96,6 +101,17 @@ class Settings(BaseSettings):
             # An empty env value (e.g. Coolify passing MARKETS="") means "use the default".
             return parsed or cls.model_fields["markets"].default
         return value
+
+    @field_validator("exit_check_interval_min", mode="after")
+    @classmethod
+    def _clamp_exit_interval(cls, value: int) -> int:
+        # Exits must never be switched off by a bad value; clamp instead of failing startup.
+        return min(max(int(value), 1), 60)
+
+    @field_validator("live_capital_eur", mode="after")
+    @classmethod
+    def _clamp_live_capital(cls, value: float) -> float:
+        return value if value == value and 0 <= value < float("inf") else 0.0
 
     @field_validator("event_calendar", mode="before")
     @classmethod
