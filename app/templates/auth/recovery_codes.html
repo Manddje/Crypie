@@ -10,7 +10,7 @@
   {% for c in codes %}<li class="mono">{{ c }}</li>{% endfor %}
 </ul>
 <div class="actions">
-  <button class="btn" type="button" onclick="navigator.clipboard && navigator.clipboard.writeText({{ codes|join('\n')|tojson }}).then(function(){ this.textContent='Gekopieerd' }.bind(this))">Kopiëren</button>
+  <button class="btn" type="button" data-copy="{{ codes|join('\n') }}" data-copied="Gekopieerd">Kopiëren</button>
   <a class="btn btn-primary" href="{{ next }}">Ik heb ze opgeslagen</a>
 </div>
 {% endblock %}

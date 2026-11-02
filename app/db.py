@@ -210,10 +210,31 @@ class AuthUser(Base):
     totp_last_counter: Mapped[int | None] = mapped_column(Integer, nullable=True)
     recovery_codes: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list of hashes
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Random per account, so cookies of a deleted account never fit a new one ("" = not set yet,
+    # filled in at startup).
+    account_id: Mapped[str] = mapped_column(String(64), default="")
+    # Bumped to log out every browser at once (password change, new authenticator, ...).
+    session_version: Mapped[int] = mapped_column(Integer, default=0)
+    # One-time code printed by the CLI that allows linking an authenticator (HMAC, not plain).
+    enrol_token_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    enrol_token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     @property
     def mfa_enrolled(self) -> bool:
         return bool(self.totp_secret)
+
+
+class AuthThrottle(Base):
+    """Failed login attempts per client address or account, kept across restarts."""
+
+    __tablename__ = "auth_throttle"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    failures: Mapped[int] = mapped_column(Integer, default=0)
+    blocked_until: Mapped[float] = mapped_column(Float, default=0.0)  # epoch seconds
+    last_failure: Mapped[float] = mapped_column(Float, default=0.0, index=True)  # epoch seconds
 
 
 def make_engine(url: str | None = None):
