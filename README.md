@@ -155,12 +155,14 @@ De lijst met onderdelen staat vanaf 1100 px breed in een vaste kolom links; smal
 onder de kop blijft staan en het blok in beeld markeert. Elk blok heeft een eigen opslaanknop
 (bijvoorbeeld *Handelen opslaan*); opslaan geldt alleen voor dat blok:
 
-- **Handelen**, in delen: *Modus en markten* (modus, automatisch handelen, markten, interval), *Kopen*
-  (gedrag zonder Claude, lange-termijntrend, dipbewaking) en *Bescherming* (exit-controle, risk-off,
-  schok-pauze, agenda). Bescherming blijft in dit formulier: het wachtwoordveld van Handelen beschermt
-  ook die velden;
+- **Handelen**, in delen: *Modus en markten* (modus, automatisch handelen, markten, interval) en
+  *Kopen* (gedrag zonder Claude, lange-termijntrend, dipbewaking);
+- **Bescherming**: exit-controle, risk-off, schok-pauze en agenda, met een eigen formulier en een eigen
+  wachtwoordveld (het stuurt `group=bescherming`), zodat je een beschermingsinstelling opslaat zonder de
+  modus en de markten. In de API en de omgeving horen deze velden nog bij Handelen;
 - **Harde limieten**;
-- **Kosten**: handelskosten per order en handelskosten in backtests;
+- **Kosten**: handelskosten per order en handelskosten in backtests. Geen limieten; de handelskosten
+  vragen wel je wachtwoord, omdat oefenorders ze betalen en de netto resultaten ermee rekenen;
 - **Claude**: maandbudget, model per taak en evaluatie-interval;
 - **Nieuws**: ophalen, beoordelen en bronnen;
 - **Weergave**: hoeveel dagen beslissingen op Handelen staan, met een eigen formulier (het stuurt
@@ -183,7 +185,11 @@ Wat je opslaat:
   maar niet opgeslagen velden zijn oranje gemarkeerd; een balk onderaan noemt ze, met *Wijzigingen
   terugdraaien*, en de browser waarschuwt als je de pagina verlaat. Sla je één blok op terwijl een ander
   blok ook wijzigingen heeft, dan vraagt de pagina eerst; die andere wijzigingen staan na het opslaan
-  weer in hun blok, nog als niet opgeslagen gemarkeerd.
+  weer in hun blok, nog als niet opgeslagen gemarkeerd, met erbij of het andere blok wel of niet is
+  opgeslagen. Op een telefoon is die balk één regel met *Opslaan* en *Terugdraaien*; *Standaard
+  herstellen* staat er weer zodra de wijzigingen opgeslagen of teruggedraaid zijn.
+- Een ingeklapt blok noemt onder de samenvatting wat aandacht vraagt, zoals een markt die Bitvavo niet
+  kent of een onbekend model, met een link die het blok bij dat veld opent.
 
 Niet in het portaal, met opzet: de sleutels (`BITVAVO_API_KEY`, `BITVAVO_API_SECRET`,
 `ANTHROPIC_API_KEY`, `CRYPTOPANIC_TOKEN`), `DATABASE_URL`, `LIVE_TRADING_ACK` en de plafonds van de
@@ -194,8 +200,8 @@ oefenmodus. Dezelfde instellingen zijn er als API: `GET/PUT /api/settings`,
 
 **Huidig wachtwoord bij gevoelige wijzigingen.** Wie de modus, automatisch handelen aan/uit
 (`TRADING_ENABLED`), de markten, een harde limiet (het hele blok Harde limieten), de handelskosten per
-order (blok Kosten), de exit-controle (`EXIT_CHECK_INTERVAL_MIN`), risk-off (aan/uit, het venster ervoor
-en erna, de agenda en de schok-pauze), het gedrag zonder Claude, het Claude-maandbudget of de RSS-feeds
+order (blok Kosten), de exit-controle (`EXIT_CHECK_INTERVAL_MIN`) en risk-off (aan/uit, het venster
+ervoor en erna, de agenda en de schok-pauze; samen het blok Bescherming), het gedrag zonder Claude, het Claude-maandbudget of de RSS-feeds
 wijzigt of terugzet, moet in dat blok het veld **Huidig wachtwoord** invullen. Hetzelfde geldt voor het
 resetten van de oefenportefeuille en voor handmatige orders zolang de bot live handelt. Andere
 instellingen (overige intervallen, modellen, nieuwsbronnen aan/uit) gaan zonder wachtwoord. Velden die
@@ -804,7 +810,9 @@ LIVE-bevestiging); terug op Instellingen kun je ze terugzetten of weggooien.
 **Eerste authenticator.** De QR-pagina noemt de tijdslimiet (10 minuten na het wachtwoord) met het
 tijdstip. *Later koppelen* logt je (na een bevestiging) uit. Was er nog nooit een authenticator gekoppeld,
 heeft het account nog nooit ingelogd en is er geen eenmalige code van de server, dan begin je in het
-eerste uur na het aanmaken opnieuw met dezelfde setup-link plus je wachtwoord. Daarna, na een herstart
+eerste uur na het aanmaken opnieuw met dezelfde setup-link plus je wachtwoord, en alleen in de browser
+waarin je het account aanmaakte (die bewaart daarvoor een ondertekend cookie, ook na *Later koppelen*).
+In een andere browser, daarna, na een herstart
 (een willekeurig token verandert dan en de log toont het niet meer zodra het account bestaat) en na
 `reset-mfa` of `create-account` werkt alleen de eenmalige code van `python -m app.auth reset-mfa`: wie
 alleen de log kan lezen, kan zo geen eigen authenticator koppelen. De herstelcodes kun je downloaden (.txt),
