@@ -5,11 +5,29 @@
 #
 # Postgres is NOT part of this file: on Coolify the app talks to a separate managed Postgres
 # resource via DATABASE_URL. For local development docker-compose.override.yaml (picked up
-# automatically by `docker compose up`) adds a Postgres container and publishes port 8000.
+# automatically by `docker compose up`) adds a Postgres container and publishes port 8000 on
+# localhost.
 services:
   app:
     build: .
     restart: unless-stopped
+    # Hardening: the code in the image is read-only, only /srv/data (volume) and /tmp are
+    # writable, no Linux capabilities, no privilege escalation.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Resource limits so a runaway process cannot starve the host (and the other apps on it).
+    mem_limit: ${CRYPIE_MEM_LIMIT:-768m}
+    memswap_limit: ${CRYPIE_MEM_LIMIT:-768m}
+    pids_limit: 256
+    cpus: ${CRYPIE_CPUS:-1.0}
+    volumes:
+      # Only used when DATABASE_URL points at SQLite (sqlite:///./data/...); harmless otherwise.
+      - crypie-data:/srv/data
     environment:
       TRADING_MODE: ${TRADING_MODE:-paper}
       BITVAVO_API_KEY: ${BITVAVO_API_KEY:-}
@@ -17,7 +35,8 @@ services:
       MARKETS: ${MARKETS:-BTC-EUR,ETH-EUR}
       PAPER_START_EUR: ${PAPER_START_EUR:-1000}
       # On Coolify: the internal URL of the Postgres resource, with the postgresql+psycopg scheme.
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://crypie:${POSTGRES_PASSWORD:-crypie}@db:5432/crypie}
+      # Required: there is deliberately no default (and so no default password).
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL (see .env.example)}
       # Claude
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_MONTHLY_BUDGET_USD: ${CLAUDE_MONTHLY_BUDGET_USD:-100}
@@ -49,6 +68,12 @@ services:
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
       SESSION_SECRET: ${SESSION_SECRET:-}
       AUTH_SESSION_HOURS: ${AUTH_SESSION_HOURS:-24}
+      # Proxies allowed to set X-Forwarded-For/-Proto (read by uvicorn). Default: loopback and the
+      # private ranges in which Coolify's Traefik reaches the container. Never use "*".
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
     # Only exposed inside the Docker network; Coolify's proxy routes the domain to this port.
     expose:
       - "8000"
+
+volumes:
+  crypie-data:

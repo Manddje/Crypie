@@ -4,7 +4,8 @@
 services:
   app:
     ports:
-      - "8000:8000"
+      # Localhost only: plain http, so never reachable from other machines.
+      - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -14,7 +15,8 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: crypie
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crypie}
+      # No default: set it in .env (see .env.example) and use the same value in DATABASE_URL.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (see .env.example)}
       POSTGRES_DB: crypie
     volumes:
       - pgdata:/var/lib/postgresql/data
