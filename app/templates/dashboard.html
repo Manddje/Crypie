@@ -2,132 +2,170 @@
 {% import "_macros.html" as ui %}
 {% block title %}Crypie · Overzicht{% endblock %}
 {% block content %}
+{%- set live = mode == "live" -%}
+{%- set money = "echt geld" if live else "oefengeld" -%}
 <div class="page-header">
   <h1>Overzicht</h1>
   <p class="subtitle">
-    {% if settings.trading_mode == "live" %}Crypie handelt met echt geld op Bitvavo.{% else %}Crypie oefent met fictief geld; er gaan geen orders naar Bitvavo.{% endif %}
-    {% if settings.trading_enabled and settings.trade_interval_min > 0 %}Elke {{ settings.trade_interval_min }} minuten kijkt de bot naar de koers, de indicatoren en het nieuws.{% else %}De bot draait niet automatisch; je kunt op de pagina Handelen zelf een cyclus starten.{% endif %}
+    {% if live %}<strong>Live:</strong> Crypie handelt met echt geld op Bitvavo.{% else %}<strong>Oefenmodus:</strong> Crypie oefent met fictief geld; er gaan geen orders naar Bitvavo.{% endif %}
+    {% if health.enabled %}Elke {{ settings.trade_interval_min }} minuten kijkt de bot naar de koers, de indicatoren en het nieuws.{% else %}De bot draait niet automatisch; op Handelen kun je zelf een cyclus starten.{% endif %}
   </p>
 </div>
 
-<div class="stack">
-  {% if paused %}
-  {% call ui.notice("warn", "Handelen staat op pauze. Er wordt niets gekocht; open posities worden nog wel gesloten op stop-loss of take-profit.") %}
-    <form class="inline" method="post" action="/trading/action"><button class="btn btn-sm btn-primary" name="action" value="resume">Handelen hervatten</button></form>
-  {% endcall %}
-  {% endif %}
+<div class="stack dash">
   {{ ui.unprotected_notice(unprotected_positions) }}
   {{ ui.session_secret_notice(session_secret_weak) }}
-  {% for reminder in live_reminders %}{{ ui.notice("warn", reminder) }}{% endfor %}
-  {% if config_warning %}{{ ui.notice("warn", config_warning) }}{% endif %}
-  {% if strategy_warning %}{{ ui.notice("warn", strategy_warning) }}{% endif %}
-  {% if error %}{{ ui.notice("error", "Bitvavo is op dit moment niet bereikbaar. Koersen en saldo kunnen verouderd of leeg zijn. (" ~ error ~ ")") }}{% endif %}
-  {% if not settings.anthropic_api_key %}{{ ui.notice("info", "De Claude-sleutel (ANTHROPIC_API_KEY) is nog niet ingesteld. Nieuws wordt niet beoordeeld en beslissingen volgen alleen de regels.") }}{% endif %}
+  {% for reminder in live_reminders %}{{ ui.notice("warn", reminder, live=false) }}{% endfor %}
+  {% if config_warning %}{{ ui.notice("warn", config_warning, live=false) }}{% endif %}
+  {% if strategy_warning %}{{ ui.notice("warn", strategy_warning, live=false) }}{% endif %}
+  {% if price_problem %}
+  {% call ui.notice("warn", "", live=false, title="Koersen niet bijgewerkt:") %}
+    {{ price_problem }}.
+    {% if prices %}Je ziet de laatst bekende koersen{% if prices_at %} van {{ prices_at|dt }}{% endif %}; bedragen in euro rekenen daarmee.{% else %}Er zijn nog geen koersen bekend.{% endif %}
+    {% if not live %}Het oefensaldo staat in de app zelf en klopt gewoon.{% endif %}
+  {% endcall %}
+  {% endif %}
+  {% if balance_problem %}
+  {% call ui.notice("warn", "", live=false, title="Saldo niet bijgewerkt:") %}
+    {{ balance_problem }}.
+    {% if portfolio_before %}De portefeuillewaarde hieronder is de stand van {{ portfolio_before.at|dt }}.{% endif %}
+  {% endcall %}
+  {% endif %}
 
-  <section class="hero">
-    <div class="hero-row">
-      <div>
-        <div class="big-label">Portefeuille{% if settings.trading_mode == "paper" %} (oefengeld){% endif %}</div>
-        <div class="big-value">{{ portfolio.total_eur|eur if portfolio else "–" }}</div>
-        <div class="big-sub">
-          {% if portfolio %}
-            {{ portfolio.cash_eur|eur }} in euro · {{ portfolio.coins_eur|eur }} in crypto
-            {% if settings.trading_mode == "paper" %}· gestart met {{ settings.paper_start_eur|eur(0) }}{% endif %}
-          {% else %}Saldo kon niet worden opgehaald.{% endif %}
+  {# -- Hero: what it is worth, and whether the bot runs (status first on a phone) -- #}
+  <section class="hero dash-hero" aria-label="Portefeuille en status van de bot">
+    <div class="dash-hero-grid">
+      <div class="dash-hero-money">
+        <div class="hero-row">
+          <div>
+            <div class="big-label">Portefeuille ({{ money }})</div>
+            {% if portfolio %}
+            <div class="big-value money">{{ portfolio.total_eur|eur }}</div>
+            <div class="big-sub">{{ portfolio.cash_eur|eur }} in euro · {{ portfolio.coins_eur|eur }} in crypto{% if not live %} · gestart met {{ settings.paper_start_eur|eur(0) }}{% endif %}</div>
+            {% if portfolio.estimated %}<div class="big-sub">{{ portfolio.estimated|join(", ") }} tegen de instapkoers: er is nu geen koers bekend.</div>{% endif %}
+            {% if portfolio.missing %}<div class="big-sub">Zonder {{ portfolio.missing|join(", ") }}: daarvan is geen koers bekend.</div>{% endif %}
+            {% elif portfolio_before %}
+            <div class="big-value money">{{ portfolio_before.total_eur|eur }}</div>
+            <div class="big-sub">Stand van {{ portfolio_before.at|dt }}; Bitvavo gaf nu geen saldo.</div>
+            {% else %}
+            <div class="big-value">–</div>
+            <div class="big-sub">{% if live %}Het saldo kon niet worden opgehaald bij Bitvavo.{% else %}Het oefensaldo kon niet worden geladen.{% endif %}</div>
+            {% endif %}
+          </div>
+          {% if portfolio and not live and settings.paper_start_eur and not portfolio.missing %}
+          {% set change = portfolio.total_eur - settings.paper_start_eur %}
+          {% set change_pct = change / settings.paper_start_eur * 100 %}
+          <div>
+            <div class="big-label">Sinds start</div>
+            <div class="big-value is-md money {{ change|pnl_class }}">{{ change|eur(2, true) }}</div>
+            <div class="big-sub {{ change_pct|pnl_class(1) }}">{{ change_pct|pct }}</div>
+            <div class="big-sub">netto, incl. open posities en kosten{% if portfolio.estimated %} (geschat){% endif %}</div>
+          </div>
+          {% endif %}
         </div>
-      </div>
-      {% if portfolio and settings.trading_mode == "paper" %}
-      {% set change = portfolio.total_eur - settings.paper_start_eur %}
-      <div>
-        <div class="big-label">Sinds start</div>
-        <div class="big-value {{ 'pos' if change >= 0 else 'neg' }}" style="font-size: 32px">{{ change|eur }}</div>
-        <div class="big-sub {{ 'pos' if change >= 0 else 'neg' }}">{{ (change / settings.paper_start_eur * 100)|pct }}</div>
-      </div>
-      {% endif %}
-      <div class="hero-status">
-        {% if paused %}
-          <span class="pill pill-orange pill-lg"><span class="dot"></span>Gepauzeerd</span>
-        {% elif settings.trading_enabled %}
-          <span class="pill pill-green pill-lg"><span class="dot"></span>Bot actief</span>
-        {% else %}
-          <span class="pill pill-lg"><span class="dot"></span>Bot uitgeschakeld</span>
+        {% if positions_view.rows %}
+        {% set n = positions_view.rows|length %}
+        <p class="dash-hero-positions">
+          <a href="#open-posities">{{ n }} open {{ "positie" if n == 1 else "posities" }}</a>
+          {% if positions_view.pnl_eur is not none %}· <span class="money {{ positions_view.pnl_eur|pnl_class }}">{{ positions_view.pnl_eur|eur(2, true) }}</span> (<span class="{{ positions_view.pnl_pct|pnl_class(1) }}">{{ positions_view.pnl_pct|pct }}</span>) netto als je nu verkoopt{% endif %}
+        </p>
         {% endif %}
-        <span class="small muted">Laatste cyclus: {{ last_run|ago }}</span>
-        <a class="small" href="/trading">Naar handelen ›</a>
       </div>
+      <div class="dash-status" id="dash-status">{% include "_dashboard_status.html" %}</div>
     </div>
+    <p class="visually-hidden" role="status" id="dash-status-announce"></p>
   </section>
 
-  <section class="card chart-card" id="price-chart-card" data-markets='{{ settings.markets|tojson }}'>
-    <div class="card-header">
-      <h2>Koers en acties</h2>
-      <div class="chart-controls">
-        <div class="segmented" data-role="market" aria-label="Markt">
-          {% for m in settings.markets %}<button type="button" data-market="{{ m }}" {% if loop.first %}class="active"{% endif %}>{{ m.split("-")[0] }}</button>{% endfor %}
+  {# -- First run -- #}
+  {% if getting_started %}
+  <section class="card dash-start" id="aan-de-slag" aria-labelledby="aan-de-slag-title">
+    {{ ui.card_header("Aan de slag", 2, meta=getting_started.done ~ " van " ~ getting_started.steps|length ~ " stappen klaar", id="aan-de-slag-title") }}
+    <p class="card-desc">De bot draait al veilig met de standaardinstellingen{% if not live %} en {{ settings.paper_start_eur|eur(0) }} oefengeld{% endif %}. Met deze stappen stem je hem af op je eigen doel.</p>
+    <ol class="dash-steps">
+      {% for s in getting_started.steps %}
+      <li class="{{ 'is-done' if s.done else 'is-open' }}">
+        <span class="dash-step-mark" aria-hidden="true">{% if s.done %}{{ ui.icon("ok") }}{% else %}{{ loop.index }}{% endif %}</span>
+        <div class="dash-step-body">
+          <p class="dash-step-title">{{ s.title }} <span class="pill{{ ' pill-green' if s.done }}">{{ "klaar" if s.done else "nog te doen" }}</span></p>
+          <p class="small muted">{{ s.text }}</p>
+          {% if s.env or s.note %}<p class="caption muted">{% if s.env %}<span class="mono">{{ s.env }}</span> {% endif %}{{ s.note or "" }}</p>{% endif %}
+          {% if s.href %}<a class="card-link" href="{{ s.href }}">{{ s.link }}<span aria-hidden="true"> ›</span></a>{% endif %}
         </div>
-        <div class="segmented" data-role="period" aria-label="Periode">
-          {% for p in chart_periods %}<button type="button" data-period="{{ p }}" {% if p == "7d" %}class="active"{% endif %}>{{ p[:-1] }} {{ "dag" if p == "1d" else "dagen" }}</button>{% endfor %}
-        </div>
-      </div>
-    </div>
-    <p class="card-desc">De koers van Bitvavo met daarop wat de bot deed: elke koop en verkoop, en de momenten waarop Claude om advies is gevraagd. Beweeg over de grafiek voor details.</p>
-    <div class="chart-legend" aria-hidden="true">
-      <span class="key"><span class="swatch up"></span>Koop</span>
-      <span class="key"><span class="swatch down"></span>Verkoop, stop-loss of take-profit</span>
-      <span class="key"><span class="swatch circle"></span>Claude-advies zonder order</span>
-      <span class="key"><span class="swatch square"></span>Geblokkeerd door een regel</span>
-      <label class="key toggle"><input type="checkbox" id="price-chart-advice" checked> Adviezen tonen</label>
-    </div>
-    <div class="chart-wrap">
-      <div class="chart tall" id="price-chart" role="img" aria-label="Koersgrafiek met acties van de bot"></div>
-      <div class="chart-tooltip" id="price-chart-tooltip" hidden></div>
-    </div>
-    <p class="chart-status small muted" id="price-chart-status">Grafiek wordt geladen…</p>
-    <details class="advanced chart-table">
-      <summary>Acties in deze periode als lijst</summary>
-      <div id="price-chart-actions"></div>
-    </details>
+      </li>
+      {% endfor %}
+    </ol>
+    <form method="post" action="/dashboard/getting-started" class="mt-4">
+      <button class="btn btn-sm" type="submit" data-busy="Verbergen…">Deze kaart verbergen</button>
+    </form>
+  </section>
+  {% endif %}
+
+  {# -- Open positions: the current risk, right under the hero -- #}
+  <section class="card" id="open-posities" aria-labelledby="open-posities-title">
+    {{ ui.card_header("Open posities", 2, meta=modes_nl[mode].label if positions_view.rows else none, href="/trading#open-posities", link="Alle details op Handelen", id="open-posities-title") }}
+    {% if positions_view.rows %}
+    <p class="card-desc">Resultaat netto: na de kosten van de aankoop en van een verkoop nu ({{ fee_pct|num(2) }}% per kant).</p>
+    {% call ui.table_wrap("Open posities") %}
+    <table class="table-stack">
+      <tr><th scope="col">Markt</th><th class="num" scope="col">Hoeveelheid</th><th class="num" scope="col">Instap</th><th class="num" scope="col">Nu</th><th class="num" scope="col">Resultaat (netto)</th><th class="num" scope="col">Stop-loss</th><th class="num" scope="col">Take-profit</th></tr>
+      {% for r in positions_view.rows %}
+      {% set p = r.position %}
+      <tr>
+        <td class="nowrap"><strong>{{ p.market }}</strong><span class="sub">sinds {{ p.opened_at|dt }}</span></td>
+        <td class="num">{{ p.amount|amount }} {{ r.coin }}{% if r.value_eur is not none %}<span class="sub">{{ r.value_eur|eur }}</span>{% endif %}</td>
+        <td class="num">{{ p.entry_price|price_eur }}<span class="sub">{{ p.entry_quote|eur }} incl. kosten</span></td>
+        <td class="num">{{ r.price|price_eur if r.price else "–" }}</td>
+        <td class="num">{% if r.pnl_eur is not none %}<span class="money {{ r.pnl_eur|pnl_class }}">{{ r.pnl_eur|eur(2, true) }}</span><span class="sub {{ r.pnl_pct|pnl_class(1) }}">{{ r.pnl_pct|pct }}</span>{% else %}–{% endif %}</td>
+        <td class="num">{{ p.stop_price|price_eur if p.stop_price else "–" }}</td>
+        <td class="num">{{ p.take_profit_price|price_eur if p.take_profit_price else "–" }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endcall %}
+    {% if positions_view.rows|length > 1 and positions_view.pnl_eur is not none %}
+    <p class="small mt-2">Samen: <span class="money {{ positions_view.pnl_eur|pnl_class }}">{{ positions_view.pnl_eur|eur(2, true) }}</span> (<span class="{{ positions_view.pnl_pct|pnl_class(1) }}">{{ positions_view.pnl_pct|pct }}</span>) netto{% if not positions_view.complete %}, zonder de posities zonder koers{% endif %}.</p>
+    {% endif %}
+    {% else %}
+    {% if paused %}{% set why = "De noodstop staat aan, dus de bot koopt niets." %}
+    {% elif health.blockers %}{% set why = "De bot koopt nu niet: " ~ health.blockers[0] ~ "." %}
+    {% else %}{% set why = "De bot wacht op een koopsignaal van de strategie." %}{% endif %}
+    {{ ui.empty("Geen open posities", why ~ " Laatste cyclus: " ~ health.last_cycle|ago_text ~ ".", "/trading", "Beslissingen bekijken", symbol="wallet") }}
+    {% endif %}
+    {% if paper_positions %}
+    {% set n = paper_positions|length %}
+    {% call ui.notice("info", "", live=false) %}
+      Nog {{ n }} open {{ "oefenpositie" if n == 1 else "oefenposities" }} met fictief geld: {{ paper_positions|map(attribute="market")|join(", ") }}. Stop-loss en take-profit bewaken {{ "die" if n == 1 else "ze" }} nog, maar {{ "die staat" if n == 1 else "ze staan" }} niet op Bitvavo en {{ "telt" if n == 1 else "tellen" }} niet mee in je live portefeuille. Verkopen of de oefenportefeuille resetten kan alleen in Oefenmodus (<a href="/settings#trading">Instellingen › Handelen</a>).
+    {% endcall %}
+    {% endif %}
   </section>
 
-  <section class="card chart-card" id="portfolio-chart-card">
-    <div class="card-header">
-      <h2>Portefeuillewaarde</h2>
-      <span class="more muted small" id="portfolio-chart-range">laatste 7 dagen</span>
-    </div>
-    <p class="card-desc">Euro plus crypto tegen de koers van dat moment, teruggerekend uit het huidige saldo en de orders{% if settings.trading_mode == "paper" %}. De stippellijn is het startbedrag van {{ settings.paper_start_eur|eur(0) }}{% endif %}.</p>
-    <div class="chart-wrap">
-      <div class="chart short" id="portfolio-chart" role="img" aria-label="Waarde van de portefeuille over tijd"></div>
-      <div class="chart-tooltip" id="portfolio-chart-tooltip" hidden></div>
-    </div>
-    <p class="chart-status small muted" id="portfolio-chart-status">Grafiek wordt geladen…</p>
-  </section>
-
+  {# -- Prices and balance -- #}
   <div class="grid-2">
-    <section class="card">
-      <div class="card-header"><h2>Koersen</h2><span class="more muted small">Bitvavo, nu</span></div>
+    <section class="card" aria-labelledby="koersen-title">
+      {{ ui.card_header("Koersen", 2, meta=(("laatst bekend: " if price_problem else "Bitvavo, ") ~ prices_at|dt) if prices_at else none, id="koersen-title") }}
       {% if prices %}
       <table>
-        <tr><th>Markt</th><th class="num">Koers</th><th class="num">Nieuws (48u)</th></tr>
-        {% for market, p in prices.items() %}
+        <tr><th scope="col">Markt</th><th class="num" scope="col">Koers</th><th class="num" scope="col">Nieuws (48 uur)</th></tr>
+        {% for market in settings.markets %}
         {% set coin = market.split("-")[0] %}
         {% set s = sentiments|selectattr("coin", "equalto", coin)|first %}
         <tr>
           <td><strong>{{ coin }}</strong><span class="sub">{{ market }}</span></td>
-          <td class="num">€ {{ p|price }}</td>
+          <td class="num">{{ prices[market]|price_eur if prices.get(market) else "–" }}</td>
           <td class="num">{% if s %}<span class="pill {{ s.label()|sentiment_pill }}">{{ s.label() }}</span>{% else %}–{% endif %}</td>
         </tr>
         {% endfor %}
       </table>
       {% else %}
-      {{ ui.empty("Geen koersen beschikbaar", "Bitvavo gaf geen antwoord. Probeer het over een minuut opnieuw.") }}
+      {{ ui.empty("Geen koersen beschikbaar", "Bitvavo gaf geen antwoord en er is nog geen koers bekend. Probeer het over een minuut opnieuw.", symbol="chart") }}
       {% endif %}
     </section>
 
-    <section class="card">
-      <div class="card-header"><h2>Saldo</h2><span class="more muted small">{{ settings.trading_mode|nl }}</span></div>
+    <section class="card" aria-labelledby="saldo-title">
+      {{ ui.card_header("Saldo", 2, meta=modes_nl[mode].label ~ " · " ~ modes_nl[mode].money, id="saldo-title") }}
       {% if balances %}
       <table>
-        <tr><th>Munt</th><th class="num">Hoeveelheid</th><th class="num">Waarde</th></tr>
+        <tr><th scope="col">Munt</th><th class="num" scope="col">Hoeveelheid</th><th class="num" scope="col">Waarde</th></tr>
         {% for symbol, amt in balances.items() %}
         <tr>
           <td><strong>{{ symbol }}</strong></td>
@@ -137,43 +175,67 @@
         {% endfor %}
       </table>
       {% else %}
-      {{ ui.empty("Geen saldo beschikbaar", "Het saldo kon niet worden opgehaald bij Bitvavo." if settings.trading_mode == "live" else "Het oefensaldo kon niet worden geladen.") }}
+      {{ ui.empty("Geen saldo beschikbaar", "Het saldo kon niet worden opgehaald bij Bitvavo." if live else "Het oefensaldo kon niet worden geladen.", symbol="wallet") }}
       {% endif %}
     </section>
   </div>
 
-  <section class="card">
-    <div class="card-header"><h2>Open posities</h2><a class="more" href="/trading">Alle details ›</a></div>
-    {% if open_positions %}
-    <div class="table-wrap">
-    <table>
-      <tr><th>Markt</th><th class="num">Hoeveelheid</th><th class="num">Instap</th><th class="num">Nu</th><th class="num">Resultaat</th><th class="num">Stop-loss</th><th class="num">Take-profit</th></tr>
-      {% for p in open_positions %}
-      {% set cur = prices.get(p.market) %}
-      <tr>
-        <td class="nowrap"><strong>{{ p.market }}</strong><span class="sub">sinds {{ p.opened_at|dt }}</span></td>
-        <td class="num">{{ p.amount|amount }}</td>
-        <td class="num">€ {{ p.entry_price|price }}</td>
-        <td class="num">{{ ("€ " ~ cur|price) if cur else "–" }}</td>
-        <td class="num {{ 'pos' if cur and cur >= p.entry_price else ('neg' if cur else '') }}">{{ ((cur / p.entry_price - 1) * 100)|pct if cur else "–" }}</td>
-        <td class="num">{{ ("€ " ~ p.stop_price|price) if p.stop_price else "–" }}</td>
-        <td class="num">{{ ("€ " ~ p.take_profit_price|price) if p.take_profit_price else "–" }}</td>
-      </tr>
-      {% endfor %}
-    </table>
+  {# -- Charts (chart.js; without JavaScript the tables above carry the figures) -- #}
+  <section class="card chart-card" id="price-chart-card" data-markets='{{ settings.markets|tojson }}' aria-labelledby="price-chart-title">
+    {{ ui.card_header("Koers en acties", 2, id="price-chart-title") }}
+    <div class="chart-controls" hidden>
+      <div class="segmented chart-markets" data-role="market" role="group" aria-label="Markt">
+        {% for m in settings.markets %}<button type="button" data-market="{{ m }}"{% if loop.first %} class="active"{% endif %}>{{ m.split("-")[0] }}</button>{% endfor %}
+      </div>
+      <div class="segmented" data-role="period" role="group" aria-label="Periode">
+        {% for p in chart_periods %}<button type="button" data-period="{{ p }}"{% if p == "7d" %} class="active"{% endif %}>{{ p[:-1] }} {{ "dag" if p == "1d" else "dagen" }}</button>{% endfor %}
+      </div>
     </div>
-    {% else %}
-    {{ ui.empty("Geen open posities", "De bot wacht op een koopsignaal van de strategie. Laatste cyclus: " ~ last_run|ago ~ ".", "/trading", "Bekijk beslissingen") }}
-    {% endif %}
+    <p class="card-desc">De koers van Bitvavo met daarop wat de bot deed: elke koop en verkoop, de momenten waarop Claude om advies is gevraagd, en de keren dat een regel een order tegenhield. <span class="dash-hint-hover">Beweeg over de grafiek voor details,</span><span class="dash-hint-touch">Houd je vinger op de grafiek voor details,</span> of open de tabel onder de grafiek.</p>
+    <div class="chart-legend">
+      <span class="key"><span class="swatch up" aria-hidden="true"></span>Koop</span>
+      <span class="key"><span class="swatch down" aria-hidden="true"></span>Verkoop, stop-loss of take-profit</span>
+      <span class="key"><span class="swatch circle" aria-hidden="true"></span>Claude-advies zonder order</span>
+      <span class="key"><span class="swatch square" aria-hidden="true"></span>Geblokkeerd door een regel</span>
+      <label class="key toggle" hidden><input type="checkbox" id="price-chart-advice" checked> Claude-adviezen tonen</label>
+    </div>
+    <div class="chart-wrap" id="price-chart-wrap">
+      <div class="chart tall" id="price-chart" role="img" aria-label="Koersgrafiek" aria-describedby="price-chart-status"></div>
+      <div class="chart-tooltip" id="price-chart-tooltip" hidden></div>
+    </div>
+    <div class="chart-status small muted" id="price-chart-status" role="status">Zonder JavaScript is er geen grafiek; de koersen staan in de tabel Koersen.</div>
+    <details class="advanced chart-table" id="price-chart-details" hidden>
+      <summary>Koersen en acties als tabel</summary>
+      <div id="price-chart-actions"></div>
+    </details>
   </section>
 
+  <section class="card chart-card" id="portfolio-chart-card" aria-labelledby="portfolio-chart-title">
+    <div class="card-header">
+      <h2 class="card-title" id="portfolio-chart-title">Portefeuillewaarde</h2>
+      <span class="card-meta" id="portfolio-chart-range">laatste 7 dagen</span>
+    </div>
+    <p class="card-desc">Euro plus crypto tegen de koers van dat moment, teruggerekend uit het huidige saldo en de orders.{% if not live %} De stippellijn is het startbedrag van {{ settings.paper_start_eur|eur(0) }}.{% endif %}</p>
+    <div class="chart-legend">
+      <span class="key"><span class="swatch up" aria-hidden="true"></span>Koop (met de munt erbij)</span>
+      <span class="key"><span class="swatch down" aria-hidden="true"></span>Verkoop</span>
+      <span class="key"><span class="swatch circle" aria-hidden="true"></span>Meerdere orders in dezelfde periode</span>
+    </div>
+    <div class="chart-wrap" id="portfolio-chart-wrap">
+      <div class="chart short" id="portfolio-chart" role="img" aria-label="Waarde van de portefeuille" aria-describedby="portfolio-chart-status"></div>
+      <div class="chart-tooltip" id="portfolio-chart-tooltip" hidden></div>
+    </div>
+    <div class="chart-status small muted" id="portfolio-chart-status" role="status">Zonder JavaScript is er geen grafiek; de waarde staat bovenaan bij Portefeuille.</div>
+  </section>
+
+  {# -- Strategy, closed trades, Claude budget -- #}
   <div class="grid-3">
-    <section class="card">
-      <div class="card-header"><h3>Strategie</h3><a class="more" href="/strategy">Aanpassen ›</a></div>
-      <p><strong>{{ strategy.name }}</strong></p>
-      <p class="muted small">{{ strategy.market }} · candles van {{ strategy.interval|nl }}</p>
-      {% if strategy.description %}<p class="small" style="margin-top: 10px">{{ strategy.description }}</p>{% endif %}
-      <div class="chips" style="margin-top: 12px">
+    <section class="card dash-strategy" aria-labelledby="strategy-title">
+      {{ ui.card_header("Strategie", 2, href="/strategy", link="Naar Strategie", id="strategy-title") }}
+      <p class="fw-bold">{{ strategy.name }}</p>
+      <p class="small muted">Candles van {{ strategy.interval|nl }} · voor elke gevolgde markt</p>
+      {% if strategy.description %}<p class="small dash-oneline mt-2">{{ strategy.description }}</p>{% endif %}
+      <div class="chips mt-3">
         {% for ind in strategy.indicators %}<span class="chip">{{ ind|indicator_nl }}</span>{% endfor %}
         {% if strategy.stop_loss_pct %}<span class="chip">stop-loss {{ strategy.stop_loss_pct|num(0) }}%</span>{% endif %}
         {% if strategy.trailing_stop_pct %}<span class="chip">trailing stop {{ strategy.trailing_stop_pct|num(0) }}%</span>{% endif %}
@@ -181,23 +243,26 @@
       </div>
     </section>
 
-    <section class="card">
-      <div class="card-header"><h3>Resultaat 30 dagen</h3><a class="more" href="/trading">Details ›</a></div>
+    <section class="card" aria-labelledby="closed-title">
+      {{ ui.card_header("Gesloten trades · 30 dagen", 2, href="/journal", link="Naar Journaal", id="closed-title") }}
       {% if performance and performance.closed_positions %}
-      <div class="stats" style="grid-template-columns: 1fr 1fr">
-        {{ ui.stat("Resultaat", performance.total_pnl_eur|eur, None, "pos" if performance.total_pnl_eur >= 0 else "neg") }}
-        {{ ui.stat("Winstkans", performance.win_rate_pct|pct(0, false), performance.closed_positions ~ " gesloten") }}
+      {% set n = performance.closed_positions %}
+      {% set wins = ((performance.win_rate_pct or 0) * n / 100)|round|int %}
+      <div class="stats cols-2">
+        {{ ui.stat("Resultaat (netto)", performance.total_pnl_eur|eur(2, true), None, "money " ~ performance.total_pnl_eur|pnl_class) }}
+        {{ ui.stat("Winnende trades", performance.win_rate_pct|pct(0, false), wins ~ " van " ~ n) }}
       </div>
+      <p class="small muted mt-3">Alleen afgeronde trades, na kosten. Open posities tellen hier niet mee{% if not live %}; die zitten wel in 'Sinds start' bovenaan{% endif %}.</p>
       {% else %}
-      <p class="muted small">Nog geen afgeronde trades in de laatste 30 dagen. Zodra posities gesloten zijn, zie je hier het resultaat.</p>
+      <p class="muted small">Nog geen afgeronde trades in de laatste 30 dagen. Zodra een positie gesloten is, zie je hier het resultaat na kosten.</p>
       {% endif %}
     </section>
 
-    <section class="card">
-      <div class="card-header"><h3>Claude-budget</h3><span class="more muted small">deze maand</span></div>
+    <section class="card" aria-labelledby="budget-title">
+      {{ ui.card_header("Claude-budget", 2, meta="deze maand", id="budget-title") }}
       {% if budget %}
-      <div class="big-value" style="font-size: 26px; font-weight: 600">{{ "$ " ~ budget.spent_usd|num }} <span class="muted" style="font-size: 15px; font-weight: 400">van $ {{ budget.limit_usd|num(0) }}</span></div>
-      <div class="score-bar" style="margin-top: 12px" aria-hidden="true"><div class="fill pos" style="left: 0; right: auto; width: {{ [budget.pct, 100]|min }}%; background: {{ 'var(--red)' if budget.exhausted else ('var(--orange)' if budget.warning else 'var(--accent)') }}"></div></div>
+      <p class="metric">$ {{ budget.spent_usd|num }} <span class="metric-sub">van $ {{ budget.limit_usd|num(0) }}</span></p>
+      <progress class="meter{{ ' is-bad' if budget.exhausted else (' is-warn' if budget.warning else '') }}" value="{{ [budget.pct, 100]|min }}" max="100" aria-label="Deel van het Claude-budget dat gebruikt is">{{ budget.pct|num(0) }}%</progress>
       <p class="small {{ 'neg' if budget.exhausted else 'muted' }}">
         {% if budget.exhausted %}Budget is op: Claude wordt deze maand niet meer aangeroepen.{% elif budget.warning %}Bijna op ({{ budget.pct|num(0) }}%). Claude stopt automatisch bij de limiet.{% else %}{{ budget.pct|num(0) }}% gebruikt. Claude stopt automatisch bij de limiet.{% endif %}
       </p>
@@ -205,60 +270,87 @@
     </section>
   </div>
 
-  <div class="grid-2">
-    <section class="card">
-      <div class="card-header"><h2>Handmatige order</h2></div>
-      <p class="card-desc">Koop of verkoop direct tegen de marktprijs{% if settings.trading_mode == "paper" %} met oefengeld{% else %}. <strong>Dit plaatst een echte order op Bitvavo.</strong>{% endif %}</p>
-      <form method="post" action="/orders" data-confirm="Weet je zeker dat je deze order wilt plaatsen?">
-        <div class="form-row">
-          <label>Markt
-            <select name="market">{% for m in settings.markets %}<option>{{ m }}</option>{% endfor %}</select>
-          </label>
-          <label>Richting
-            <select name="side"><option value="buy">Kopen</option><option value="sell">Verkopen</option></select>
-          </label>
-          <label>Bedrag in euro
-            <input type="number" name="amount_quote" min="{{ settings.min_trade_eur|int }}" step="0.01" value="25" required inputmode="decimal">
-          </label>
-          {% if order_needs_password %}
-          <label>Huidig wachtwoord
-            <input type="password" name="current_password" autocomplete="current-password" maxlength="1024" required>
-          </label>
-          {% endif %}
-          <button class="btn btn-primary" type="submit">Order plaatsen</button>
+  {# -- Manual order: its result (dashboard_order) is shown here, where /#order lands -- #}
+  {% set rn = risk_now %}
+  {% set f = order_form %}
+  {% set pos = order_positions.get(f.market) %}
+  <section class="card dash-order" id="order" aria-labelledby="order-title">
+    {{ ui.card_header("Handmatige order", 2, meta=modes_nl[mode].label ~ " · " ~ modes_nl[mode].money, id="order-title") }}
+    <p class="card-desc">Koop of verkoop direct tegen de marktprijs{% if live %}. <strong>Dit plaatst een echte order met echt geld op Bitvavo.</strong>{% else %} met oefengeld; er gaat niets naar Bitvavo.{% endif %}</p>
+    {% for fl in order_flashes %}{{ ui.notice(fl.kind, fl.text, live=true) }}{% endfor %}
+    {% if paused %}{{ ui.notice("warn", "De noodstop staat aan: kopen kan niet, verkopen wel.", live=false) }}{% endif %}
+    {% if rn.orders_today >= rn.max_orders_per_day - 1 %}
+    {% call ui.notice("warn", "", live=false) %}
+      {% if rn.orders_limit_reached %}Het maximum aantal orders per dag is bereikt ({{ rn.orders_today }} van {{ rn.max_orders_per_day }}). Kopen kan weer vanaf {{ rn.resets_at|dt }}, voor jou en voor de bot; verkopen kan wel.{% else %}Je kunt vandaag nog 1 order plaatsen ({{ rn.orders_today }} van maximaal {{ rn.max_orders_per_day }} gebruikt). Daarna kopen jij en de bot niets meer tot {{ rn.resets_at|dt }}.{% endif %}
+    {% endcall %}
+    {% endif %}
+    <form method="post" action="/orders#order" id="order-form" class="dash-order-form"
+          data-mode="{{ mode }}" data-min-buy="{{ order_limits.min_buy }}" data-max-buy="{{ order_limits.max_buy }}" data-min-sell="{{ order_limits.min_sell }}"
+          data-positions='{{ order_positions|tojson }}' data-default-amount="{{ order_default_amount }}"
+          data-confirm="{{ 'LIVE · echt geld' if live else 'Oefenmodus (fictief geld)' }}: deze order plaatsen?">
+      <div class="form-row">
+        <label class="field">Markt
+          <select name="market" id="order-market">{% for m in settings.markets %}<option value="{{ m }}"{% if m == f.market %} selected{% endif %}>{{ m }}</option>{% endfor %}</select>
+        </label>
+        <fieldset class="field dash-side">
+          <legend class="field-label">Richting</legend>
+          <div class="seg-radio">
+            <label><input type="radio" name="side" value="buy"{% if f.side == "buy" %} checked{% endif %}><span>Kopen</span></label>
+            <label><input type="radio" name="side" value="sell"{% if f.side == "sell" %} checked{% endif %}><span>Verkopen</span></label>
+          </div>
+        </fieldset>
+        <div class="field dash-amount">
+          <label class="field-label" for="order-amount">Bedrag in euro</label>
+          <span class="unit-input"><span class="unit" aria-hidden="true">€</span><input type="text" inputmode="decimal" name="amount_quote" id="order-amount" value="{{ f.amount }}" autocomplete="off" maxlength="32" pattern="\s*[0-9]+([.,][0-9]{1,2})?\s*" placeholder="bijv. 25,00" aria-describedby="order-amount-check order-help"></span>
+          <output class="dash-amount-check" id="order-amount-check" for="order-amount"></output>
         </div>
-      </form>
-      <p class="form-help">Minimaal {{ settings.min_trade_eur|eur(0) }} per order. Handmatige orders tellen niet mee voor de daglimiet van de bot.{% if order_needs_password %} Omdat de bot live handelt, vraagt een order om je huidige wachtwoord.{% endif %}</p>
-    </section>
-
-    <section class="card">
-      <div class="card-header"><h2>Laatste orders</h2></div>
-      {% if orders %}
-      <div class="table-wrap">
-      <table>
-        <tr><th>Tijd</th><th>Markt</th><th>Kant</th><th class="num">Bedrag</th><th class="num">Kosten</th><th class="num">Koers</th><th>Status</th></tr>
-        {% for o in orders %}
-        <tr>
-          <td class="nowrap">{{ o.created_at|dt }}</td>
-          <td><strong>{{ o.market }}</strong>{% if o.reason %}<span class="sub clip" title="{{ o.reason }}">{{ o.reason|nl }}</span>{% endif %}</td>
-          <td><span class="pill {{ 'pill-green' if o.side == 'buy' else 'pill-red' }}">{{ o.side|nl }}</span></td>
-          <td class="num">{{ o.amount_quote|eur if o.amount_quote else "–" }}<span class="sub">{{ o.amount|amount if o.amount else "" }}</span></td>
-          <td class="num">{{ o.fee_quote|eur if o.fee_quote else "–" }}</td>
-          <td class="num">{{ ("€ " ~ o.price|price) if o.price else "–" }}</td>
-          <td>{{ o.status|nl }}</td>
-        </tr>
-        {% endfor %}
-      </table>
+        {% if order_needs_password %}
+        <label class="field">Huidig wachtwoord
+          <input type="password" name="current_password" autocomplete="current-password" maxlength="1024" required>
+        </label>
+        {% endif %}
       </div>
-      {% else %}
-      {{ ui.empty("Nog geen orders", "Orders van de bot en handmatige orders verschijnen hier.") }}
-      {% endif %}
-    </section>
-  </div>
+      <label class="inline-field dash-sell-all mt-3" id="order-sell-all"><input type="checkbox" name="sell_all" value="1"{% if f.sell_all %} checked{% endif %}> Hele positie verkopen <span class="muted fw-normal dash-sell-all-hint">(alleen bij Verkopen; het bedrag telt dan niet)</span></label>
+      <p class="form-help" id="order-position">{% if pos and pos.value_eur is not none %}Open positie in {{ f.market }}: {{ pos.amount|amount }} {{ pos.coin }} ≈ {{ pos.value_eur|eur }}.{% elif pos %}Open positie in {{ f.market }}: {{ pos.amount|amount }} {{ pos.coin }}.{% elif order_positions %}Open posities: {% for m, op in order_positions.items() %}{{ m }}{% if op.value_eur is not none %} ≈ {{ op.value_eur|eur }}{% endif %}{{ ", " if not loop.last }}{% endfor %}.{% else %}Je hebt geen open posities; verkopen kan alleen uit een open positie.{% endif %}</p>
+      <div class="actions mt-3">
+        <button class="btn btn-primary" type="submit" id="order-submit" data-busy="Order wordt geplaatst…">{{ "Echte order plaatsen" if live else "Order plaatsen" }}</button>
+      </div>
+    </form>
+    <p class="form-help" id="order-help">
+      Kopen: {{ order_limits.min_buy|eur }} tot {{ order_limits.max_buy|eur }} per order. Verkopen kan vanaf {{ order_limits.min_sell|eur }}; blijft er minder dan {{ order_limits.min_sell|eur }} over, dan wordt de hele positie verkocht.
+      Handmatige orders tellen mee voor het maximum aantal orders per dag (vandaag {{ rn.orders_today }} van {{ rn.max_orders_per_day }}) en vallen onder alle harde limieten; tijdens de noodstop kun je alleen verkopen.{% if order_needs_password %} Omdat de bot live handelt, vraagt een order om je huidige wachtwoord.{% endif %}
+    </p>
+  </section>
+
+  <section class="card" aria-labelledby="orders-title">
+    {{ ui.card_header("Laatste orders", 2, meta="alleen " ~ modes_nl[mode].label, id="orders-title") }}
+    {% if orders %}
+    {% call ui.table_wrap("Laatste orders") %}
+    <table class="table-stack">
+      <tr><th scope="col">Tijd</th><th scope="col">Markt</th><th scope="col">Kant</th><th class="num" scope="col">Bedrag</th><th class="num" scope="col">Koers</th><th class="num" scope="col">Kosten</th><th scope="col">Status</th></tr>
+      {% for o in orders %}
+      {% set why = o.reason|order_reason %}
+      <tr>
+        <td class="nowrap">{{ o.created_at|dt }}</td>
+        <td><strong>{{ o.market }}</strong>{% if why.source_nl or why.text %}<span class="sub clip">{{ why.source_nl }}{% if why.source_nl and why.text %}: {% endif %}{{ why.text }}</span>{% endif %}</td>
+        <td>{{ ui.side(o.side) }}</td>
+        <td class="num"><span class="money">{{ o.amount_quote|eur if o.amount_quote else "–" }}</span>{% if o.amount %}<span class="sub">{{ o.amount|amount }} {{ o.market.split("-")[0] }}</span>{% endif %}</td>
+        <td class="num">{{ o.price|price_eur if o.price else "–" }}</td>
+        <td class="num">{{ o.fee_quote|eur if o.fee_quote else "–" }}</td>
+        <td>{{ o.status|nl }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endcall %}
+    {% else %}
+    {{ ui.empty("Nog geen orders" ~ (" met echt geld" if live else ""), "Orders van de bot en handmatige orders verschijnen hier.", symbol="list") }}
+    {% endif %}
+  </section>
 </div>
 {% endblock %}
 {% block footer %}{% if rate_limit is not none %}<span>Bitvavo-limiet resterend: {{ rate_limit }}</span>{% endif %}{% endblock %}
 {% block scripts %}
 <script src="/static/vendor/lightweight-charts.standalone.production.js?v=5.2.1"></script>
 <script src="/static/chart.js?v={{ asset_version }}"></script>
+<script src="/static/dashboard.js?v={{ asset_version }}"></script>
 {% endblock %}

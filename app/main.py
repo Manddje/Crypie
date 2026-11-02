@@ -6,9 +6,12 @@ import asyncio
 import json
 import logging
 import re
+import time
+import weakref
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Literal
+from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Path, Query, Request
 from fastapi.encoders import jsonable_encoder
@@ -42,10 +45,17 @@ from app.auth.service import (
     load_or_create_session_secret,
     session_secret_is_weak,
 )
-from app.bitvavo.broker import PAPER_WALLET_KEY, Broker, LiveBroker, PaperBroker, recent_orders
+from app.bitvavo.broker import (
+    PAPER_WALLET_KEY,
+    Broker,
+    LiveBroker,
+    OrderUncertain,
+    PaperBroker,
+    recent_orders,
+)
 from app.bitvavo.client import BitvavoClient, BitvavoError, InvalidMarketError
 from app.config import Settings, get_settings
-from app.db import Evaluation, Position, SessionLocal, Setting, get_session, init_db
+from app.db import Evaluation, Order, Position, SessionLocal, Setting, get_session, init_db
 from app.news.service import (
     NEWS_RETENTION_DAYS,
     NewsService,
@@ -74,9 +84,10 @@ from app.strategy.model import (
     check_for_use,
     use_problems,
 )
-from app.strategy.store import load_strategy, load_strategy_checked, save_strategy
+from app.strategy.store import STRATEGY_KEY, load_strategy, load_strategy_checked, save_strategy
 from app.trading import risk
 from app.trading.engine import (
+    EXCHANGE_MIN_ORDER_EUR,
     NEWS_ENTRY_MIN_SCORE,
     NEWS_ENTRY_SIZE_FACTOR,
     NEWS_EXIT_MAX_SCORE,
@@ -84,12 +95,13 @@ from app.trading.engine import (
     TradingEngine,
     closed_positions,
     latest_decisions,
+    open_position,
     open_positions,
     performance_summary,
     recent_decisions,
 )
 from app.trading.events import parse_calendar
-from app.trading.health import bot_health, risk_now
+from app.trading.health import bot_health, describe_problem, risk_now
 from app.trading.history import (
     PERIODS,
     candle_dicts,
@@ -113,6 +125,11 @@ from app.trading.plan import PLAN_FIELDS, PLAN_MAX_LENGTH, TradingPlan, load_pla
 from app.trading.risk import RiskLimits
 from app.trading.trend import load_trends, refresh_trends
 from app.web import STATIC_DIR, templates
+from app.web import amount as fmt_amount
+from app.web import eur as fmt_eur
+from app.web import nl as fmt_nl
+from app.web import num as fmt_num
+from app.web import price_eur as fmt_price_eur
 
 log = logging.getLogger("crypie")
 # Uvicorn only configures its own loggers; without this the cycle and news results never show
@@ -2124,22 +2141,342 @@ async def settings_save(request: Request, session: Session = Depends(get_session
 
 # -- Dashboard -------------------------------------------------------------------------
 
+# Bitvavo can be slow or down. The overview waits at most this long for it and then shows
+# the last known prices (with their time); the paper balance is local and always shown.
+DASHBOARD_TIMEOUT_S = 3.0
+# Prices younger than this (from the exit loop, a cycle or another page view) are reused, and
+# after a failed fetch the overview waits this long before it asks Bitvavo again.
+PRICE_REUSE_S = 15.0
+# Per Bitvavo client: when the overview last failed to get prices (monotonic) and why.
+_price_failures: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+# The order form: the amount filled in for a new buy, and the longest amount text accepted.
+ORDER_DEFAULT_EUR = 25.0
+AMOUNT_MAX_LENGTH = 32
+_AMOUNT_RE = re.compile(r"(\d+)(?:[.,](\d+))?")
+_AMOUNT_CHARS = re.compile(r"[0-9 .,€ ]*")
+# "Hele positie verkopen": more than any position is worth. manual_order caps a sell at the
+# position, so this sells all of it.
+SELL_ALL_EUR = 1e12
+# Results of the order form are shown in the order card (where the browser lands, /#order)
+# instead of at the top of the page.
+ORDER_FLASH_PREFIXES = (
+    "Order niet geplaatst",
+    "Order verstuurd",
+    "Order geplaatst",
+    "Gekocht:",
+    "Verkocht:",
+)
+# Set once the owner hides the "Aan de slag" card.
+GETTING_STARTED_KEY = "dashboard_getting_started_hidden"
 
-def _portfolio(balances: dict[str, float], prices_: dict[str, float]) -> dict | None:
-    """Total value in EUR of cash plus coins at current prices, or None without data."""
+
+def parse_amount_eur(text: object) -> float:
+    """An amount in euro as typed in the order form: '25', '25,50' or '25.50' -> 25.5.
+
+    A decimal comma is fine (a Dutch keyboard), but an amount whose separator could also
+    separate thousands ('1.000', '2,500') is refused rather than guessed, and so is anything
+    that is not a plain number ('1e3', 'inf', '-5'). Raises ValueError with a Dutch message.
+    """
+    cleaned = str(text or "").replace("€", "").replace(" ", "").replace(" ", "").strip()
+    if not cleaned:
+        raise ValueError("vul een bedrag in")
+    if len(cleaned) > AMOUNT_MAX_LENGTH:
+        raise ValueError("het bedrag is te lang")
+    match = _AMOUNT_RE.fullmatch(cleaned)
+    if match is None:
+        raise ValueError("het bedrag is geen geldig getal; schrijf het als 25 of 25,50")
+    whole, frac = match.group(1), match.group(2) or ""
+    if len(frac) > 2:
+        if len(frac) == 3 and whole.lstrip("0"):
+            raise ValueError(
+                f"'{cleaned}' is onduidelijk, want een punt of komma kan ook duizendtallen "
+                "scheiden. Schrijf het bedrag zonder scheidingsteken voor duizendtallen, "
+                "bijvoorbeeld 1000 of 25,50"
+            )
+        raise ValueError("gebruik hoogstens twee cijfers achter de komma")
+    return float(f"{whole}.{frac or '0'}")
+
+
+def _amount_text(value: float) -> str:
+    """25.0 -> '25', 25.5 -> '25,50': how the order form shows an amount."""
+    return str(int(value)) if value == int(value) else fmt_num(value, 2)
+
+
+def _default_amount(limits: RiskLimits) -> str:
+    """The amount a new buy starts with: € 25, within the limits."""
+    return _amount_text(min(max(ORDER_DEFAULT_EUR, limits.min_trade_eur), limits.max_trade_eur))
+
+
+def _order_form(
+    settings: Settings,
+    limits: RiskLimits,
+    market: object = None,
+    side: object = None,
+    amount: object = None,
+    sell_all: object = None,
+) -> dict:
+    """The values the order form shows: what was sent (after a refusal) or the defaults.
+    Everything comes from the request, so it is checked; the password is never sent back."""
+    markets = list(settings.markets)
+    chosen = str(market or "").strip().upper()
+    if chosen not in markets:
+        chosen = markets[0] if markets else ""
+    direction = side if side in ("buy", "sell") else "buy"
+    if amount is None:
+        text = _default_amount(limits) if direction == "buy" else ""
+    else:
+        text = str(amount)[:AMOUNT_MAX_LENGTH]
+        if not _AMOUNT_CHARS.fullmatch(text):
+            text = ""
+    return {
+        "market": chosen,
+        "side": direction,
+        "amount": text.strip(),
+        "sell_all": direction == "sell" and str(sell_all or "") in ("1", "on", "true"),
+    }
+
+
+def _order_problem_nl(text: str) -> str:
+    """A refusal from the engine or the limits as the order card shows it: amounts in Dutch
+    notation and the app's own words. The engine keeps its wording for the API and the log."""
+    text = text.replace(" (maximum per order)", "")
+    text = text.replace(
+        "handelen is gepauzeerd (kill switch); kopen kan niet",
+        "de noodstop staat aan: kopen is gepauzeerd (verkopen kan wel)",
+    )
+    text = text.replace(
+        "handelen is gepauzeerd (kill switch)", "de noodstop staat aan: kopen is gepauzeerd"
+    )
+    text = re.sub(r"\b(\d+) trades per dag", r"\1 orders per dag", text)
+    text = re.sub(
+        r"minimum van (\d+(?:\.\d+)?) EUR", lambda m: f"minimum van {fmt_eur(float(m[1]))}", text
+    )
+    text = re.sub(r"€ ?(\d+(?:\.\d+)?)", lambda m: fmt_eur(float(m[1])), text)
+    return re.sub(
+        r"(\d+)\.(\d+)%",
+        lambda m: m[1] + ("" if not m[2].strip("0") else "," + m[2].rstrip("0")) + "%",
+        text,
+    )
+
+
+def _bitvavo_problem(exc: BaseException) -> str:
+    """What Bitvavo did, in Dutch: a refused key, a time-out or a failure each have their own
+    text, so a refused key is never called 'niet bereikbaar'."""
+    if isinstance(exc, BitvavoError) and exc.status in (401, 403):
+        if "No Bitvavo API key" in str(exc):
+            return "er is geen Bitvavo-sleutel ingesteld"
+        return (
+            f"Bitvavo weigert de API-sleutel (fout {exc.status}); controleer de sleutel, de "
+            "rechten 'bekijken' en 'handelen' en de IP-whitelist"
+        )
+    if isinstance(exc, TimeoutError):
+        return f"Bitvavo antwoordde niet binnen {DASHBOARD_TIMEOUT_S:g} seconden"
+    if isinstance(exc, BitvavoError) and not exc.ambiguous and not exc.rate_limited:
+        reason = exc.payload.get("error") if isinstance(exc.payload, dict) else exc.payload
+        return f"Bitvavo weigerde de order (fout {exc.status}: {str(reason)[:160]})"
+    return describe_problem(exc)
+
+
+def _order_done(order: object, market: str, side: str, mode: str, closed: bool) -> tuple:
+    """(kind, text) of the message after a placed order: what was bought or sold, for how
+    much, at what price and with what fee, in which mode."""
+    money = "oefengeld" if mode == "paper" else "echt geld"
+    status = str(getattr(order, "status", "") or "")
+    if status not in ("filled", "partiallyFilled"):
+        return (
+            "warn",
+            f"Order geplaatst ({money}), status: {fmt_nl(status) or 'onbekend'}. Het resultaat "
+            "verschijnt bij Laatste orders zodra Bitvavo het bevestigt.",
+        )
+    coin = market.split("-")[0]
+    coins = getattr(order, "amount", None)
+    quote = getattr(order, "amount_quote", None)
+    price = getattr(order, "price", None)
+    fee = getattr(order, "fee_quote", None)
+    head = ("Gekocht: " if side == "buy" else "Verkocht: ") + (
+        f"{fmt_amount(coins)} {coin}" if coins else coin
+    )
+    if quote:
+        head += f" voor {fmt_eur(quote)}"
+    if price:
+        head += f" tegen {fmt_price_eur(price)}"
+    parts = [f"{head} ({money})"]
+    if fee:
+        parts.append(f"kosten {fmt_eur(fee)}")
+    if status == "partiallyFilled":
+        parts.append("deels uitgevoerd")
+    if side == "sell" and closed:
+        parts.append("positie gesloten")
+    return "ok", " · ".join(parts)
+
+
+def _portfolio(
+    balances: dict[str, float],
+    prices_: dict[str, float],
+    entry_prices: dict[str, float] | None = None,
+) -> dict | None:
+    """Total value in EUR of cash plus coins at current prices, or None without data.
+
+    A coin without a price is valued at the entry price of the bot's open position in it
+    (``estimated``); a coin without either is left out of the total (``missing``), so the
+    page never shows a made-up loss.
+    """
     if not balances:
         return None
+    entry_prices = entry_prices or {}
     cash = balances.get("EUR", 0.0)
-    coins = sum(
-        amount * prices_[f"{symbol}-EUR"]
-        for symbol, amount in balances.items()
-        if symbol != "EUR" and f"{symbol}-EUR" in prices_
-    )
+    coins = 0.0
+    estimated: list[str] = []
+    missing: list[str] = []
+    for symbol, amount in balances.items():
+        market = f"{symbol}-EUR"
+        if symbol == "EUR" or amount <= 0:
+            continue
+        if market in prices_:
+            coins += amount * prices_[market]
+        elif market in entry_prices:
+            coins += amount * entry_prices[market]
+            estimated.append(symbol)
+        else:
+            missing.append(symbol)
     return {
         "cash_eur": round(cash, 2),
         "coins_eur": round(coins, 2),
         "total_eur": round(cash + coins, 2),
+        "estimated": estimated,
+        "missing": missing,
     }
+
+
+def _position_rows(positions: list[Position], prices_: dict[str, float], fee_pct: float) -> dict:
+    """Open positions with their result as if sold now: net, so after the fee paid on the buy
+    (in entry_quote) and the fee a sell would cost. The same sum as the engine's exit checks."""
+    rows = []
+    for p in positions:
+        price = prices_.get(p.market)
+        value = p.amount * price if price else None
+        net = None
+        if value is not None and p.entry_quote:
+            net = value * (1 - fee_pct / 100) - p.entry_quote
+        rows.append(
+            {
+                "position": p,
+                "coin": p.market.split("-")[0],
+                "price": price,
+                "value_eur": value,
+                "pnl_eur": net,
+                "pnl_pct": net / p.entry_quote * 100 if net is not None else None,
+            }
+        )
+    known = [r for r in rows if r["pnl_eur"] is not None]
+    spent = sum(r["position"].entry_quote for r in known)
+    total = sum(r["pnl_eur"] for r in known)
+    return {
+        "rows": rows,
+        "pnl_eur": total if known else None,
+        "pnl_pct": total / spent * 100 if known and spent else None,
+        "complete": len(known) == len(rows),
+    }
+
+
+async def _dashboard_prices(
+    engine: TradingEngine, client: BitvavoClient, markets: list[str]
+) -> tuple[dict[str, float], datetime | None, str | None]:
+    """(prices, as of, problem). Fresh prices are reused for a few seconds; when Bitvavo does
+    not answer in time, the last known prices come back with their time and the reason."""
+    now = datetime.now(UTC)
+    known = engine.last_prices or {}
+    at = engine.last_prices_at
+    if at is not None and at.tzinfo is None:
+        at = at.replace(tzinfo=UTC)
+    if at and (now - at).total_seconds() <= PRICE_REUSE_S and all(m in known for m in markets):
+        return {m: known[m] for m in markets}, at, None
+    last_known = {m: known[m] for m in markets if m in known}
+    failed = _price_failures.get(client)
+    if failed and time.monotonic() - failed[0] <= PRICE_REUSE_S:
+        # Bitvavo just failed: do not make every page view wait for it again.
+        return last_known, at, failed[1]
+    try:
+        fresh = await asyncio.wait_for(client.ticker_prices(markets), DASHBOARD_TIMEOUT_S)
+    except Exception as exc:  # noqa: BLE001 - the page must render whatever Bitvavo does
+        log.warning("overview: prices not fetched (%s): %s", type(exc).__name__, exc)
+        problem = _bitvavo_problem(exc)
+        _price_failures[client] = (time.monotonic(), problem)
+        return last_known, at, problem
+    _price_failures.pop(client, None)
+    engine.remember_prices(fresh)
+    return fresh, datetime.now(UTC), None
+
+
+async def _dashboard_balances(
+    broker: Broker, session: Session
+) -> tuple[dict[str, float], str | None]:
+    """(balances, problem). The paper wallet is local; a live balance waits for Bitvavo at
+    most DASHBOARD_TIMEOUT_S seconds."""
+    try:
+        if broker.mode == "paper":
+            return await broker.balances(session), None
+        return await asyncio.wait_for(broker.balances(session), DASHBOARD_TIMEOUT_S), None
+    except Exception as exc:  # noqa: BLE001
+        log.warning("overview: balance not fetched (%s): %s", type(exc).__name__, exc)
+        return {}, _bitvavo_problem(exc)
+
+
+def _getting_started(
+    request: Request, session: Session, settings: Settings, mode: str
+) -> dict | None:
+    """The 'Aan de slag' card: shown until there is a trading plan and a first order (or the
+    owner hides it), with per step whether it is done."""
+    if session.get(Setting, GETTING_STARTED_KEY) is not None:
+        return None
+    plan_written = not load_plan(session).is_empty()
+    traded = (session.scalar(select(func.count(Order.id)).where(Order.mode == mode)) or 0) > 0
+    if plan_written and traded:
+        return None
+    overrides = cfg.load_overrides(session)
+    tuned = any(k in overrides for k in (*cfg.keys_in_group("limits"), "markets"))
+    blocker = live_blocker(settings, request.app.state.client)
+    steps = [
+        {
+            "title": "Markten en limieten kiezen",
+            "text": "Welke munten de bot volgt, en hoeveel hij per order en per dag mag inzetten.",
+            "href": "/settings#limits",
+            "link": "Naar Instellingen",
+            "done": tuned,
+        },
+        {
+            "title": "Strategie bekijken en testen",
+            "text": "Lees wanneer de bot koopt en verkoopt, en test de regels op oude koersen.",
+            "href": "/strategy",
+            "link": "Naar Strategie",
+            "done": session.get(Setting, STRATEGY_KEY) is not None,
+        },
+        {
+            "title": "Tradingplan schrijven",
+            "text": "Je doel en je eigen regels in gewone taal. Claude krijgt ze mee; de harde "
+            "limieten gaan altijd voor.",
+            "href": "/plan",
+            "link": "Naar Tradingplan",
+            "done": plan_written,
+        },
+        {
+            "title": "Claude-sleutel instellen (optioneel)",
+            "text": "Zonder sleutel wordt nieuws niet beoordeeld en volgt de bot alleen de regels.",
+            "env": "ANTHROPIC_API_KEY",
+            "note": "in de serveromgeving",
+            "done": bool(settings.anthropic_api_key),
+        },
+        {
+            "title": "Voorwaarden voor live (als je klaar bent met oefenen)",
+            "text": "Live handelen kan pas met een login, een Bitvavo-sleutel en een bevestiging "
+            "in de serveromgeving.",
+            "note": f"Nu nog niet: {blocker}." if blocker else "In orde.",
+            "href": "/settings#trading",
+            "link": "Naar Instellingen › Handelen",
+            "done": blocker is None,
+        },
+    ]
+    return {"steps": steps, "done": sum(1 for s in steps if s["done"])}
 
 
 def _live_reminders(env: Settings, settings: Settings) -> list[str]:
@@ -2167,24 +2504,41 @@ async def _dashboard_context(
     broker: Broker,
     budget: BudgetGuard,
     session: Session,
-    error: str | None = None,
+    *,
+    order_form: dict | None = None,
+    order_flashes: list[dict] | None = None,
 ) -> dict:
     settings: Settings = request.app.state.settings
-    prices_: dict[str, float] = {}
-    balances: dict[str, float] = {}
-    try:
-        prices_ = await client.ticker_prices(settings.markets)
-        balances = await broker.balances(session)
-    except Exception as exc:
-        error = error or str(exc)
     engine: TradingEngine = request.app.state.engine
     mode = engine.mode
-    engine.remember_prices(prices_)
+    positions = open_positions(session, mode)
+    # The prices the page needs: the tracked markets, plus a market with an open position
+    # that is no longer tracked.
+    markets = list(dict.fromkeys([*settings.markets, *(p.market for p in positions)]))
+    (prices_, prices_at, price_problem), (balances, balance_problem) = await asyncio.gather(
+        _dashboard_prices(engine, client, markets), _dashboard_balances(broker, session)
+    )
     strategy, strategy_warning = load_strategy_checked(session)
     paused = risk.is_paused(session)
-    figures = risk_now(engine, session, settings, balances=balances or None, prices=prices_ or None)
+    figures = risk_now(
+        engine,
+        session,
+        settings,
+        balances=balances or None,
+        prices=None if price_problem else prices_ or None,
+    )
+    portfolio = _portfolio(balances, prices_, {p.market: p.entry_price for p in positions})
+    last = engine.last_portfolio
+    portfolio_before = (
+        {"total_eur": round(last["total"], 2), "at": last.get("at")}
+        if portfolio is None and last and last.get("mode") == mode and last.get("total")
+        else None
+    )
+    limits = engine.limits
+    positions_view = _position_rows(positions, prices_, engine.fee_pct)
     return {
         "settings": settings,
+        "mode": mode,
         # One status for the hero (app/trading/health.py) and the limits as current figures.
         "health": _health(
             request,
@@ -2196,26 +2550,50 @@ async def _dashboard_context(
         ),
         "risk_now": figures,
         "prices": prices_,
+        "prices_at": prices_at,
+        "price_problem": price_problem,
         "balances": balances,
-        "portfolio": _portfolio(balances, prices_),
-        "orders": recent_orders(session, 20),
-        "error": error,
+        "balance_problem": balance_problem,
+        "portfolio": portfolio,
+        "portfolio_before": portfolio_before,
+        "orders": recent_orders(session, 20, mode=mode),
         "rate_limit": client.rate_limit_remaining,
         "budget": budget.status(session),
         "strategy": strategy,
         "strategy_warning": strategy_warning,
         "sentiments": [market_sentiment(session, c, 48) for c in settings.coins],
-        "open_positions": open_positions(session, mode),
+        "open_positions": positions,
+        "positions_view": positions_view,
+        # Live mode: paper positions that the exit loop still guards (with fictitious money).
+        "paper_positions": open_positions(session, "paper") if mode == "live" else [],
         "performance": performance_summary(session, mode),
         "paused": paused,
-        "last_run": engine.last_run,
         "config_warning": request.app.state.config_warning,
         "unprotected_positions": engine.unprotected,
         "session_secret_weak": getattr(request.app.state, "session_secret_weak", False),
         "live_reminders": (
             _live_reminders(request.app.state.env, settings) if mode == "live" else []
         ),
+        "getting_started": _getting_started(request, session, settings, mode),
         "chart_periods": list(PERIODS),
+        "fee_pct": engine.fee_pct,
+        "order_form": order_form or _order_form(settings, limits),
+        "order_default_amount": _default_amount(limits),
+        "order_flashes": order_flashes or [],
+        "order_limits": {
+            "min_buy": max(limits.min_trade_eur, EXCHANGE_MIN_ORDER_EUR),
+            "max_buy": limits.max_trade_eur,
+            "min_sell": EXCHANGE_MIN_ORDER_EUR,
+        },
+        # Per market the open position, for the sell side of the order form.
+        "order_positions": {
+            r["position"].market: {
+                "coin": r["coin"],
+                "amount": r["position"].amount,
+                "value_eur": round(r["value_eur"], 2) if r["value_eur"] is not None else None,
+            }
+            for r in positions_view["rows"]
+        },
         "order_needs_password": mode == "live" and step_up_enabled(request),
     }
 
@@ -2228,16 +2606,66 @@ async def dashboard(
     budget: BudgetGuard = Depends(get_budget),
     session: Session = Depends(get_session),
 ):
-    ctx = await _dashboard_context(request, client, broker, budget, session)
+    # After a refused order the form comes back with what was sent (?market=…&side=…&amount=…).
+    q = request.query_params
+    engine: TradingEngine = request.app.state.engine
+    form = _order_form(
+        request.app.state.settings,
+        engine.limits,
+        q.get("market"),
+        q.get("side"),
+        q.get("amount"),
+        q.get("sell_all"),
+    )
+    flashes = list(getattr(request.state, "flashes", None) or [])
+    mine = [f for f in flashes if str(f.get("text", "")).startswith(ORDER_FLASH_PREFIXES)]
+    if mine:
+        request.state.flashes = [f for f in flashes if f not in mine]
+    ctx = await _dashboard_context(
+        request, client, broker, budget, session, order_form=form, order_flashes=mine
+    )
     return templates.TemplateResponse(request, "dashboard.html", ctx)
+
+
+@app.get("/api/dashboard/status")
+async def dashboard_status(
+    request: Request,
+    engine: TradingEngine = Depends(get_engine),
+    session: Session = Depends(get_session),
+):
+    """The hero's status block, rendered by the same template as the page, for the overview
+    to refresh itself while it stays open. No Bitvavo calls."""
+    paused = risk.is_paused(session)
+    health = _health(request, engine, session, paused=paused)
+    html = templates.get_template("_dashboard_status.html").render(
+        health=health, paused=paused, settings=request.app.state.settings, mode=engine.mode
+    )
+    body = {"html": html, "level": health["level"], "paused": paused}
+    return JSONResponse(body, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/dashboard/getting-started")
+async def hide_getting_started(session: Session = Depends(get_session)):
+    """Hide the 'Aan de slag' card for good."""
+    row = session.get(Setting, GETTING_STARTED_KEY)
+    if row is None:
+        session.add(Setting(key=GETTING_STARTED_KEY, value="1"))
+        session.commit()
+    return flash.redirect_with_flash(
+        "/",
+        "info",
+        "De kaart 'Aan de slag' is verborgen. De stappen vind je terug onder Instellingen, "
+        "Strategie en Tradingplan.",
+    )
 
 
 @app.post("/orders")
 async def dashboard_order(
     request: Request,
-    market: str = Form(...),
-    side: str = Form(...),
-    amount_quote: float = Form(...),
+    market: str = Form(..., max_length=32),
+    side: str = Form(..., max_length=8),
+    amount_quote: str = Form("", max_length=64),
+    sell_all: str = Form("", max_length=8),
     current_password: str = Form(""),
     client: BitvavoClient = Depends(get_client),
     broker: Broker = Depends(get_broker),
@@ -2245,19 +2673,51 @@ async def dashboard_order(
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
+    """A manual order from the overview. The result is shown in the order card: a placed
+    order via a one-time message after a redirect to /#order; a refusal the same way (with
+    the form filled in as it was sent) for a browser, or on the page itself for other clients."""
+    settings: Settings = request.app.state.settings
+    form = _order_form(settings, engine.limits, market, side, amount_quote, sell_all)
+    mode = engine.mode
+    kind, status = "error", 400
     try:
-        if engine.mode == "live":
+        amount = SELL_ALL_EUR if form["sell_all"] else parse_amount_eur(amount_quote)
+        if mode == "live":
             # Real money: ask for the current password again (step-up).
             await require_current_password(request, session, current_password)
-        await engine.manual_order(session, market, side, amount_quote)
+        order = await engine.manual_order(session, market, side, amount)
     except StepUpError as exc:
-        ctx = await _dashboard_context(
-            request, client, broker, budget, session, error=f"Order niet geplaatst: {exc.message}"
+        text, status = f"Order niet geplaatst: {exc.message}", exc.status
+    except OrderUncertain:
+        kind, status = "warn", 202
+        text = (
+            "Order verstuurd, maar de uitkomst is nog niet bekend: Bitvavo bevestigde hem niet op "
+            "tijd. De bot controleert het vanzelf; kijk zo bij Laatste orders en plaats hem niet "
+            "opnieuw."
         )
-        return templates.TemplateResponse(request, "dashboard.html", ctx, status_code=exc.status)
-    except (ValueError, BitvavoError) as exc:
-        ctx = await _dashboard_context(
-            request, client, broker, budget, session, error=f"Order niet geplaatst: {exc}"
-        )
-        return templates.TemplateResponse(request, "dashboard.html", ctx, status_code=400)
-    return RedirectResponse("/", status_code=303)
+    except BitvavoError as exc:
+        if isinstance(exc, ValueError):  # an invalid market name: nothing was sent
+            text = f"Order niet geplaatst: {_order_problem_nl(str(exc))}."
+        else:
+            text, status = f"Order niet geplaatst: {_bitvavo_problem(exc)}.", 502
+    except ValueError as exc:
+        text = f"Order niet geplaatst: {_order_problem_nl(str(exc))}."
+    else:
+        closed = side == "sell" and open_position(session, mode, form["market"]) is None
+        kind, text = _order_done(order, form["market"], side, mode, closed)
+        return flash.redirect_with_flash("/#order", kind, text)
+    if errors.wants_html(request):
+        query = {"market": form["market"], "side": form["side"], "amount": form["amount"]}
+        if form["sell_all"]:
+            query["sell_all"] = "1"
+        return flash.redirect_with_flash(f"/?{urlencode(query)}#order", kind, text)
+    ctx = await _dashboard_context(
+        request,
+        client,
+        broker,
+        budget,
+        session,
+        order_form=form,
+        order_flashes=[{"kind": kind, "text": text}],
+    )
+    return templates.TemplateResponse(request, "dashboard.html", ctx, status_code=status)

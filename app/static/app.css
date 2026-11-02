@@ -1058,14 +1058,80 @@ footer.site {
 /* ==== 8. Pagina's ==== */
 
 /* ==== Pagina: Overzicht ==== */
-/* Regels die alleen dashboard.html gebruikt: de grafieken, de hero en de handmatige order. */
+/* Regels die alleen dashboard.html gebruikt: de hero, 'Aan de slag', de grafieken en de
+ * handmatige order. */
 
-.chart-card .card-header { align-items: center; }
-.chart-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+/* -- Hero: portfolio on the left, the bot's status and the kill switch on the right -- */
+.dash-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 400px);
+  gap: 24px 40px;
+  align-items: start;
+}
+.dash-hero .hero-row { align-items: flex-start; }
+.dash-hero-positions { margin-top: 16px; color: var(--text-2); font-size: var(--fs-help); }
+.dash-status { min-width: 0; }
+.dash-status-help { margin-top: 8px; color: var(--text-2); font-size: var(--fs-detail); max-width: 60ch; }
+.dash-status .kill-switch { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--hairline); }
+@media (max-width: 760px) {
+  .dash-hero-grid { grid-template-columns: minmax(0, 1fr); }
+  /* On a phone the answer to 'does the bot run?' comes first. */
+  .dash-status { order: -1; padding-bottom: 18px; border-bottom: 1px solid var(--hairline); }
+}
+
+/* -- 'Aan de slag': numbered steps, done ones ticked -- */
+.dash-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 16px 24px;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+}
+.dash-steps li { display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
+.dash-step-mark {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--fill);
+  font-weight: 600;
+  font-size: var(--fs-help);
+  font-variant-numeric: tabular-nums;
+}
+.dash-step-mark .icon { width: 18px; height: 18px; }
+.dash-steps .is-done .dash-step-mark { background: var(--green-tint); color: var(--green); }
+.dash-step-body { min-width: 0; }
+.dash-step-body > * + * { margin-top: 4px; }
+.dash-step-title { font-weight: 600; }
+.dash-step-title .pill { margin-left: 4px; }
+
+/* -- Charts -- */
+.chart-controls { display: flex; gap: 10px 14px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+/* Many markets: the buttons wrap inside the card instead of running out of it. */
+.chart-markets { max-width: 100%; }
 .chart-wrap { position: relative; }
-.chart { width: 100%; }
+.chart { width: 100%; transition: opacity 0.2s ease; }
 .chart.tall { height: 380px; }
 .chart.short { height: 220px; }
+/* Loading: the old chart stays visible, dimmed, until the new data is in. */
+.chart-wrap.is-loading .chart { opacity: 0.4; }
+.chart-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  text-align: center;
+  color: var(--text-2);
+  font-size: var(--fs-help);
+  pointer-events: none;
+}
 .chart-legend {
   display: flex;
   gap: 8px 18px;
@@ -1076,7 +1142,7 @@ footer.site {
   margin-bottom: 12px;
 }
 .chart-legend .key { display: inline-flex; flex-direction: row; align-items: center; gap: 7px; }
-/* The 'Adviezen tonen' checkbox sits next to its text, with a 24 px target. */
+/* The 'Claude-adviezen tonen' checkbox sits next to its text, with a 24 px target. */
 .chart-legend .toggle { margin-left: auto; cursor: pointer; min-height: 24px; gap: 8px; color: var(--text); }
 .chart-legend .toggle input { margin: 0; }
 .chart-legend .swatch { display: inline-block; width: 11px; height: 11px; flex: none; }
@@ -1103,12 +1169,23 @@ footer.site {
 .chart-tooltip .t-row b { font-weight: 500; color: var(--text); }
 .chart-tooltip .t-action { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--hairline); color: var(--text); }
 .chart-tooltip .t-action .detail { color: var(--text-2); display: block; margin-top: 2px; }
-.chart-status { margin-top: 8px; min-height: 1.2em; }
+.chart-status { margin-top: 8px; min-height: 1.5em; }
+.chart-status .chart-error { color: var(--text); }
+.chart-status .btn { margin: 6px 0 0; }
+.chart-status details { margin-top: 6px; }
+.chart-status details > p { margin-top: 4px; }
 .chart-table { margin-top: 10px; }
+.chart-table h3 { font-size: var(--fs-body); }
 .chart-table .list li { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 14px; align-items: baseline; font-size: var(--fs-help); }
 .chart-table .list .when { color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .chart-table .list .what .detail { display: block; color: var(--text-2); font-size: var(--fs-detail); }
 .chart-table .list .how { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* The help text names the gesture of the device: hover with a mouse, hold with a finger. */
+.dash-hint-touch { display: none; }
+@media (hover: none) and (pointer: coarse) {
+  .dash-hint-hover { display: none; }
+  .dash-hint-touch { display: inline; }
+}
 @media (max-width: 640px) {
   .chart.tall { height: 300px; }
   .chart.short { height: 180px; }
@@ -1116,6 +1193,35 @@ footer.site {
   .chart-table .list li { grid-template-columns: 1fr auto; }
   .chart-table .list .what { grid-column: 1 / -1; }
 }
+
+/* -- Tables shown as cards on a phone (table-stack): the second line of a cell ('€ 59,79',
+ * '-0,6%') goes under the value instead of next to it. -- */
+@media (max-width: 640px) {
+  .dash .table-stack td:not(:first-child) { flex-wrap: wrap; }
+  .dash .table-stack td:not(:first-child) > :not(.sub) { margin-left: auto; }
+  .dash .table-stack td:not(:first-child) .sub { flex-basis: 100%; text-align: right; margin-top: 0; }
+}
+
+/* -- Strategy card: name, one line, the features -- */
+.dash-oneline { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+
+/* -- Manual order -- */
+.dash-order fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.dash-order .dash-side { flex: 1 1 200px; }
+.dash-order legend { padding: 0; margin-bottom: 6px; }
+.dash-order .form-row { align-items: flex-start; }
+.dash-order > .notice { margin-bottom: 14px; }
+.dash-order .seg-radio { display: flex; flex-wrap: nowrap; }
+.dash-order .seg-radio label { flex: 1 1 0; }
+.dash-order .seg-radio span { justify-content: center; width: 100%; min-height: 38px; font-size: var(--fs-body); }
+.dash-order .seg-radio input:checked[value="buy"] + span { background: var(--green-tint); color: var(--green); }
+.dash-order .seg-radio input:checked[value="sell"] + span { background: var(--red-tint); color: var(--red); }
+.dash-amount-check { display: block; min-height: 1.4em; color: var(--text-2); font-size: var(--fs-detail); font-variant-numeric: tabular-nums; }
+.dash-amount-check.is-error { color: var(--red); font-weight: 500; }
+.dash-sell-all { font-size: var(--fs-help); color: var(--text); min-height: 24px; }
+.dash-sell-all input { margin: 0; }
+.dash-order #order-position { margin-top: 8px; }
+.dash-order #order-position.is-warn { color: var(--orange); font-weight: 500; }
 
 /* ==== Pagina: Handelen ==== */
 /* Regels die alleen trading.html gebruikt: de cycli per markt en de evaluaties. */
