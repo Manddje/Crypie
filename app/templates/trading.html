@@ -136,7 +136,7 @@
           {% if f.at %}<span class="small muted">{{ f.at|dt }}</span>{% endif %}
         </div>
         <p class="decision-line"><span class="pill pill-red">Mislukt</span> <span class="decision-summary"><span aria-hidden="true">· </span>de laatste cyclus kon deze markt niet verwerken</span></p>
-        <p class="small">Reden: {{ f.reason }}</p>
+        <p class="small">Reden: {{ f.reason }}.</p>
         <p class="small muted">Klopt de markt niet, pas hem dan aan bij <a href="/settings#trading">Instellingen › Handelen</a>; de andere markten draaien gewoon door.</p>
       </article>
       {% endfor %}

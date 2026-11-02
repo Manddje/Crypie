@@ -902,7 +902,7 @@ async def portfolio_history_api(
         "start_eur": settings.paper_start_eur if mode == "paper" else None,
         "points": portfolio_history(session, mode, balances, candles_by_market, since),
         "actions": trade_actions(session, mode, since, interval),
-        "skipped": [{"market": m, "reason": _bitvavo_problem(exc)} for m, exc in failed],
+        "skipped": [{"market": m, "reason": _cycle_failure_nl(str(exc))} for m, exc in failed],
     }
 
 
@@ -2077,7 +2077,7 @@ def _cycle_failure_nl(reason: str | None) -> str:
     m = _BITVAVO_ERROR_RE.match(text)
     if not m:
         return text or "onbekend"
-    status, code, message = int(m[1]), m[2], m[3].strip()
+    status, code, message = int(m[1]), m[2], m[3].strip().rstrip(".")
     if status == 0:
         return "Bitvavo reageert niet (geen verbinding of een time-out)"
     if status >= 500:
