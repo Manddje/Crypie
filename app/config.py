@@ -130,6 +130,15 @@ class Settings(BaseSettings):
     trusted_origins: Annotated[list[str], NoDecode] = []
     api_docs_enabled: bool = False  # /docs, /redoc and /openapi.json (still behind the login)
 
+    # Notifications outside the app (app/notify.py), environment only. NOTIFY_URL: an ntfy topic
+    # (https://ntfy.sh/<secret topic>) or a webhook; https, a public host name, no user:password.
+    # NOTIFY_TOKEN: optional bearer token. NOTIFY_FORMAT: auto | ntfy | json.
+    # NOTIFY_EXIT_FAIL_MIN: report a failing stop-loss check after this many minutes.
+    notify_url: str = ""
+    notify_token: str = ""
+    notify_format: Literal["auto", "ntfy", "json"] = "auto"
+    notify_exit_fail_min: int = 10
+
     @field_validator("markets", mode="before")
     @classmethod
     def _split_markets(cls, value: object) -> object:
@@ -144,6 +153,27 @@ class Settings(BaseSettings):
     def _clamp_exit_interval(cls, value: int) -> int:
         # Exits must never be switched off by a bad value; clamp instead of failing startup.
         return min(max(int(value), 1), 60)
+
+    @field_validator("notify_url", mode="after")
+    @classmethod
+    def _check_notify_url(cls, value: str) -> str:
+        # A bad address must not stop the app (and its exits); warn and leave it off. The URL
+        # itself is a secret (whoever knows an ntfy topic can read it): never logged.
+        value = (value or "").strip()
+        if not value:
+            return ""
+        from app.notify import validate_notify_url
+
+        try:
+            return validate_notify_url(value)
+        except ValueError as exc:
+            log.warning("NOTIFY_URL is ignored: %s", exc)
+            return ""
+
+    @field_validator("notify_exit_fail_min", mode="after")
+    @classmethod
+    def _clamp_notify_exit_fail(cls, value: int) -> int:
+        return min(max(int(value), 1), 1440)
 
     @field_validator("auth_session_hours", mode="after")
     @classmethod

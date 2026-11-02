@@ -15,7 +15,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import settings_store as cfg
@@ -40,7 +40,7 @@ from app.auth.service import (
 from app.bitvavo.broker import PAPER_WALLET_KEY, Broker, LiveBroker, PaperBroker, recent_orders
 from app.bitvavo.client import BitvavoClient, BitvavoError, InvalidMarketError
 from app.config import Settings, get_settings
-from app.db import Evaluation, SessionLocal, Setting, get_session, init_db
+from app.db import Evaluation, Position, SessionLocal, Setting, get_session, init_db
 from app.news.service import (
     NEWS_RETENTION_DAYS,
     NewsService,
@@ -55,6 +55,7 @@ from app.news.service import (
     requeue_items_without_event_key,
 )
 from app.news.sources import NewsFetcher
+from app.notify import Notifier, notify_configured
 from app.security import BodySizeLimit, CrossOriginProtection, SecurityHeaders
 from app.settings_store import SettingsError
 from app.strategy.describe import levels_summary, strategy_diff
@@ -347,6 +348,10 @@ async def lifespan(app: FastAPI):
     engine.live_capital_eur = settings.live_capital_eur
     engine.broker_for_mode = lambda mode: exit_broker(app, mode)
     _apply_risk_off(engine, settings)
+    # Notifications are configured in the environment only (NOTIFY_URL); off without it.
+    notifier = Notifier(env)
+    app.state.notifier = notifier
+    engine.notifier = notifier
     with SessionLocal() as session:
         engine.load_state(session)
         if engine.last_run is None:
@@ -359,6 +364,7 @@ async def lifespan(app: FastAPI):
                 log.info("reconciled %d order(s) at startup", settled)
         except Exception:  # noqa: BLE001 - retried by the exit loop
             log.exception("order reconciliation at startup failed")
+        _notify_start(app, session)
     # The schedulers read the interval and on/off switch from app.state.settings on every
     # tick, so a change in the portal takes effect within a tick, without a restart.
     tasks = [
@@ -374,8 +380,32 @@ async def lifespan(app: FastAPI):
     finally:
         for t in tasks:
             t.cancel()
+        await notifier.drain(timeout=2)
         await fetcher.aclose()
         await client.aclose()
+
+
+def _notify_start(app: FastAPI, session: Session) -> None:
+    """Tell the owner the app (re)started: an unexpected restart is worth knowing about."""
+    notifier: Notifier = app.state.notifier
+    if not notifier.enabled:
+        return
+    mode = app.state.broker.mode
+    try:
+        n = int(session.scalar(select(func.count(Position.id)).where(Position.status == "open")))
+    except Exception:  # noqa: BLE001
+        session.rollback()
+        n = None
+    text = "Crypie is gestart in " + (
+        "live-modus (echt geld)." if mode == "live" else "oefenmodus."
+    )
+    if app.state.config_warning:
+        text += " Let op: live-modus is niet gestart, de app draait in oefenmodus."
+    if n is not None:
+        text += f" Er {'staat' if n == 1 else 'staan'} {n} open " + (
+            "positie." if n == 1 else "posities."
+        )
+    notifier.restart(session, text)
 
 
 SCHEDULER_TICK_S = 30
@@ -1950,6 +1980,7 @@ def _settings_context(
             "cryptopanic_token": bool(env.cryptopanic_token),
             "live_ack": env.live_trading_ack,
             "database": env.database_url.split(":", 1)[0],
+            "notify": notify_configured(env),
         },
     }
 
