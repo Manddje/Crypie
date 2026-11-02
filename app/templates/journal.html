@@ -98,7 +98,7 @@
     <div class="filter-chips">
       <span class="muted small">Selectie:</span>
       <ul>
-        {% for c in chips %}<li><a class="chip-remove" href="{{ c.href }}">{{ c.text }}<span aria-hidden="true"> ×</span><span class="visually-hidden"> (filter weghalen)</span></a></li>{% endfor %}
+        {% for c in chips %}<li><a class="tag chip-remove" href="{{ c.href }}">{{ c.text }}<span class="chip-x" aria-hidden="true">×</span><span class="visually-hidden"> (filter weghalen)</span></a></li>{% endfor %}
       </ul>
       {% if chips|length > 1 %}<a class="small" href="{{ '/journal?mode=' ~ mode if mode != engine_mode else '/journal' }}">Alle filters wissen</a>{% endif %}
     </div>

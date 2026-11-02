@@ -1162,6 +1162,7 @@ footer.site {
   text-decoration: none;
 }
 .chip-remove:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
+.chip-remove .chip-x { margin-left: 6px; color: var(--text-2); font-weight: 600; }
 @media (pointer: coarse) { .chip-remove { min-height: 36px; } }
 
 .journal-filter-box > summary { display: flex; align-items: center; gap: 10px; min-height: 32px; }
@@ -1288,7 +1289,8 @@ footer.site {
 .strategy-curve .curve-hold { stroke: var(--text-3); stroke-dasharray: 4 3; }
 .strategy-curve figcaption { margin-top: 6px; color: var(--text-2); font-size: var(--fs-detail); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .strategy-curve .legend-strategy, .strategy-curve .legend-hold { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--accent); }
-.strategy-curve .legend-hold { border-top: 2px dashed var(--text-3); margin-left: 8px; }
+.strategy-curve .legend-hold { border-top: 2px dashed var(--text-3); }
+.strategy-curve .legend-item { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; }
 .strategy-save { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--hairline); }
 .strategy-save > * + * { margin-top: 10px; }
 

@@ -106,7 +106,7 @@
           <polyline class="curve-hold" points="{{ c.hold }}"/>
           <polyline class="curve-strategy" points="{{ c.strategy }}"/>
         </svg>
-        <figcaption id="curve-desc"><span class="legend-strategy" aria-hidden="true"></span>Strategie {{ b.start_eur|eur(0) }} → {{ b.final_eur|eur(0) }} <span class="legend-hold" aria-hidden="true"></span>Kopen en vasthouden {{ b.start_eur|eur(0) }} → {{ (b.start_eur * (1 + b.buy_hold_return_pct / 100))|eur(0) }} · laagste stand strategie {{ c.strategy_low|eur(0) }}</figcaption>
+        <figcaption id="curve-desc"><span class="legend-item"><span class="legend-strategy" aria-hidden="true"></span>Strategie {{ b.start_eur|eur(0) }} → {{ b.final_eur|eur(0) }}</span> <span class="legend-item"><span class="legend-hold" aria-hidden="true"></span>Kopen en vasthouden {{ b.start_eur|eur(0) }} → {{ (b.start_eur * (1 + b.buy_hold_return_pct / 100))|eur(0) }}</span> <span class="legend-item">laagste stand strategie {{ c.strategy_low|eur(0) }}</span></figcaption>
       </figure>
       {% endif %}
       <div class="stats">

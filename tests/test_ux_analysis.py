@@ -210,7 +210,7 @@ async def test_active_filters_are_summed_up_with_remove_links(api):
     with SessionLocal() as s:
         _trade(s, "ETH-EUR", 1.0, "signal")
     r = await api.get("/journal?market=ETH-EUR&days=30&result=win")
-    chips = dict(re.findall(r'class="chip-remove" href="([^"]+)">([^<]+)<', r.text))
+    chips = dict(re.findall(r'class="tag chip-remove" href="([^"]+)">([^<]+)<', r.text))
     assert chips == {
         "/journal?result=win&amp;days=30": "Markt: ETH-EUR",
         "/journal?market=ETH-EUR&amp;days=30": "Resultaat: winst",
