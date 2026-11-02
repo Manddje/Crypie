@@ -28,7 +28,7 @@ SOFT_SUFFIX = " (zacht filter)"
 # Mechanical exits are journaled as 'stop_loss geraakt op 66091.50' (engine._mechanical_exit).
 _MECHANICAL = re.compile(r"^(stop_loss|trailing_stop|take_profit) geraakt op ([0-9]+(?:\.[0-9]+)?)")
 # The news sentence of a rules decision: 'Nieuws licht negatief (-0.17, 2 nieuwsfeiten uit 2
-# berichten, 1 van hoge impact). ' or 'Geen beoordeeld nieuws. ' (engine, step 2).
+# berichten, 1 met impact middel of groot). ' or 'Geen beoordeeld nieuws. ' (engine, step 2).
 _NEWS = re.compile(r"^(?:Geen beoordeeld nieuws|Nieuws [^()]+ \([+-][0-9.]+, ([^()]*)\))\.\s*")
 
 
@@ -216,8 +216,10 @@ def _explain(d: Decision, checks: dict[str, list[dict]]) -> tuple[str | None, st
     news = None
     m = _NEWS.match(text)
     if m:
-        # Older decisions said '1 nieuwsfeiten uit 1 berichten'.
-        news = re.sub(r"\b1 (nieuwsfeit|bericht)en\b", r"1 \1", m.group(1) or "") or None
+        # Older decisions said '1 nieuwsfeiten uit 1 berichten' and 'N van hoge impact' (the
+        # count is impact 2 and up: 'middel of groot', as on Nieuws and the plan; UX-105).
+        news = re.sub(r"\b1 (nieuwsfeit|bericht)en\b", r"1 \1", m.group(1) or "")
+        news = re.sub(r"\b(\d+) van hoge impact\b", r"\1 met impact middel of groot", news) or None
         text = text[m.end() :].lstrip()
     return (text or None), news
 

@@ -4,21 +4,24 @@
 
 {# The rules of a strategy first, then its free description as a small note (UX-12). #}
 {% macro strategy_summary(s, level=3) -%}
+{#- Readable indicator names, as on Handelen and the plan (UX-104); the chips below map them
+    to the ids the JSON uses. -#}
+{%- set names = s|indicator_labels -%}
 <p class="strategy-scope">Geldt voor <strong>{{ settings.markets|market_list }}</strong> · candles van {{ s.interval|nl }}{% if s.position_size_pct < 100 %} · {{ s.position_size_pct|num(0) }}% van het beschikbare bedrag per positie{% endif %}</p>
 <div class="strategy-rules">
   <div>
     <h{{ level + 1 }} class="eyebrow">Kopen als</h{{ level + 1 }}>
     <ul class="list small">
-      {% for c in s.buy %}<li>{{ c|condition_nl }}{% if not loop.last %} <span class="muted">én</span>{% endif %}</li>{% endfor %}
+      {% for c in s.buy %}<li>{{ c|condition_nl|readable_condition(names) }}{% if not loop.last %} <span class="muted">én</span>{% endif %}</li>{% endfor %}
     </ul>
   </div>
   <div>
     <h{{ level + 1 }} class="eyebrow">Verkopen als</h{{ level + 1 }}>
     <ul class="list small">
-      {% for c in s.sell %}<li>{{ c|condition_nl }}{% if not loop.last %} <span class="muted">én</span>{% endif %}</li>{% endfor %}
-      {% if s.stop_loss_pct %}<li>het verlies groter wordt dan {{ s.stop_loss_pct|num(1) }}% <span class="muted">(stop-loss)</span></li>{% endif %}
+      {% for c in s.sell %}<li>{{ c|condition_nl|readable_condition(names) }}{% if not loop.last %} <span class="muted">én</span>{% endif %}</li>{% endfor %}
+      {% if s.stop_loss_pct %}<li>de koers {{ s.stop_loss_pct|num(1) }}% onder de instapkoers zakt <span class="muted">(stop-loss)</span></li>{% endif %}
       {% if s.trailing_stop_pct %}<li>de koers {{ s.trailing_stop_pct|num(1) }}% onder het hoogste punt sinds instap zakt{% if s.trailing_start_pct %}, zodra de winst eerst {{ s.trailing_start_pct|num(1) }}% was{% endif %} <span class="muted">(trailing stop)</span></li>{% endif %}
-      {% if s.take_profit_pct %}<li>de winst {{ s.take_profit_pct|num(1) }}% bereikt <span class="muted">(take-profit)</span></li>{% endif %}
+      {% if s.take_profit_pct %}<li>de koers {{ s.take_profit_pct|num(1) }}% boven de instapkoers staat <span class="muted">(take-profit)</span></li>{% endif %}
     </ul>
   </div>
 </div>
@@ -115,7 +118,7 @@
         {{ ui.stat("Kopen en vasthouden", b.buy_hold_return_pct|pct, "koersverandering, ter vergelijking", b.buy_hold_return_pct|pnl_class(1)) }}
         {{ ui.stat("Grootste daling", b.max_drawdown_pct|pct(1, false), "van de hoogste naar de laagste stand van het testsaldo") }}
         {{ ui.stat("Afgeronde trades", b.trades ~ (" (+1 open)" if b.open_position else ""), "aankoop plus verkoop") }}
-        {{ ui.stat("Winnende trades", (b.win_rate_pct|pct(0, false)) if b.win_rate_pct is not none else "–", (bt.wins ~ " van " ~ b.trades ~ " met winst") if b.trades else "nog geen afgeronde trades") }}
+        {{ ui.stat("Winnende trades", (b.win_rate_pct|pct(0, false)) if b.win_rate_pct is not none else "–", (bt.wins ~ " van " ~ b.trades ~ " met bruto winst") if b.trades else "nog geen afgeronde trades") }}
         {{ ui.stat("Signaal nu", b.latest.signal|nl, "op de laatste candle", "pos" if b.latest.signal == "buy" else ("neg" if b.latest.signal == "sell" else "")) }}
         {% if b.live_buy_signal_pct is not none %}{{ ui.stat("Koopsignaal live", b.live_buy_signal_pct|pct(1, false), "van de candles na " ~ b.warmup_candles ~ " candles opwarmen", "neg" if bt.loose else "") }}{% endif %}
       </div>

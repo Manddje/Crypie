@@ -4,6 +4,6 @@
 {%- import "_macros.html" as ui -%}
 {{ ui.status(health) }}
 {% if health and not health.claude_available %}
-<p class="dash-status-help">Claude-sleutel: <span class="mono">ANTHROPIC_API_KEY</span> in de serveromgeving. Zonder sleutel wordt nieuws niet beoordeeld; wat de bot dan bij een koopsignaal doet, kies je bij <a href="/settings#trading">Instellingen › Handelen</a>.</p>
+<p class="dash-status-help">Zonder Claude-sleutel wordt nieuws niet beoordeeld. Wat de bot dan bij een koopsignaal doet, kies je bij <a href="/settings#trading">Instellingen › Handelen</a>. De sleutel zet je in de serveromgeving: <span class="mono">ANTHROPIC_API_KEY</span>.</p>
 {% endif %}
-{{ ui.kill_switch(paused, next="/", id="noodstop") }}
+{{ ui.kill_switch(paused, next="/", id="noodstop", beside_status=(health and health.level == "paused")) }}

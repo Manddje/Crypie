@@ -151,4 +151,4 @@
   </section>
 </div>
 {% endblock %}
-{% block footer %}<span>Nieuwsbeoordeling: {% if assessing %}{{ settings.claude_model_news }}{% else %}uit (geen Claude-sleutel){% endif %}</span>{% endblock %}
+{% block footer %}<span>Nieuwsbeoordeling: {% if assessing %}{{ settings.claude_model_news|model_name }}{% else %}uit (geen Claude-sleutel){% endif %}</span>{% endblock %}

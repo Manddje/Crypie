@@ -1018,7 +1018,7 @@ class TradingEngine:
                 else f"nieuws {sentiment.label()} ({sentiment.score:+.2f}, "
                 f"{sentiment.items} nieuwsfeit{'' if sentiment.items == 1 else 'en'} uit "
                 f"{sentiment.articles} bericht{'' if sentiment.articles == 1 else 'en'}, "
-                f"{sentiment.high_impact} van hoge impact)"
+                f"{sentiment.high_impact} met impact middel of groot)"
             )
             if (news_entry_hint or news_exit_hint) and not confirmed:
                 why = (
@@ -1126,7 +1126,11 @@ class TradingEngine:
                         "niet toegestaan"
                     )
                 elif risk.is_paused(session) and signal != "sell":
-                    blocked = "handelen is gepauzeerd (kill switch)"
+                    # Only a sell on news alone waits for the kill switch (a signal sell does not).
+                    blocked = (
+                        "de noodstop staat aan: een verkoop alleen op negatief nieuws wacht tot je "
+                        "hervat"
+                    )
                 else:
                     order, blocked, note = await self._sell(
                         session,

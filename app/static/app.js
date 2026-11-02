@@ -213,7 +213,7 @@
   relativeTimes();
   setInterval(function () { if (!document.hidden) relativeTimes(); }, 30000);
   document.addEventListener("visibilitychange", function () { if (!document.hidden) relativeTimes(); });
-  window.CrypieTime = { localise: localTimes, refresh: relativeTimes };
+  window.CrypieTime = { localise: localTimes, refresh: relativeTimes, zone: zoneName };
 
   // -- One-off query parameters: refresh or Back must not show 'opgeslagen' again ------------
   var ONE_SHOT = ["saved", "flash"];

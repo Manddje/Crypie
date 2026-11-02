@@ -58,7 +58,6 @@ from app.bitvavo.broker import (
 from app.bitvavo.client import BitvavoClient, BitvavoError, InvalidMarketError
 from app.config import Settings, get_settings
 from app.db import Evaluation, Order, Position, SessionLocal, Setting, get_session, init_db
-from app.labels import daily_loss_rule_nl, max_orders_rule_nl
 from app.news.service import (
     FEAR_GREED_NL,
     NEWS_RETENTION_DAYS,
@@ -2356,8 +2355,6 @@ def _plan_context(request: Request, engine: TradingEngine, session: Session) -> 
         "paused": risk.is_paused(session),
         "claude_available": engine.decision_maker.available,
         "claude": _plan_claude(settings, engine.decision_maker.available, budget),
-        "daily_loss_rule": daily_loss_rule_nl(engine.limits.daily_loss_limit_pct),
-        "max_orders_rule": max_orders_rule_nl(engine.limits.max_trades_per_day),
         "news_min_sources": NEWS_MIN_SOURCES,
         "error": None,
         "field_errors": {},
@@ -2709,6 +2706,7 @@ def live_requirements(settings: Settings, client: BitvavoClient) -> list[dict]:
             "ok": settings.auth_enabled,
             "label": "De login staat aan",
             "missing": "de login staat uit (AUTH_ENABLED=false)",
+            "missing_nl": "de login staat uit",
             "fix": "Zet AUTH_ENABLED=true in de serveromgeving en herstart de app.",
             "env": "AUTH_ENABLED",
         },
@@ -2717,6 +2715,7 @@ def live_requirements(settings: Settings, client: BitvavoClient) -> list[dict]:
             "ok": client.authenticated,
             "label": "Er is een Bitvavo-sleutel",
             "missing": "er is geen Bitvavo-sleutel (BITVAVO_API_KEY en BITVAVO_API_SECRET)",
+            "missing_nl": "er is geen Bitvavo-sleutel",
             "fix": "Maak bij Bitvavo een API-sleutel met rechten om te lezen en te handelen, "
             "zonder opnemen, en zet hem in de serveromgeving.",
             "env": "BITVAVO_API_KEY, BITVAVO_API_SECRET",
@@ -2726,6 +2725,7 @@ def live_requirements(settings: Settings, client: BitvavoClient) -> list[dict]:
             "ok": settings.live_trading_ack,
             "label": "Live handelen is op de server bevestigd",
             "missing": "LIVE_TRADING_ACK staat niet op true in de serveromgeving",
+            "missing_nl": "live handelen is nog niet bevestigd op de server",
             "fix": "Zet LIVE_TRADING_ACK=true in de serveromgeving en herstart de app.",
             "env": "LIVE_TRADING_ACK",
         },
@@ -2800,6 +2800,8 @@ def bitvavo_key_state(request: Request) -> dict:
 templates.env.globals["bitvavo_key_state"] = bitvavo_key_state
 # 'rsi14 lager dan 35' -> 'RSI 14 lager dan 35' (a page passes the labels of its strategy).
 templates.env.filters["readable_condition"] = display.readable_condition
+templates.env.filters["model_name"] = display.model_name_nl
+templates.env.filters["indicator_labels"] = display.indicator_labels
 
 
 async def fetch_market_names(client: BitvavoClient) -> set[str] | None:
@@ -3784,6 +3786,10 @@ def _getting_started(
     overrides = cfg.load_overrides(session)
     tuned = any(k in overrides for k in (*cfg.keys_in_group("limits"), "markets"))
     blocker = live_blocker(settings, request.app.state.client)
+    # The first missing live requirement in plain words, its variable as secondary text.
+    missing = next(
+        (r for r in live_requirements(settings, request.app.state.client) if not r["ok"]), None
+    )
     steps = [
         {
             "title": "Markten en limieten kiezen",
@@ -3811,14 +3817,15 @@ def _getting_started(
             "title": "Claude-sleutel instellen (optioneel)",
             "text": "Zonder sleutel wordt nieuws niet beoordeeld en volgt de bot alleen de regels.",
             "env": "ANTHROPIC_API_KEY",
-            "note": "in de serveromgeving",
+            "note": "Zet de sleutel in de serveromgeving:",
             "done": bool(settings.anthropic_api_key),
         },
         {
             "title": "Voorwaarden voor live (als je klaar bent met oefenen)",
             "text": "Live handelen kan pas met een login, een Bitvavo-sleutel en een bevestiging "
             "in de serveromgeving.",
-            "note": f"Nu nog niet: {blocker}." if blocker else "In orde.",
+            "note": f"Nu nog niet: {missing['missing_nl']}." if missing else "In orde.",
+            "env": missing["env"] if missing else None,
             "href": "/settings#trading",
             "link": "Naar Instellingen › Handelen",
             "done": blocker is None,

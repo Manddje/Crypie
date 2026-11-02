@@ -20,15 +20,14 @@ from sqlalchemy.orm import Session
 
 from app.bitvavo.broker import PAPER_WALLET_KEY
 from app.db import Setting
+from app.labels import KILL_SWITCH_HELP_NL
 from app.trading import risk
 from app.trading.events import active_event
 
-# What the kill switch does, in one sentence (checked against TradingEngine: risk.check_buy
-# refuses every buy; the exit loop and strategy sell signals are not affected).
-PAUSED_DETAIL = (
-    "Kopen is gepauzeerd; stop-loss, trailing stop, take-profit en verkoopsignalen werken "
-    "gewoon door."
-)
+# What the kill switch does: the same sentence as next to the kill switch on every page
+# (app/labels.py; checked against TradingEngine: risk.check_buy refuses every buy, the exit
+# loop and strategy sell signals are not affected).
+PAUSED_DETAIL = KILL_SWITCH_HELP_NL
 OFF_DETAIL = (
     "Automatisch handelen staat uit; je kunt zelf een cyclus starten en de bewaking van "
     "stop-loss en take-profit loopt gewoon door."

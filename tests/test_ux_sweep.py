@@ -137,7 +137,8 @@ def test_one_news_fact_is_singular():
         "impact). Geen reden om Claude te raadplegen.",
     )
     view = display.decision_view(d, {})
-    assert view.news_detail == "1 nieuwsfeit uit 1 bericht, 0 van hoge impact"
+    # The count is impact 2 and up: the scale of Nieuws and the plan (UX-105).
+    assert view.news_detail == "1 nieuwsfeit uit 1 bericht, 0 met impact middel of groot"
 
 
 def test_dip_watch_conditions_get_readable_names():

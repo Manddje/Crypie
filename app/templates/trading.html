@@ -99,7 +99,7 @@
         <p class="status-update" data-status-note role="status"></p>
       </div>
       <div class="trading-controls">
-        {{ ui.kill_switch(status.paused, next="/trading") }}
+        {{ ui.kill_switch(status.paused, next="/trading", beside_status=(h and h.level == "paused")) }}
         {% if not h.enabled %}<p class="kill-switch-help">Automatisch handelen staat uit, dus er draaien geen geplande cycli. De noodstop blokkeert daarnaast elke aankoop: ook in een cyclus die je zelf start en bij een handmatige order.</p>{% endif %}
         <form method="post" action="/trading/action" data-confirm-if-live="LIVE · echt geld: nu een cyclus draaien? De bot kan daarbij direct kopen of verkopen met echt geld op Bitvavo.">
           <button class="btn" type="submit" name="action" value="cycle" data-busy="Cyclus loopt…">Nu een cyclus draaien</button>
@@ -185,7 +185,7 @@
       </tbody>
     </table>
     {% endcall %}
-    <p class="form-help">Netto: na de kosten van de aankoop en van een verkoop nu ({{ status.fee_pct|num(2) }}% per kant). Onder de stop-loss verkoopt de bot; een trailing stop schuift mee omhoog met de hoogste koers sinds de aankoop.</p>
+    <p class="form-help">Netto: na de kosten van de aankoop en van een verkoop nu ({{ status.fee_pct|num(2) }}% per order). Onder de stop-loss verkoopt de bot; een trailing stop schuift mee omhoog met de hoogste koers sinds de aankoop.</p>
     {% else %}
     {{ ui.empty("Geen open posities", "Zodra de bot koopt, zie je hier de positie met haar resultaat, stop-loss en take-profit.", symbol="wallet") }}
     {% endif %}
@@ -234,13 +234,7 @@
       <div class="context-grid">
         <section aria-labelledby="limits-title">
           <h3 class="context-title" id="limits-title">Harde limieten</h3>
-          <dl class="kv">
-            <dt>Per order</dt><dd>max. {{ status.limits.max_trade_eur|eur(0) }}</dd>
-            <dt>In crypto</dt><dd>max. {{ status.limits.max_exposure_pct|num(0) }}% van de portefeuille</dd>
-            <dt>Dagverlieslimiet</dt><dd>{{ daily_loss_rule_nl(status.limits.daily_loss_limit_pct)|capfirst }}.</dd>
-            <dt>Orders per dag</dt><dd>{{ max_orders_rule_nl(status.limits.max_trades_per_day)|capfirst }}.</dd>
-            <dt>Na een stop-loss</dt><dd>{{ status.limits.cooldown_min_after_stop }} min niet kopen in die markt</dd>
-          </dl>
+          <dl class="kv">{{ ui.hard_limits(status.limits) }}</dl>
         </section>
 
         <section aria-labelledby="agenda-title">
@@ -250,7 +244,7 @@
           {% elif agenda.active_event %}
           <p class="small"><span class="pill pill-orange"><span class="dot" aria-hidden="true"></span>Risk-off actief</span> {{ agenda.active_event.label }} om {{ agenda.active_event.at|isodt }}; geen nieuwe aankopen tot {{ agenda.active_event.until|isodt }}.</p>
           {% else %}
-          <p class="small muted">Geen agendamoment actief. Rond elk moment hieronder koopt de bot niet van {{ agenda.before_min }} min ervoor tot {{ agenda.after_min }} min erna.{% if agenda.shock_pause_hours %} Na een nieuwsschok (grote impact, sterk negatief) pauzeert kopen {{ agenda.shock_pause_hours }} uur voor de geraakte coins.{% endif %}</p>
+          <p class="small muted">Geen agendamoment actief. Rond elk moment hieronder koopt de bot niet van {{ agenda.before_min }} min ervoor tot {{ agenda.after_min }} min erna.{% if agenda.shock_pause_hours %} Na een nieuwsschok (impact groot, sterk negatief) koopt de bot {{ agenda.shock_pause_hours }} uur niet in de geraakte coins.{% endif %}</p>
           {% endif %}
           {% for market, ro in agenda.shocks.items() %}
           <p class="small"><span class="pill pill-red"><span class="dot" aria-hidden="true"></span>Schok-pauze {{ market }}</span> {{ ro.label }}; geen nieuwe aankopen tot {{ ro.until|isodt }}.</p>
@@ -308,7 +302,7 @@
       {% set wins = ((perf.win_rate_pct or 0) * perf.closed_positions / 100)|round|int %}
       {{ ui.stat("Winnende trades", perf.win_rate_pct|pct(0, false) if perf.win_rate_pct is not none else "–", wins ~ " van " ~ perf.closed_positions ~ " met netto winst") }}
       {{ ui.stat("Per trade", perf.avg_pnl_pct|pct if perf.avg_pnl_pct is not none else "–", "gemiddeld, netto", perf.avg_pnl_pct|pnl_class(1) if perf.avg_pnl_pct is not none else "") }}
-      {{ ui.stat("Kosten", perf.total_fees_eur|eur, status.fee_pct|num(2) ~ "% per kant") }}
+      {{ ui.stat("Kosten", perf.total_fees_eur|eur, status.fee_pct|num(2) ~ "% per order") }}
     </div>
     {% call ui.table_wrap("Gesloten posities") %}
     <table class="table-stack">
@@ -339,7 +333,7 @@
   </section>
 
   {%- set eh = settings.evaluation_interval_hours -%}
-  {%- set every = ((eh // 24) ~ (" dag" if eh // 24 == 1 else " dagen")) if eh % 24 == 0 else (eh ~ " uur") -%}
+  {%- set every = eh|hours_nl -%}
   {%- set auto_eval = evaluation_available and settings.trading_enabled and eh > 0 -%}
   <section class="card" id="evaluaties" aria-labelledby="evaluaties-title">
     {% call ui.card_header("Evaluaties door Claude", 2, id="evaluaties-title") %}

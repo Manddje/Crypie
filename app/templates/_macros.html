@@ -133,24 +133,38 @@
 {%- endmacro %}
 
 {# The kill switch, the same on every page: one name, one explanation. Pausing and resuming
-   never ask for a password; next is where /trading/action returns to (an internal path). #}
-{% macro kill_switch(paused, next="/trading", help=true, small=false, id="noodstop") -%}
+   never ask for a password; next is where /trading/action returns to (an internal path).
+   beside_status: ui.status sits next to it; while paused its detail already is the same
+   explanation (health.PAUSED_DETAIL), so only what it adds is said here. #}
+{% macro kill_switch(paused, next="/trading", help=true, small=false, id="noodstop", beside_status=false) -%}
 {%- set k = kill_switch_text -%}
 <div class="kill-switch" id="{{ id }}">
   {% if paused %}
   <p class="kill-switch-state">{{ k.state }}</p>
   <form method="post" action="/trading/action" data-confirm="{{ k.confirm_resume }}">
     <input type="hidden" name="next" value="{{ next }}">
-    <button class="btn btn-primary{{ ' btn-sm' if small }}" type="submit" name="action" value="resume" data-busy="Hervatten…"{% if help %} aria-describedby="{{ id }}-help"{% endif %}>{{ icon("play") }}{{ k.resume }}</button>
+    <button class="btn btn-primary{{ ' btn-sm' if small }}" type="submit" name="action" value="resume" data-busy="Kopen hervatten…"{% if help %} aria-describedby="{{ id }}-help"{% endif %}>{{ icon("play") }}{{ k.resume }}</button>
   </form>
   {% else %}
   <form method="post" action="/trading/action" data-confirm="{{ k.confirm_pause }}">
     <input type="hidden" name="next" value="{{ next }}">
-    <button class="btn btn-stop{{ ' btn-sm' if small }}" type="submit" name="action" value="pause" data-busy="Pauzeren…"{% if help %} aria-describedby="{{ id }}-help"{% endif %}>{{ icon("pause") }}{{ k.button }}</button>
+    <button class="btn btn-stop{{ ' btn-sm' if small }}" type="submit" name="action" value="pause" data-busy="Noodstop aanzetten…"{% if help %} aria-describedby="{{ id }}-help"{% endif %}>{{ icon("pause") }}{{ k.button }}</button>
   </form>
   {% endif %}
-  {% if help %}<p class="kill-switch-help" id="{{ id }}-help">{{ k.help }}{% if paused %} {{ k.detail }}{% endif %}</p>{% endif %}
+  {% if help %}<p class="kill-switch-help" id="{{ id }}-help">{% if not (paused and beside_status) %}{{ k.help }}{% endif %}{% if paused %} {{ k.detail }}{% endif %}</p>{% endif %}
 </div>
+{%- endmacro %}
+
+{# The hard limits as <dt>/<dd> rows, in one wording for Handelen and Tradingplan (UX-105).
+   The labels are the ones in Instellingen › Harde limieten; limits is RiskLimits (or its dict).
+   Extra rows via {% call %}. #}
+{% macro hard_limits(limits) -%}
+<dt>Per order</dt><dd>minimaal {{ limits.min_trade_eur|eur_short }}, maximaal {{ limits.max_trade_eur|eur_short }}</dd>
+<dt>Maximaal in crypto</dt><dd>{{ limits.max_exposure_pct|num(0) }}% van de portefeuille</dd>
+<dt>Dagverlieslimiet</dt><dd>{{ daily_loss_rule_nl(limits.daily_loss_limit_pct)|capfirst }}.</dd>
+<dt>Maximum aantal orders per dag</dt><dd>{{ max_orders_rule_nl(limits.max_trades_per_day)|capfirst }}.</dd>
+<dt>Afkoelperiode na stop-loss</dt><dd>{{ limits.cooldown_min_after_stop }} minuten niet opnieuw kopen in een markt waar een stop-loss is geraakt.</dd>
+{{ caller() if caller is defined }}
 {%- endmacro %}
 
 {# The checklist of a decision. The marks are hidden from screen readers, which hear

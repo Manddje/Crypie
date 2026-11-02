@@ -213,8 +213,8 @@ SPECS: tuple[Spec, ...] = (
         "trading",
         "Dipbewaking: controle elke",
         "Zodra de dip-voorwaarden van de strategie gelden (bijvoorbeeld RSI onder 35) maar de "
-        "draai nog niet, kijkt de bot zo vaak opnieuw naar die markt. Draait de indicator "
-        "weer omhoog, dan gaat de situatie meteen naar Claude. 0 zet de bewaking uit.",
+        "draai nog niet, kijkt de bot zo vaak opnieuw naar die markt. Komt de draai, dan "
+        "draait de bot meteen een cyclus voor die markt. 0 zet de bewaking uit.",
         kind="int",
         min=0,
         max=60,
@@ -250,7 +250,7 @@ SPECS: tuple[Spec, ...] = (
     Spec(
         "risk_off_enabled",
         "trading",
-        "Risk-off rond events",
+        "Risk-off rond agendamomenten",
         "Geen nieuwe aankopen rond de momenten in de agenda hieronder en na een nieuwsschok. "
         "Verkopen en de stop-loss blijven werken.",
         kind="bool",
@@ -284,8 +284,9 @@ SPECS: tuple[Spec, ...] = (
         "shock_pause_hours",
         "trading",
         "Schok-pauze",
-        "Na een nieuwsfeit met grote impact en sterk negatief sentiment (hack, beurs in problemen) "
-        "koopt de bot zoveel uur niet in de coins die het raakt. 0 = uit.",
+        "Na een nieuwsschok (een nieuwsfeit met impact groot en sterk negatief sentiment, zoals "
+        "een hack of een beurs in problemen) koopt de bot zoveel uur niet in de coins die het "
+        "raakt. 0 = uit.",
         kind="int",
         min=0,
         max=72,
@@ -335,7 +336,7 @@ SPECS: tuple[Spec, ...] = (
         "max_trade_eur",
         "limits",
         "Maximum per order",
-        "Claude mag nooit meer dan dit bedrag in één order uitgeven.",
+        "Geen enkele order is groter: niet van Claude, niet van de regels en niet van jou.",
         kind="float",
         min=5,
         max=1_000_000,
@@ -412,9 +413,9 @@ SPECS: tuple[Spec, ...] = (
         "trading_fee_pct",
         "costs",
         "Handelskosten per order",
-        "Bitvavo-kosten (taker-fee) per order: je betaalt ze bij het kopen én bij het verkopen. "
-        "Oefenorders betalen dit tarief en de netto resultaten rekenen ermee. Met een live "
-        "sleutel leest de app je echte tarief bij het opstarten.",
+        "Wat Bitvavo per order rekent (het taker-tarief): je betaalt het bij het kopen én bij "
+        "het verkopen. Oefenorders betalen dit tarief en de netto resultaten rekenen ermee. Met "
+        "een live sleutel leest de app je echte tarief bij het opstarten.",
         kind="float",
         min=0,
         max=5,

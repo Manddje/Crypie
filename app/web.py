@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi.templating import Jinja2Templates
 
 from app.labels import CLOSE_REASONS_NL as _CLOSE_REASONS_NL
-from app.labels import daily_loss_rule_nl, max_orders_rule_nl
+from app.labels import KILL_SWITCH_HELP_NL, daily_loss_rule_nl, max_orders_rule_nl
 from app.strategy.describe import (  # noqa: F401
     OPERATORS_NL,
     SERIES_NL,
@@ -114,10 +114,7 @@ KILL_SWITCH_NL: dict[str, str] = {
     "button": "Noodstop: kopen pauzeren",
     "state": "Noodstop actief: kopen gepauzeerd",
     "resume": "Kopen hervatten",
-    "help": (
-        "De noodstop blokkeert alleen nieuwe aankopen. Stop-loss, trailing stop, take-profit "
-        "en verkopen op een verkoopsignaal blijven werken."
-    ),
+    "help": KILL_SWITCH_HELP_NL,
     "detail": (
         "De cycli lopen door, dus Claude kan nog worden gevraagd. Een verkoop alleen op "
         "negatief nieuws wacht tot je hervat."
@@ -210,6 +207,14 @@ def eur(value: object, decimals: int = 2, signed: bool = False) -> str:
         v = 0.0
     sign = "-" if v < 0 else ("+" if signed and v > 0 else "")
     return f"{sign}€{NBSP}{_dutch_number(abs(v), decimals)}"
+
+
+def eur_short(value: object) -> str:
+    """A limit or threshold: '€ 100' for a whole amount, '€ 7,50' otherwise (never '€ 8')."""
+    v = _finite(value)
+    if v is None:
+        return "–"
+    return eur(v, 0 if round(v, 2) == round(v) else 2)
 
 
 def pct(value: object, decimals: int = 1, signed: bool = True) -> str:
@@ -526,6 +531,18 @@ def market_list(markets: object, show: int = 3) -> str:
     return ", ".join(items)
 
 
+def hours_nl(hours: object) -> str:
+    """An interval in hours as people say it: '7 dagen', '1 dag', '12 uur'."""
+    try:
+        h = int(hours)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return "–"
+    if h > 0 and h % 24 == 0:
+        days = h // 24
+        return f"{days} {'dag' if days == 1 else 'dagen'}"
+    return f"{h} uur"
+
+
 def capfirst(text: object) -> str:
     """First letter upper case, the rest untouched (Jinja's capitalize would write 'utc')."""
     out = str(text or "")
@@ -631,6 +648,7 @@ templates.env.filters.update(
         "nl": nl,
         "num": num,
         "eur": eur,
+        "eur_short": eur_short,
         "pct": pct,
         "pnl_class": pnl_class,
         "price": price,
@@ -649,6 +667,7 @@ templates.env.filters.update(
         "close_reason": close_reason,
         "refusal": refusal_nl,
         "capfirst": capfirst,
+        "hours_nl": hours_nl,
         "market_list": market_list,
         "order_reason": order_reason,
         "indicator_nl": indicator_nl,

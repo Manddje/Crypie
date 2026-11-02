@@ -24,7 +24,7 @@
   {% if error %}{{ ui.notice("error", error, live=true) }}{% endif %}
   {% if paused %}
   {% call ui.notice("warn", kill_switch_text.state ~ ". " ~ kill_switch_text.help, live=false) %}
-  <a href="/trading#noodstop">Hervatten op Handelen</a>
+  <a href="/trading#noodstop">{{ kill_switch_text.resume }} op Handelen</a>
   {% endcall %}
   {% endif %}
 
@@ -79,11 +79,7 @@
 
       {% call derived("limieten", "Harde limieten") %}
       <dl class="kv">
-        <dt>Per order</dt><dd>minimaal {{ limits.min_trade_eur|eur(0) }}, maximaal {{ limits.max_trade_eur|eur(0) }}</dd>
-        <dt>In crypto</dt><dd>maximaal {{ limits.max_exposure_pct|num(0) }}% van de portefeuille</dd>
-        <dt>Dagverlies</dt><dd>{{ daily_loss_rule }}</dd>
-        <dt>Orders per dag</dt><dd>{{ max_orders_rule }}</dd>
-        <dt>Na stop-loss</dt><dd>{{ limits.cooldown_min_after_stop }} minuten niet opnieuw kopen in die markt</dd>
+        {{ ui.hard_limits(limits) }}
         <dt>Kosten</dt><dd>{{ fee_pct|num(2) }}% per order; kopen en verkopen samen kost {{ (fee_pct * 2)|num(2) }}%</dd>
         <dt>{{ kill_switch_text.name }}</dt><dd>{{ kill_switch_text.help }} Te bedienen op <a href="/trading#noodstop">Handelen</a>.</dd>
       </dl>
@@ -148,9 +144,9 @@
 
       {% call derived("claude", "De rol van Claude") %}
       <dl class="kv">
-        <dt>Beslissingen</dt><dd>{{ settings.claude_model_decision }}{% if not claude_available %} <span class="pill pill-orange">sleutel ontbreekt</span>{% endif %}</dd>
-        <dt>Nieuws</dt><dd>{{ settings.claude_model_news }}</dd>
-        <dt>Evaluatie</dt><dd>{{ settings.claude_model_evaluation }}{% if settings.evaluation_interval_hours > 0 %}, elke {{ (settings.evaluation_interval_hours / 24)|num(0) }} dagen{% else %}, alleen handmatig{% endif %}</dd>
+        <dt>Beslissingen</dt><dd>{{ settings.claude_model_decision|model_name }}{% if not claude_available %} <span class="pill pill-orange">sleutel ontbreekt</span>{% endif %}</dd>
+        <dt>Nieuws</dt><dd>{{ settings.claude_model_news|model_name }}</dd>
+        <dt>Evaluatie</dt><dd>{{ settings.claude_model_evaluation|model_name }}{% if settings.evaluation_interval_hours > 0 %}, elke {{ settings.evaluation_interval_hours|hours_nl }}{% else %}, alleen handmatig{% endif %}</dd>
         <dt>Budget</dt><dd><span class="money">$ {{ budget.spent_usd|num(2) }}</span> van <span class="money">$ {{ budget.limit_usd|num(0) }}</span> deze maand{% if budget.exhausted %} <span class="pill pill-red">op</span>{% endif %}</dd>
         <dt>Zonder Claude</dt><dd>{{ "afwachten: niets kopen; een verkoopsignaal wordt wel gevolgd" if settings.claude_unavailable_mode == "hold" else "het koopsignaal van de strategie volgen met de halve inzet, niet tegen zwaar negatief nieuws in; een verkoopsignaal wordt gevolgd" }}</dd>
       </dl>

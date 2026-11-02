@@ -552,7 +552,8 @@ async def test_getting_started_until_hidden(api):
     page = (await api.get("/")).text
     assert 'id="aan-de-slag"' in page and "0 van 5 stappen klaar" in page
     assert "Tradingplan schrijven" in page and 'href="/plan"' in page
-    assert "Nu nog niet: AUTH_ENABLED staat op false" in page
+    # Plain words first, the server variable as secondary text.
+    assert 'Nu nog niet: de login staat uit. <span class="mono">AUTH_ENABLED</span>' in page
 
     r = await api.post("/dashboard/getting-started", headers=HTML)
     assert r.status_code == 303 and r.headers["location"] == "/"

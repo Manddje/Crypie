@@ -101,7 +101,7 @@
         <div class="dash-step-body">
           <p class="dash-step-title">{{ s.title }} <span class="pill{{ ' pill-green' if s.done }}">{{ "klaar" if s.done else "nog te doen" }}</span></p>
           <p class="small muted">{{ s.text }}</p>
-          {% if s.env or s.note %}<p class="caption muted">{% if s.env %}<span class="mono">{{ s.env }}</span> {% endif %}{{ s.note or "" }}</p>{% endif %}
+          {% if s.env or s.note %}<p class="caption muted">{{ s.note or "" }}{% if s.env %} <span class="mono">{{ s.env }}</span>{% endif %}</p>{% endif %}
           {% if s.href %}<a class="card-link" href="{{ s.href }}">{{ s.link }}<span aria-hidden="true"> ›</span></a>{% endif %}
         </div>
       </li>
@@ -117,7 +117,7 @@
   <section class="card" id="open-posities" aria-labelledby="open-posities-title">
     {{ ui.card_header("Open posities", 2, meta=modes_nl[mode].label if positions_view.rows else none, href="/trading#open-posities", link="Alle details op Handelen", id="open-posities-title") }}
     {% if positions_view.rows %}
-    <p class="card-desc">Resultaat netto: na de kosten van de aankoop en van een verkoop nu ({{ fee_pct|num(2) }}% per kant).</p>
+    <p class="card-desc">Resultaat netto: na de kosten van de aankoop en van een verkoop nu ({{ fee_pct|num(2) }}% per order).</p>
     {% call ui.table_wrap("Open posities") %}
     <table class="table-stack">
       <tr><th scope="col">Markt</th><th class="num" scope="col">Hoeveelheid</th><th class="num" scope="col">Instap</th><th class="num" scope="col">Nu</th><th class="num" scope="col">Resultaat (netto)</th><th class="num" scope="col">Stop-loss</th><th class="num" scope="col">Take-profit</th></tr>
@@ -268,7 +268,7 @@
       {% set wins = ((performance.win_rate_pct or 0) * n / 100)|round|int %}
       <div class="stats cols-2">
         {{ ui.stat("Resultaat (netto)", performance.total_pnl_eur|eur(2, true), None, "money " ~ performance.total_pnl_eur|pnl_class) }}
-        {{ ui.stat("Winnende trades", performance.win_rate_pct|pct(0, false), wins ~ " van " ~ n) }}
+        {{ ui.stat("Winnende trades", performance.win_rate_pct|pct(0, false), wins ~ " van " ~ n ~ " met netto winst") }}
       </div>
       <p class="small muted mt-3">Alleen afgeronde trades, na kosten. Open posities tellen hier niet mee{% if not live %}; die zitten wel in 'Sinds start' bovenaan{% endif %}.</p>
       {% else %}
@@ -368,7 +368,7 @@
   </section>
 </div>
 {% endblock %}
-{% block footer %}{% if rate_limit is not none %}<span>Bitvavo-limiet resterend: {{ rate_limit }}</span>{% endif %}{% endblock %}
+{% block footer %}{% if rate_limit is not none %}<span>Ruimte voor Bitvavo-verzoeken deze minuut: {{ rate_limit }}</span>{% endif %}{% endblock %}
 {% block scripts %}
 <script src="/static/vendor/lightweight-charts.standalone.production.js?v=5.2.1"></script>
 <script src="/static/chart.js?v={{ asset_version }}"></script>

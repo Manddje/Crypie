@@ -36,7 +36,8 @@
     }
     if (last && Math.abs(last - shown.lastCycle) >= 1000) {
       var d = new Date(last);
-      return "Er is een nieuwe cyclus gedraaid (" + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ").";
+      var zone = window.CrypieTime && window.CrypieTime.zone ? " " + window.CrypieTime.zone(d) : "";
+      return "Er is een nieuwe cyclus gedraaid (" + pad(d.getHours()) + ":" + pad(d.getMinutes()) + zone + ").";
     }
     return "";
   }

@@ -45,3 +45,11 @@ def max_orders_rule_nl(n: int) -> str:
 
 
 IMPACT_NL = {0: "geen", 1: "klein", 2: "middel", 3: "groot"}
+
+# What the kill switch does, in one sentence for every page, the status and /api/status
+# (UX-09, UX-105). Mirrors the engine: risk.check_buy refuses every buy while paused; the exit
+# loop and sells on a strategy sell signal keep running.
+KILL_SWITCH_HELP_NL = (
+    "De noodstop blokkeert alleen nieuwe aankopen. Stop-loss, trailing stop, take-profit en "
+    "verkopen op een verkoopsignaal blijven werken."
+)

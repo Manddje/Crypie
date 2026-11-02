@@ -11,6 +11,7 @@ from app.bitvavo.client import BitvavoNetworkError
 from app.db import Base, Order, Position, Setting, make_engine
 from app.trading import risk
 from app.trading.health import PAUSED_DETAIL, bot_health, next_utc_midnight, risk_now
+from app.web import KILL_SWITCH_NL
 from tests.test_trading import FLAT_SERIES, FakeDecider, candles, make_engine_
 
 NOW = datetime(2026, 11, 2, 12, 0, tzinfo=UTC)
@@ -135,7 +136,9 @@ def test_kill_switch_is_its_own_state_and_says_what_it_does(session):
     risk.set_paused(session, True)
     h = health(eng, session)
     assert (h["level"], h["label"], h["detail"]) == ("paused", "Noodstop actief", PAUSED_DETAIL)
-    assert "stop-loss, trailing stop, take-profit en verkoopsignalen" in PAUSED_DETAIL
+    # The same sentence as next to the kill switch on every page (one source, UX-09/105).
+    assert PAUSED_DETAIL == KILL_SWITCH_NL["help"]
+    assert "take-profit en verkopen op een verkoopsignaal blijven werken" in PAUSED_DETAIL
 
 
 def test_trading_disabled(session):

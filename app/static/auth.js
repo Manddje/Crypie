@@ -94,12 +94,23 @@
       }
     });
   });
+  // The moment with its time zone, like every time on the pages ('2 november 2026 om 15:05 CET').
+  function made(d) {
+    try {
+      return d.toLocaleString("nl-NL", {
+        day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit",
+        timeZoneName: "short",
+      });
+    } catch (e) {
+      return d.toISOString().slice(0, 16).replace("T", " ") + " UTC";
+    }
+  }
   each("button[data-download]", function (btn) {
     btn.addEventListener("click", function () {
       var now = new Date();
       var lines = [
         btn.getAttribute("data-heading") || "Crypie: herstelcodes",
-        "Gemaakt op " + now.toLocaleString("nl-NL") + ". Elke code werkt één keer.",
+        "Gemaakt op " + made(now) + ". Elke code werkt één keer.",
         "",
         btn.getAttribute("data-download"),
         ""
