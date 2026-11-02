@@ -127,6 +127,18 @@ SPECS: tuple[Spec, ...] = (
         unit="minuten",
     ),
     Spec(
+        "exit_check_interval_min",
+        "trading",
+        "Stop-loss en take-profit: controle elke",
+        "Hoe vaak de bot de stop-loss, trailing stop en take-profit van álle open posities "
+        "controleert op de actuele koers. Dit loopt altijd door, ook als automatisch handelen "
+        "uit staat, de kill switch aan staat of de markt niet meer in de lijst staat.",
+        kind="int",
+        min=1,
+        max=60,
+        unit="minuten",
+    ),
+    Spec(
         "watch_interval_min",
         "trading",
         "Dipbewaking: controle elke",
@@ -243,6 +255,18 @@ SPECS: tuple[Spec, ...] = (
         kind="float",
         min=5,
         max=1_000_000,
+        unit="€",
+    ),
+    Spec(
+        "live_capital_eur",
+        "limits",
+        "Kapitaal voor de bot (live)",
+        "Het bedrag waarmee de bot live mag werken. De blootstellingslimiet en de "
+        "dagverlieslimiet rekenen dan met dit bedrag en alleen met de posities van de bot zelf, "
+        "niet met de rest van je Bitvavo-account. 0 = het hele account.",
+        kind="float",
+        min=0,
+        max=10_000_000,
         unit="€",
     ),
     Spec(

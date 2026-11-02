@@ -64,6 +64,16 @@ async def test_paper_order_flow(api):
     # The 0.25 EUR fee of the order above is gone for good, so 999,75 instead of 1.000,00.
     assert "€ 999,75" in r.text and "Oefenmodus" in r.text
 
+    # The manual buy opened a position (protected by the strategy's stops); selling closes it.
+    (pos,) = (await api.get("/api/positions")).json()["open"]
+    assert pos["market"] == "ETH-EUR" and pos["amount"] == pytest.approx(0.049875)
+    r = await api.post(
+        "/api/orders", json={"market": "ETH-EUR", "side": "sell", "amount_quote": 99}
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["amount"] == pytest.approx(0.049875)  # the rest would be below € 5: all
+    assert (await api.get("/api/positions")).json()["open"] == []
+
     r = await api.get("/static/app.css")
     assert r.status_code == 200 and "text/css" in r.headers["content-type"]
 
@@ -216,7 +226,7 @@ async def test_trading_endpoints(api):
     r = await api.get("/api/decisions")
     assert len(r.json()) == 2 and r.json()[0]["source"] == "rules"
     r = await api.get("/api/positions")
-    assert r.json() == {"open": [], "closed": []}
+    assert r.json()["open"] == []
     assert (await api.get("/api/evaluations")).json() == []
     assert (await api.post("/api/evaluations")).status_code == 503  # no key
     assert (await api.post("/api/evaluations/999/apply")).status_code == 404
@@ -327,6 +337,10 @@ async def test_settings_page_and_api_change_the_running_app(api):
 async def test_reset_paper_portfolio(api):
     respx.get(f"{BASE}/ticker/price", params={"market": "BTC-EUR"}).mock(
         return_value=Response(200, json={"market": "BTC-EUR", "price": "100"})
+    )
+    # A manual buy checks the exposure limit, so it needs every market's price.
+    respx.get(f"{BASE}/ticker/price").mock(
+        return_value=Response(200, json=[{"market": "BTC-EUR", "price": "100"}])
     )
     before = (await api.get("/api/balance")).json()["balances"]["EUR"]
     r = await api.post("/api/orders", json={"market": "BTC-EUR", "side": "buy", "amount_quote": 50})

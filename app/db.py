@@ -3,17 +3,45 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterator
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    String,
+    Text,
+    create_engine,
+    text,
+)
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    Session,
+    mapped_column,
+    sessionmaker,
+    validates,
+)
 
 from app.config import get_settings
+
+log = logging.getLogger(__name__)
 
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def clip(value: str | None, length: int) -> str | None:
+    """Cut free text to its column length, so a long message can never fail a commit."""
+    if value is None:
+        return None
+    value = str(value)
+    return value if len(value) <= length else value[: max(length - 1, 0)] + "…"
 
 
 class Base(DeclarativeBase):
@@ -34,10 +62,19 @@ class Order(Base):
     amount: Mapped[float | None] = mapped_column(Float, nullable=True)  # base currency
     amount_quote: Mapped[float | None] = mapped_column(Float, nullable=True)  # EUR
     price: Mapped[float | None] = mapped_column(Float, nullable=True)  # fill or limit price
-    status: Mapped[str] = mapped_column(String(16))
+    # pending (written before it is sent) | rejected (never placed) | unknown (sent, outcome
+    # not known yet) | a Bitvavo status: filled, partiallyFilled, canceledMarketProtection...
+    status: Mapped[str] = mapped_column(String(32))
     exchange_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)  # why the bot traded
     fee_quote: Mapped[float | None] = mapped_column(Float, nullable=True)  # EUR fee paid
+    # Our own id, sent as Bitvavo's clientOrderId, so a timed-out order can be looked up.
+    client_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    position_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # bot position
+
+    @validates("status", "exchange_order_id")
+    def _clip_text(self, key: str, value: str | None) -> str | None:
+        return clip(value, self.__table__.c[key].type.length)
 
 
 class Setting(Base):
@@ -121,10 +158,29 @@ class NewsItem(Base):
         return url
 
 
+ACTIVE_POSITION_STATUSES = ("open", "opening", "closing")
+
+
 class Position(Base):
-    """An open or closed long position in one market (paper or live)."""
+    """An open or closed long position in one market (paper or live).
+
+    ``status`` is open | closed, or briefly ``opening`` (a buy is in flight) or ``closing``
+    (a sell is in flight). Those two claim the market so no other run can trade it meanwhile;
+    the database allows one such position per mode and market, so two processes (a rolling
+    deploy) can never both open one.
+    """
 
     __tablename__ = "positions"
+    __table_args__ = (
+        Index(
+            "uq_active_position",
+            "mode",
+            "market",
+            unique=True,
+            sqlite_where=text("status IN ('open', 'opening', 'closing')"),
+            postgresql_where=text("status IN ('open', 'opening', 'closing')"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     mode: Mapped[str] = mapped_column(String(8))
@@ -153,6 +209,10 @@ class Position(Base):
 
     def tag_list(self) -> list[str]:
         return [t for t in (self.tags or "").split(",") if t]
+
+    @validates("close_reason")
+    def _clip_text(self, key: str, value: str | None) -> str | None:
+        return clip(value, self.__table__.c[key].type.length)
 
 
 class Decision(Base):
@@ -186,6 +246,10 @@ class Decision(Base):
     price_1h: Mapped[float | None] = mapped_column(Float, nullable=True)
     price_24h: Mapped[float | None] = mapped_column(Float, nullable=True)
     price_72h: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    @validates("blocked_by", "news_label", "model")
+    def _clip_text(self, key: str, value: str | None) -> str | None:
+        return clip(value, self.__table__.c[key].type.length)
 
     def check_list(self) -> dict[str, list[dict]]:
         """Parsed ``checks`` JSON: {"buy": [...], "sell": [...]} with text/left/right/ok."""
@@ -275,6 +339,8 @@ def init_db() -> None:
             os.makedirs(os.path.dirname(path), exist_ok=True)
     Base.metadata.create_all(engine)
     add_missing_columns(engine)
+    widen_columns(engine)
+    add_missing_indexes(engine)
 
 
 def add_missing_columns(bind) -> None:
@@ -296,6 +362,69 @@ def add_missing_columns(bind) -> None:
                     default = f" DEFAULT {column.default.arg!r}"
                 conn.execute(
                     text(f"ALTER TABLE {table.name} ADD COLUMN {column.name} {col_type}{default}")
+                )
+
+
+def widen_columns(bind, metadata=None) -> list[str]:
+    """Postgres only: grow VARCHAR columns whose model length is larger than in the database.
+
+    SQLite does not enforce VARCHAR lengths, so there it is a no-op. Idempotent: a column that
+    is already long enough is left alone. Returns the ``table.column`` names it widened.
+    """
+    from sqlalchemy import inspect
+
+    if bind.dialect.name != "postgresql":
+        return []
+    metadata = metadata if metadata is not None else Base.metadata
+    inspector = inspect(bind)
+    widened: list[str] = []
+    with bind.begin() as conn:
+        for table in metadata.sorted_tables:
+            if not inspector.has_table(table.name):
+                continue
+            current = {c["name"]: c["type"] for c in inspector.get_columns(table.name)}
+            for column in table.columns:
+                want = getattr(column.type, "length", None)
+                if not isinstance(column.type, String) or isinstance(column.type, Text) or not want:
+                    continue
+                have = getattr(current.get(column.name), "length", None)
+                if have is None or have >= want:
+                    continue  # missing, unbounded or already long enough
+                conn.execute(
+                    text(
+                        f'ALTER TABLE "{table.name}" ALTER COLUMN "{column.name}" '
+                        f"TYPE VARCHAR({int(want)})"
+                    )
+                )
+                widened.append(f"{table.name}.{column.name}")
+    for name in widened:
+        log.info("widened column %s", name)
+    return widened
+
+
+def add_missing_indexes(bind) -> None:
+    """Create indexes that newer models define on tables that already existed.
+
+    Never fails startup: an index that cannot be created (for example the unique index on
+    active positions while old data still holds a duplicate) is logged and skipped.
+    """
+    from sqlalchemy import inspect
+
+    inspector = inspect(bind)
+    for table in Base.metadata.sorted_tables:
+        if not inspector.has_table(table.name):
+            continue
+        existing = {ix["name"] for ix in inspector.get_indexes(table.name)}
+        for index in table.indexes:
+            if index.name in existing:
+                continue
+            try:
+                index.create(bind)
+            except Exception:  # noqa: BLE001 - log and keep starting
+                log.exception(
+                    "could not create index %s on %s; fix the data and restart",
+                    index.name,
+                    table.name,
                 )
 
 

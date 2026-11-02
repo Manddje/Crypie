@@ -8,9 +8,11 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db import Decision, Position, Setting
+from app.db import ACTIVE_POSITION_STATUSES, Decision, Order, Position, Setting
 
 PAUSE_KEY = "trading_paused"
+# Orders whose outcome is not known yet: no new order in that market until reconciled.
+UNSETTLED_ORDER_STATUSES = ("pending", "unknown")
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,52 @@ def realized_pnl_today(session: Session, mode: str, now: datetime | None = None)
     )
 
 
+def _active_positions(session: Session, mode: str) -> list[Position]:
+    return list(
+        session.scalars(
+            select(Position).where(
+                Position.mode == mode, Position.status.in_(ACTIVE_POSITION_STATUSES)
+            )
+        )
+    )
+
+
+def unrealized_pnl(session: Session, mode: str, prices: dict[str, float]) -> float:
+    """Paper result of the open positions at ``prices`` (EUR, vs. what was spent incl. fee).
+
+    A position whose market has no price in ``prices`` counts as break-even.
+    """
+    total = 0.0
+    for p in _active_positions(session, mode):
+        price = prices.get(p.market)
+        if price and p.amount:
+            total += p.amount * price - (p.entry_quote or 0.0)
+    return total
+
+
+def position_exposure(session: Session, mode: str, prices: dict[str, float]) -> float:
+    """EUR value of the bot's own open positions (at entry value when there is no price)."""
+    total = 0.0
+    for p in _active_positions(session, mode):
+        price = prices.get(p.market)
+        total += p.amount * price if price else (p.entry_quote or 0.0)
+    return total
+
+
+def has_unsettled_order(session: Session, mode: str, market: str) -> bool:
+    """True while an order in ``market`` was sent but its outcome is not known yet."""
+    return (
+        session.scalar(
+            select(func.count(Order.id)).where(
+                Order.mode == mode,
+                Order.market == market,
+                Order.status.in_(UNSETTLED_ORDER_STATUSES),
+            )
+        )
+        or 0
+    ) > 0
+
+
 def last_stop_loss(session: Session, mode: str, market: str) -> datetime | None:
     return session.scalar(
         select(func.max(Position.closed_at)).where(
@@ -88,17 +136,26 @@ def check_buy(
     portfolio_value: float,
     exposure_value: float,
     now: datetime | None = None,
+    unrealized: float = 0.0,
 ) -> tuple[float, str | None]:
-    """Return (allowed_amount_quote, block_reason). Amount may be reduced to fit limits."""
+    """Return (allowed_amount_quote, block_reason). Amount may be reduced to fit limits.
+
+    ``unrealized`` is the paper result of the open positions at the current price; it counts
+    towards the daily loss limit together with today's realized result.
+    """
     now = now or datetime.now(UTC)
     if is_paused(session):
         return 0.0, "handelen is gepauzeerd (kill switch)"
     if trades_today(session, mode, now) >= limits.max_trades_per_day:
         return 0.0, f"maximum van {limits.max_trades_per_day} trades per dag bereikt"
     if portfolio_value > 0:
-        loss_pct = -realized_pnl_today(session, mode, now) / portfolio_value * 100
+        day_result = realized_pnl_today(session, mode, now) + unrealized
+        loss_pct = -day_result / portfolio_value * 100
         if loss_pct >= limits.daily_loss_limit_pct:
-            return 0.0, f"dagverlieslimiet van {limits.daily_loss_limit_pct}% bereikt"
+            return 0.0, (
+                f"dagverlieslimiet van {limits.daily_loss_limit_pct}% bereikt "
+                "(gerealiseerd plus ongerealiseerd)"
+            )
     last_stop = last_stop_loss(session, mode, market)
     if last_stop is not None:
         if last_stop.tzinfo is None:
