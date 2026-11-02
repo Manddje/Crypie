@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from functools import lru_cache
 from typing import Annotated, Literal
@@ -13,7 +14,21 @@ from app.trading.events import default_calendar_lines
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        # Docker/Coolify secrets: a file /run/secrets/<setting name>, e.g. bitvavo_api_secret.
+        secrets_dir="/run/secrets" if os.path.isdir("/run/secrets") else None,
+    )
+
+    @classmethod
+    def settings_customise_sources(
+        cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings
+    ):
+        # A secret file wins over the env var: compose always passes every variable, as ""
+        # when it is unset, which would otherwise hide the file.
+        return init_settings, file_secret_settings, env_settings, dotenv_settings
 
     trading_mode: Literal["paper", "live"] = "paper"
     bitvavo_api_key: str = ""

@@ -1,0 +1,19 @@
+# Weekly update PRs for the locked Python packages (requirements*.txt, generated from
+# pyproject.toml), the SHA-pinned GitHub Actions and the digest-pinned base image.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
