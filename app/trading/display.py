@@ -353,8 +353,11 @@ def position_view(p: Position, price: float | None, fee_pct: float) -> dict[str,
     selling (netto: the entry already includes the buy fee, the sell fee is taken off the
     value), and how far the price is from the stop and the take-profit."""
     value = p.amount * price if price and p.amount else None
-    pnl = value * (1 - fee_pct / 100) - (p.entry_quote or 0.0) if value is not None else None
-    pnl_pct = pnl / p.entry_quote * 100 if pnl is not None and p.entry_quote else None
+    # Without what the buy cost there is no result to show (never the whole value as profit).
+    pnl = (
+        value * (1 - fee_pct / 100) - p.entry_quote if value is not None and p.entry_quote else None
+    )
+    pnl_pct = pnl / p.entry_quote * 100 if pnl is not None else None
     stop_gap = (price - p.stop_price) / price * 100 if price and p.stop_price else None
     tp_gap = (p.take_profit_price - price) / price * 100 if price and p.take_profit_price else None
     return {

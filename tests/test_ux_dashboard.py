@@ -473,7 +473,14 @@ async def test_open_positions_show_a_net_result_right_under_the_hero(api):
 
 
 def test_position_rows_and_portfolio_helpers():
-    p = SimpleNamespace(market="BTC-EUR", amount=0.001, entry_price=40000.0, entry_quote=40.1)
+    p = SimpleNamespace(
+        market="BTC-EUR",
+        amount=0.001,
+        entry_price=40000.0,
+        entry_quote=40.1,
+        stop_price=38000.0,
+        take_profit_price=None,
+    )
     view = _position_rows([p], {"BTC-EUR": 40000.0}, 0.25)
     assert view["rows"][0]["pnl_eur"] == pytest.approx(-0.2)
     assert view["pnl_pct"] == pytest.approx(-0.2 / 40.1 * 100)

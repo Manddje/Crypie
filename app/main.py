@@ -3657,22 +3657,19 @@ def _portfolio(
 
 def _position_rows(positions: list[Position], prices_: dict[str, float], fee_pct: float) -> dict:
     """Open positions with their result as if sold now: net, so after the fee paid on the buy
-    (in entry_quote) and the fee a sell would cost. The same sum as the engine's exit checks."""
+    (in entry_quote) and the fee a sell would cost. The same sum as the engine's exit checks,
+    and the same function as Handelen (display.position_view)."""
     rows = []
     for p in positions:
-        price = prices_.get(p.market)
-        value = p.amount * price if price else None
-        net = None
-        if value is not None and p.entry_quote:
-            net = value * (1 - fee_pct / 100) - p.entry_quote
+        view = display.position_view(p, prices_.get(p.market), fee_pct)
         rows.append(
             {
                 "position": p,
                 "coin": p.market.split("-")[0],
-                "price": price,
-                "value_eur": value,
-                "pnl_eur": net,
-                "pnl_pct": net / p.entry_quote * 100 if net is not None else None,
+                "price": view["price"],
+                "value_eur": view["value_eur"],
+                "pnl_eur": view["pnl_eur"],
+                "pnl_pct": view["pnl_pct"],
             }
         )
     known = [r for r in rows if r["pnl_eur"] is not None]
