@@ -153,16 +153,22 @@
       form.setAttribute("data-confirm", question);
     };
 
+    // A problem with the amount is shown once the owner typed one (or tried to send), and
+    // stays visible while other fields change.
+    var showing = touched;
     form.addEventListener("input", function (ev) {
-      if (ev.target === amount) touched = amount.value !== "" && amount.value !== defaultAmount;
-      update(ev.target === amount && amount.value !== "");
+      if (ev.target === amount) {
+        touched = amount.value !== "" && amount.value !== defaultAmount;
+        showing = amount.value !== "";
+      }
+      update(showing);
     });
-    form.addEventListener("change", function () { update(amount.value !== ""); });
+    form.addEventListener("change", function () { update(showing); });
     // The browser blocks a submit with a wrong amount: show why next to the field.
-    amount.addEventListener("invalid", function () { update(true); });
+    amount.addEventListener("invalid", function () { showing = true; update(true); });
     // Just before app.js asks: the question with the values as they are now.
     form.addEventListener("submit", function () { update(true); });
-    update(false);
+    update(showing);
 
     // After a refused order the form came back with ?market=…&side=…&amount=…; those values
     // are in the form now, so the address can be plain again (a reload starts afresh).
