@@ -146,7 +146,7 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
   {% if error_items %}
     {% call ui.notice("error", "", live=true, title="Niet opgeslagen:") %}
       {{ error_items|length }} {{ "veld klopt" if error_items|length == 1 else "velden kloppen" }} niet:
-      {% for e in error_items %}<a href="#{{ 'confirm_live' if e.key == 'confirm_live' else 'f-' ~ e.key }}" data-focus-link>{{ e.label }}</a>{{ ", " if not loop.last }}{% endfor %}.
+      {% for e in error_items %}{% if e.message %}{{ e.label }} ({{ e.message }}){% else %}<a href="{{ e.href or '#f-' ~ e.key }}" data-focus-link>{{ e.label }}</a>{% endif %}{{ ", " if not loop.last }}{% endfor %}.
       {% if needs_pw %}Vul daarna ook je wachtwoord opnieuw in.{% endif %}
     {% endcall %}
   {% elif pw_failed %}

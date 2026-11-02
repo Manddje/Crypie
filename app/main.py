@@ -2375,12 +2375,18 @@ def _settings_context(
         group["resettable"] = [f for f in group["changed"] if f["key"] != "trading_mode"]
         group["reset_needs_password"] = any(f["sensitive"] for f in group["resettable"])
         group["unsaved"] = [f for f in group["fields"] if f["changed"]]
-        # The error summary at the top of the submitted block: one link per field.
+        # The error summary at the top of the submitted block: a link per field of this block;
+        # anything else (a stored value of another block) with its message.
+        in_block = {f["key"] for f in group["fields"]}
         group["errors"] = (
             [
-                {"key": key, "label": _error_label(key, fields_by_key)}
-                for key in errors
-                if key in {f["key"] for f in group["fields"]} or key in EXTRA_FORM_FIELDS
+                {
+                    "key": key,
+                    "label": _error_label(key, fields_by_key),
+                    "href": "#" + key if key in EXTRA_FORM_FIELDS else "#f-" + key,
+                    "message": None if key in in_block or key in EXTRA_FORM_FIELDS else text,
+                }
+                for key, text in errors.items()
             ]
             if group["key"] == form_group
             else []
