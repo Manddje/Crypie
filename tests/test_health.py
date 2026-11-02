@@ -164,6 +164,10 @@ def test_exit_check_that_stopped_running_is_an_error(session):
     # Right after a start the first run is still to come: no alarm.
     eng.started_at = NOW - timedelta(seconds=30)
     assert health(eng, session)["exits_ok"]
+    # Never succeeded since a start long ago: an alarm, also with a long interval.
+    eng.started_at, eng.last_exit_ok = NOW - timedelta(hours=3), None
+    h = health(eng, session, settings=settings(exit_check_interval_min=60))
+    assert not h["exits_ok"] and "sinds de start niet meer gelukt" in h["detail"]
 
 
 def test_failing_cycle_and_stalled_planner(session):

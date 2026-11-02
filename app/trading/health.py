@@ -215,17 +215,17 @@ def bot_health(
             f"De bewaking van stop-loss en take-profit lukt niet sinds {_hm(failing_since)} UTC: "
             f"{engine.exit_error or 'onbekende fout'}."
         )
-    elif warming_up or now - started <= exit_grace:
-        exits_ok = True  # the first run comes shortly after the start
-    elif last_exit_ok is None or now - last_exit_ok > exit_grace:
+    elif last_exit_ok is not None and now - last_exit_ok <= exit_grace:
+        exits_ok = True
+    elif now - started <= START_GRACE + timedelta(minutes=exit_interval_min):
+        exits_ok = True  # just (re)started: the first run is still to come
+    else:
         exits_ok = False
         since = f"sinds {_hm(last_exit_ok)} UTC" if last_exit_ok else "sinds de start"
         errors.append(
             f"De bewaking van stop-loss en take-profit is {since} niet meer gelukt; die hoort "
             f"elke {exit_interval_min} min te draaien."
         )
-    else:
-        exits_ok = True
     unprotected = list(engine.unprotected or [])
     if unprotected and failing_since is None:
         n = len(unprotected)

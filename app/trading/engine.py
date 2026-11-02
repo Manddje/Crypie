@@ -590,9 +590,10 @@ class TradingEngine:
         if total > 0 and -day / total * 100 >= limit:
             today = datetime.now(UTC).strftime("%Y-%m-%d")
             where = "live" if mode == "live" else "oefenmodus"
+            pct = f"{limit:g}".replace(".", ",")
             self.notify(
                 "daily_loss_limit",
-                f"De dagverlieslimiet van {limit:g}% is bereikt ({where}). De bot koopt niets "
+                f"De dagverlieslimiet van {pct}% is bereikt ({where}). De bot koopt niets "
                 "meer tot 00:00 UTC; stop-loss, trailing stop en take-profit blijven werken.",
                 key=f"daily_loss_limit:{mode}:{today}",
                 every=timedelta(hours=24),
@@ -1939,7 +1940,7 @@ class TradingEngine:
 
     def _notify_unsettled(self, session: Session) -> None:
         """Orders that stay without a known outcome for a while: tell the owner once each."""
-        if self.notifier is None:
+        if self.notifier is None or not getattr(self.notifier, "enabled", True):
             return
         cutoff = datetime.now(UTC) - ORDER_UNKNOWN_NOTIFY_AFTER
         rows = session.scalars(
