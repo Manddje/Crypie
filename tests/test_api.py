@@ -63,7 +63,7 @@ async def test_paper_order_flow(api):
     assert r.status_code == 200 and "ETH-EUR" in r.text
     # Portfolio value = cash + coins at the current price, shown in Dutch notation.
     # The 0.25 EUR fee of the order above is gone for good, so 999,75 instead of 1.000,00.
-    assert "€ 999,75" in r.text and "Oefenmodus" in r.text
+    assert "€\u00a0999,75" in r.text and "Oefenmodus" in r.text
 
     # The manual buy opened a position (protected by the strategy's stops); selling closes it.
     (pos,) = (await api.get("/api/positions")).json()["open"]
