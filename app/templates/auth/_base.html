@@ -1,4 +1,5 @@
 {# Minimal layout for the login flow: no navigation, one centered card. #}
+{%- import "_macros.html" as ui -%}
 <!doctype html>
 <html lang="nl">
 <head>
@@ -19,6 +20,9 @@
       <span>Crypie</span>
     </div>
     <section class="card auth-card">
+      {#- One-off messages (app/flash.py): every HTML page consumes them, so show them here too. -#}
+      {% set auth_flashes = request.state.flashes|default([]) %}
+      {% if auth_flashes %}<div class="stack-sm mb-4">{% for f in auth_flashes %}{{ ui.notice(f.kind, f.text, live=true) }}{% endfor %}</div>{% endif %}
       {% block content %}{% endblock %}
     </section>
     {% block below %}{% endblock %}

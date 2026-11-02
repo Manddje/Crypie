@@ -31,6 +31,7 @@ from app.ai.strategy_assistant import StrategyAssistant
 from app.api_docs import redoc_page, swagger_page
 from app.auth.routes import (
     StepUpError,
+    _safe_next,
     require_current_password,
     require_login,
     step_up_enabled,
@@ -1588,9 +1589,12 @@ APPLY_ACTION_RE = re.compile(r"apply:([0-9]{1,9})")
 async def trading_action(
     request: Request,
     action: str = Form(..., max_length=32),
+    next_url: str = Form("", alias="next", max_length=512),
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
+    """Kill switch, cycle, evaluation and proposals. ``next`` (from the kill-switch macro) is
+    the page to return to; only paths on this site are followed."""
     if action == "pause":
         risk.set_paused(session, True)
     elif action == "resume":
@@ -1612,7 +1616,7 @@ async def trading_action(
         except ProposalError as exc:
             ctx = _trading_context(request, engine, session, error=exc.message)
             return templates.TemplateResponse(request, "trading.html", ctx, status_code=exc.status)
-    return RedirectResponse("/trading", status_code=303)
+    return RedirectResponse(_safe_next(next_url) if next_url else "/trading", status_code=303)
 
 
 # -- Trading plan ---------------------------------------------------------------------

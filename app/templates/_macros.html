@@ -118,7 +118,9 @@
   <span class="pill {{ pill_cls }}{{ ' pill-lg' if large }}"><span class="dot" aria-hidden="true"></span>{{ health.label }}</span>
   {% if health.detail %}<p class="status-detail">{{ health.detail }}</p>{% endif %}
   {% if details %}
-  {% if health.reasons %}<ul class="status-reasons">{% for r in health.reasons %}<li>{{ r }}</li>{% endfor %}</ul>{% endif %}
+  {#- reasons lists every applicable reason, the one in detail too: show that one only once. -#}
+  {% set more_reasons = (health.reasons or [])|reject("equalto", health.detail)|list %}
+  {% if more_reasons %}<ul class="status-reasons">{% for r in more_reasons %}<li>{{ r }}</li>{% endfor %}</ul>{% endif %}
   <p class="status-meta">
     <span>Laatste cyclus: {{ health.last_cycle|ago }}</span>
     {% if health.next_cycle %}<span>Volgende: {{ health.next_cycle|dt }} ({{ health.next_cycle|ago }})</span>{% endif %}

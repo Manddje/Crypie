@@ -20,7 +20,9 @@
   {% if status_code %}<p class="subtitle">Foutcode {{ status_code }}</p>{% endif %}
 </div>
 <div class="stack">
-  {{ ui.notice(kind, message) }}
+  {#- The page itself is the message (the h1 says it), so no alert role: app.js would otherwise
+      move the focus to it as if a form had just failed. -#}
+  {{ ui.notice(kind, message, live=false) }}
   {% if details %}
   <section class="card">
     <ul class="small">
