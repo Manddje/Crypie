@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import anthropic
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -109,6 +109,49 @@ def store_items(
             session.rollback()
             log.warning("news item %s skipped: %s", row["url"][:200], describe_error(exc))
     return inserted
+
+
+def backfill_feed_hosts(session: Session) -> int:
+    """Give RSS rows stored before feed_host existed the host of their feed, so one feed is one
+    outlet across the upgrade (old rows were keyed by the feed title, new ones by the host).
+
+    Copied from newer rows of the same feed title, and only when that title maps to exactly one
+    host. Returns the number of rows filled; a no-op once the old rows have been pruned.
+    """
+    old_titles = (
+        select(NewsItem.source_name)
+        .where(NewsItem.source == "rss", NewsItem.feed_host.is_(None))
+        .distinct()
+    )
+    hosts: dict[str, set[str]] = {}
+    for name, host in session.execute(
+        select(NewsItem.source_name, NewsItem.feed_host)
+        .where(
+            NewsItem.source == "rss",
+            NewsItem.feed_host.is_not(None),
+            NewsItem.source_name.in_(old_titles),
+        )
+        .distinct()
+    ):
+        hosts.setdefault(name, set()).add(host)
+    filled = 0
+    for name, found in hosts.items():
+        if len(found) != 1:
+            continue  # two feeds with one title: leave the old rows keyed by the title
+        filled += session.execute(
+            update(NewsItem)
+            .where(
+                NewsItem.source == "rss",
+                NewsItem.feed_host.is_(None),
+                NewsItem.source_name == name,
+            )
+            .values(feed_host=next(iter(found)))
+            .execution_options(synchronize_session=False)
+        ).rowcount
+    if filled:
+        session.commit()
+        log.info("news: %d older RSS items linked to their feed host", filled)
+    return filled
 
 
 def clamp_future_items(session: Session, now: datetime | None = None) -> int:
@@ -668,6 +711,7 @@ class NewsService:
             log.exception("News fetch failed")
         try:
             clamp_future_items(session, now)
+            backfill_feed_hosts(session)
             prune_old_news(session, now)
             prune_usage(session, now)
         except Exception:  # noqa: BLE001

@@ -26,7 +26,14 @@ from app.bitvavo.client import BitvavoClient, BitvavoError, InvalidMarketError, 
 from app.db import Base as DbBase
 from app.db import ClaudeUsage, Decision, NewsItem, Order, Position, Setting, make_engine
 from app.news import sources
-from app.news.service import NewsService, market_sentiment, outlet_of, recent_items, store_items
+from app.news.service import (
+    NewsService,
+    backfill_feed_hosts,
+    market_sentiment,
+    outlet_of,
+    recent_items,
+    store_items,
+)
 from app.news.sources import RawItem, VettedNetworkBackend, parse_rss, vetted_transport
 from app.strategy.store import STRATEGY_KEY
 from app.trading import risk
@@ -179,6 +186,36 @@ async def test_a_failing_stop_is_journaled_once_per_period_and_shown(session, ca
     assert restarted.unprotected == [] and pos.id not in restarted.exit_failures
     session.refresh(pos)
     assert pos.status == "closed"
+
+
+def _unfilled(market, side, kw):
+    return {
+        "orderId": "x",
+        "status": "canceled",
+        "filledAmount": "0",
+        "filledAmountQuote": "0",
+        "feePaid": "0",
+        "feeCurrency": "EUR",
+    }
+
+
+async def test_a_repeated_unfilled_stop_keeps_the_position_open(session):  # noqa: F811
+    exchange = FakeExchange({"BTC-EUR": 8.0}, balance={"EUR": 1000.0, "BTC": 5.0})
+    engine = live_engine(session, exchange, markets=["BTC-EUR"])
+    pos = add_position(session, mode="live", stop=9.0)
+    exchange.script = [_unfilled] * 4
+    for _ in range(4):
+        await engine.run_exits(session)
+        session.expire_all()
+        # Every unfilled sell is settled in the database: the position stays open (with its
+        # stop) and no order is left pending for reconcile to look up by clientOrderId.
+        assert session.get(Position, pos.id).status == "open"
+        orders = session.scalars(select(Order)).all()
+        assert orders and all(o.status == "canceled" for o in orders)
+        assert all(o.exchange_order_id == "x" for o in orders)
+    assert len(exchange.placed) == 4
+    decisions = session.scalars(select(Decision)).all()
+    assert len(decisions) == 1 and "niet gevuld" in decisions[0].blocked_by
 
 
 async def test_a_position_without_a_price_is_reported(session):  # noqa: F811
@@ -442,6 +479,34 @@ def test_rss_items_remember_their_feed(session):  # noqa: F811
     assert store_items(session, [raw], 48) == 1
     stored = session.scalars(select(NewsItem)).one()
     assert stored.feed_host == "feeds.evil.example" and outlet_of(stored) == "evil"
+
+
+def test_rss_rows_from_before_the_upgrade_get_their_feed_host(session):  # noqa: F811
+    ct = "cointelegraph.com"
+    session.add_all(
+        [
+            _news("rss", "Cointelegraph.com News", "https://cointelegraph.com/old"),  # before
+            _news("rss", "Cointelegraph.com News", "https://cointelegraph.com/new", feed_host=ct),
+            # One title, two feed hosts: ambiguous, the old row keeps its title key.
+            _news("rss", "Crypto", "https://a.example/old"),
+            _news("rss", "Crypto", "https://a.example/new", feed_host="a.example"),
+            _news("rss", "Crypto", "https://b.example/new", feed_host="b.example"),
+            # No newer row from that feed yet: nothing to copy.
+            _news("rss", "Quiet", "https://quiet.example/old"),
+        ]
+    )
+    session.commit()
+    assert news_sources(session, "BTC", positive=False) == 6  # the old cointelegraph counts twice
+    assert backfill_feed_hosts(session) == 1
+    session.expire_all()
+    old = session.scalars(select(NewsItem).where(NewsItem.url.like("%/old"))).all()
+    assert {it.url: it.feed_host for it in old} == {
+        "https://cointelegraph.com/old": ct,
+        "https://a.example/old": None,
+        "https://quiet.example/old": None,
+    }
+    assert news_sources(session, "BTC", positive=False) == 5  # one feed, one outlet
+    assert backfill_feed_hosts(session) == 0  # idempotent
 
 
 def test_lead_is_the_article_seen_first_not_a_backdated_one(session):  # noqa: F811

@@ -1,8 +1,11 @@
 """Deployment and supply-chain hardening: Dockerfile, compose, lock files, CI, secrets."""
 
+import ast
 import asyncio
 import hashlib
+import importlib.metadata
 import re
+import sys
 import tomllib
 from pathlib import Path
 
@@ -170,6 +173,26 @@ def test_lock_satisfies_pyproject_and_dev_lock_matches():
         assert name in dev, f"{name} missing from requirements-dev.txt: regenerate it"
     # The dev lock (CI) tests exactly the versions the image runs.
     assert {k: dev[k] for k in prod} == prod
+
+
+def test_every_third_party_import_of_the_app_is_declared():
+    """A package the app imports itself must be in pyproject.toml, not only arrive through
+    another one: a dependency bump could otherwise drop or break it unnoticed."""
+    declared = {
+        Requirement(spec).name.lower().replace("_", "-")
+        for spec in tomllib.loads(_read("pyproject.toml"))["project"]["dependencies"]
+    }
+    distributions = importlib.metadata.packages_distributions()
+    imported = set()
+    for path in (ROOT / "app").rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                imported |= {a.name.split(".")[0] for a in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                imported.add(node.module.split(".")[0])
+    for module in sorted(imported - set(sys.stdlib_module_names) - {"app"}):
+        names = {d.lower().replace("_", "-") for d in distributions.get(module, [module])}
+        assert names & declared, f"{module} is imported by app/ but not in pyproject.toml"
 
 
 def test_no_unused_uvicorn_extras():

@@ -8,6 +8,7 @@ from app import settings_store as cfg
 from app.auth import routes
 from app.db import AuthThrottle, SessionLocal
 from app.main import app
+from app.trading import risk
 from tests.test_auth import PASSWORD, _setup
 from tests.test_security_auth import web  # noqa: F401  (fixture)
 
@@ -52,6 +53,8 @@ async def test_settings_form_asks_the_password_for_a_sensitive_change(owner):
     page = await owner.get("/settings")
     assert page.text.count('name="current_password"') == len(cfg.GROUPS) + 1  # + paper reset
     assert "Huidig wachtwoord" in page.text
+    # The help names every sensitive part, also trading on/off and the exit check (F21).
+    assert "automatisch handelen aan/uit" in page.text and "de exit-controle" in page.text
 
     form = {"group": "limits", "action": "save", "max_trade_eur": "40"}
     r = await owner.post("/settings", data=form)
@@ -86,6 +89,19 @@ async def test_settings_form_without_sensitive_change_needs_no_password(owner):
     r = await owner.post("/settings", data=form, follow_redirects=False)
     assert r.status_code == 303, r.text
     assert app.state.settings.evaluation_interval_hours == 12
+
+
+async def test_emergency_pause_needs_no_password(owner):
+    """Turning trading_enabled off in the settings needs the password; the pause button on
+    /trading does not, so the bot can always be stopped quickly."""
+    r = await owner.post("/trading/action", data={"action": "pause"}, follow_redirects=False)
+    assert r.status_code == 303
+    try:
+        with SessionLocal() as db:
+            assert risk.is_paused(db)
+    finally:
+        with SessionLocal() as db:
+            risk.set_paused(db, False)
 
 
 async def test_validation_errors_come_before_the_password(owner):

@@ -21,6 +21,10 @@ dependencies = [
     "anthropic>=2.3",
     "feedparser>=6.0",
     "segno>=1.6",
+    # Imported directly by the app, so declared even though httpx / pydantic-settings pull them
+    # in: httpcore by app/news/sources.py (the vetted DNS backend), pydantic for the models.
+    "httpcore>=1.0",
+    "pydantic>=2.7",
     # Transitive (via fastapi / uvicorn, httpx), listed only to keep vulnerable releases out.
     "starlette>=1.3.1",
     "h11>=0.16",

@@ -1219,7 +1219,11 @@ class TradingEngine:
             }
             if last is not None and now - last["at"] < EXIT_FAILURE_JOURNAL:
                 log.warning("%s for position %s still fails: %s", reason, pid, blocked)
-                session.rollback()
+                # Commit, not roll back: an unfilled sell already settled its order and reopened
+                # the position in this session. The decision itself is not journaled again.
+                if decision in session:
+                    session.expunge(decision)
+                session.commit()
                 return CycleResult(market, price, signal, "sell", "mechanical", False, blocked)
         else:
             self.exit_failures.pop(pid, None)
