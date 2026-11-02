@@ -1678,6 +1678,8 @@ footer.site .footer-alert { color: var(--red); font-weight: 500; }
 .live-confirm-title { font-weight: 600; font-size: var(--fs-help); margin-bottom: var(--space-3); }
 .live-summary { margin-bottom: var(--space-3); }
 .live-confirm-field { margin-top: var(--space-3); }
+.live-confirm .check-row { display: flex; align-items: flex-start; margin-top: 12px; font-size: var(--fs-help); }
+.live-confirm .check-row input { margin-top: 3px; flex: none; }
 .live-confirm-field label { color: var(--text); font-size: var(--fs-help); }
 .live-confirm.has-error input { border-color: var(--red); }
 

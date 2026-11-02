@@ -258,3 +258,66 @@ async def test_the_overview_points_to_a_waiting_proposal(api):  # noqa: F811
         with SessionLocal() as s:
             s.execute(delete(Evaluation).where(Evaluation.id == ev_id))
             s.commit()
+
+
+async def test_the_same_order_form_places_one_order(api):  # noqa: F811
+    """UX-100: a form sent again (Back and send, a retried request) places nothing new."""
+    import re
+
+    from sqlalchemy import select
+
+    from app.db import Order
+    from app.flash import flashes_from_response
+    from tests.test_ux_dashboard import _clear_trades
+
+    _clear_trades()
+    page = (await api.get("/", headers=HTML)).text
+    token = re.search(r'name="order_token" value="([^"]+)"', page).group(1)
+    form = {"market": "BTC-EUR", "side": "buy", "amount_quote": "20", "order_token": token}
+    first = await api.post("/orders", data=form, headers=HTML)
+    assert flashes_from_response(first)[0]["kind"] == "ok"
+    again = await api.post("/orders", data=form, headers=HTML)
+    msg = flashes_from_response(again)[-1]
+    assert msg["kind"] == "warn" and "dit formulier was al verstuurd" in msg["text"]
+    with SessionLocal() as s:
+        assert len(s.scalars(select(Order)).all()) == 1
+    # A new page has a new token; without a token (scripts, older pages) nothing changes.
+    assert (
+        re.search(r'name="order_token" value="([^"]+)"', (await api.get("/")).text).group(1)
+        != token
+    )
+    _clear_trades()
+
+
+async def test_handelen_points_to_trades_of_the_other_mode(api):  # noqa: F811
+    """UX-01: Handelen shows the current mode; trades of the other one stay one click away."""
+    from datetime import UTC, datetime
+
+    from app.db import Position
+
+    with SessionLocal() as s:
+        p = Position(
+            mode="live",
+            market="BTC-EUR",
+            status="closed",
+            amount=0.001,
+            entry_price=40000.0,
+            entry_quote=40.1,
+            exit_price=41000.0,
+            exit_quote=40.9,
+            pnl_eur=0.8,
+            pnl_pct=2.0,
+            close_reason="take_profit",
+            closed_at=datetime.now(UTC),
+        )
+        s.add(p)
+        s.commit()
+        pid = p.id
+    try:
+        page = (await api.get("/trading", headers=HTML)).text
+        assert "Alleen oefenmodus. Er is ook 1 trade uit live" in page
+        assert '<a href="/journal?mode=live">bekijken in het journaal</a>' in page
+    finally:
+        with SessionLocal() as s:
+            s.execute(delete(Position).where(Position.id == pid))
+            s.commit()

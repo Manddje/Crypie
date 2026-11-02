@@ -207,6 +207,51 @@ async def test_switching_to_live_in_the_form_needs_the_typed_confirmation(api, m
     assert app.state.broker.mode == "paper"
 
 
+# -- UX-01: start afresh with the switch to live ---------------------------------------------------
+
+
+@pytest.mark.parametrize("reset", [True, False])
+async def test_the_switch_to_live_can_reset_the_paper_portfolio(api, monkeypatch, reset):
+    from sqlalchemy import delete, select
+
+    from app.db import Position
+
+    ok = [dict(r, ok=True) for r in main_module.live_requirements(app.state.env, app.state.client)]
+    monkeypatch.setattr(main_module, "live_requirements", lambda *a: ok)
+    monkeypatch.setattr(main_module, "live_blocker", lambda *a, **k: None)
+    with SessionLocal() as db:
+        db.execute(delete(Position))
+        db.add(
+            Position(
+                mode="paper",
+                market="BTC-EUR",
+                status="open",
+                amount=0.001,
+                entry_price=40000.0,
+                entry_quote=40.1,
+                stop_price=38000.0,
+            )
+        )
+        db.commit()
+    page = (await api.get("/settings")).text
+    assert 'name="reset_paper_on_live"' in page and "1 open oefenpositie wordt gesloten" in page
+    data = {"group": "trading", "trading_mode": "live", "confirm_live": "LIVE"}
+    if reset:
+        data["reset_paper_on_live"] = "1"
+    r = await api.post("/settings", data=data, follow_redirects=False)
+    assert r.status_code == 303 and app.state.broker.mode == "live"
+    (msg,) = flash.flashes_from_response(r)
+    with SessionLocal() as db:
+        (pos,) = db.scalars(select(Position)).all()
+        if reset:
+            assert pos.status == "closed" and pos.close_reason == "reset"
+            assert "1 open oefenpositie is gesloten zonder resultaat" in msg["text"]
+        else:
+            assert pos.status == "open" and "oefenportefeuille" not in msg["text"]
+        db.execute(delete(Position))
+        db.commit()
+
+
 # -- UX-52: a key Bitvavo refuses is not 'ingesteld' -----------------------------------------------
 
 

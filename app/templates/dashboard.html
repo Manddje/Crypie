@@ -306,6 +306,8 @@
           data-mode="{{ mode }}" data-min-buy="{{ order_limits.min_buy }}" data-max-buy="{{ order_limits.max_buy }}" data-min-sell="{{ order_limits.min_sell }}"
           data-positions='{{ order_positions|tojson }}' data-default-amount="{{ order_default_amount }}"
           data-confirm="{{ 'LIVE · echt geld' if live else 'Oefenmodus (fictief geld)' }}: deze order plaatsen?">
+      {#- One use per form: sending the same form again places nothing (app.main._claim_order_token). -#}
+      <input type="hidden" name="order_token" value="{{ order_token }}">
       <div class="form-row">
         <label class="field">Markt
           <select name="market" id="order-market">{% for m in settings.markets %}<option value="{{ m }}"{% if m == f.market %} selected{% endif %}>{{ m }}</option>{% endfor %}</select>

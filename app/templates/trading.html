@@ -318,6 +318,10 @@
     {% else %}
     {{ ui.empty("Nog geen gesloten posities", "Afgeronde trades met hun netto resultaat verschijnen hier.", symbol="journal") }}
     {% endif %}
+    {#- UX-01: this page shows the mode the bot trades in now; the other mode stays reachable. -#}
+    {% if other_mode %}
+    <p class="form-help mt-3">Alleen {{ "live" if live else "oefenmodus" }}. Er {{ "is" if other_mode.count == 1 else "zijn" }} ook {{ other_mode.count }} {{ "trade" if other_mode.count == 1 else "trades" }} uit {{ "oefenmodus" if live else "live" }}: <a href="/journal?mode={{ other_mode.mode }}">bekijken in het journaal</a>.</p>
+    {% endif %}
   </section>
 
   {%- set eh = settings.evaluation_interval_hours -%}

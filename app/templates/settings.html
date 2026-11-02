@@ -134,6 +134,12 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
       <p class="setting-help" id="confirm_live-help">Alleen nodig als je hierboven Live kiest en Handelen opslaat.</p>
       {% if errors.confirm_live %}<p class="setting-error" id="confirm_live-error">{{ errors.confirm_live }}</p>{% endif %}
     </div>
+    {#- UX-01: open paper positions would stay guarded next to the real ones, and resetting
+        them is only possible in Oefenmodus. Offer to start afresh with the switch. -#}
+    <label class="check-row">
+      <input type="checkbox" name="reset_paper_on_live" value="1"{% if form_extra.reset_paper_on_live %} checked{% endif %} data-no-draft>
+      <span>Oefenportefeuille meteen resetten{% if live.paper_open %}: {{ live.paper_open }} open {{ "oefenpositie wordt" if live.paper_open == 1 else "oefenposities worden" }} gesloten zonder resultaat{% endif %}. Anders {% if live.paper_open %}{{ "blijft die" if live.paper_open == 1 else "blijven die" }} bewaakt door stop-loss en take-profit, en {% endif %}kun je de oefenportefeuille pas weer resetten in Oefenmodus.</span>
+    </label>
   </div>
   {% endif %}
 </div>

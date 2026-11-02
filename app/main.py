@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import secrets
 import time
 import weakref
 from contextlib import asynccontextmanager
@@ -2084,6 +2085,8 @@ def _trading_context(
             None,
         )
     status = _trading_status(engine, session, settings)
+    other = "paper" if engine.mode == "live" else "live"
+    other_count = mode_counts(session).get(other, 0)
     # The dip watch journals its conditions with indicator ids ('rsi14 stijgt'): readable names.
     status["watch"] = [
         {
@@ -2106,6 +2109,7 @@ def _trading_context(
     return {
         "settings": settings,
         "status": status,
+        "other_mode": {"mode": other, "count": other_count} if other_count else None,
         # One status for the hero (app/trading/health.py) and the limits as current figures.
         "health": _health(request, engine, session, figures=figures, paused=status["paused"]),
         "risk_now": figures,
@@ -3028,8 +3032,11 @@ def _reset_confirm_text(group: dict) -> str:
     return text
 
 
-def _live_context(request: Request, settings: Settings, key_state: dict) -> dict:
-    """The checklist and confirmation panel for switching to live."""
+def _live_context(
+    request: Request, settings: Settings, key_state: dict, paper_open: int = 0
+) -> dict:
+    """The checklist and confirmation panel for switching to live. ``paper_open`` is the number
+    of open paper positions, which the panel offers to close with the switch (UX-01)."""
     env: Settings = request.app.state.env
     requirements = live_requirements(env, request.app.state.client)
     capital = settings.live_capital_eur
@@ -3072,6 +3079,7 @@ def _live_context(request: Request, settings: Settings, key_state: dict) -> dict
         "requirements": requirements,
         "missing": [r for r in requirements if not r["ok"]],
         "advice": advice,
+        "paper_open": paper_open,
         "can_switch": settings.trading_mode != "live" and all(r["ok"] for r in requirements),
         "summary": [
             ("Maximum per order", fmt_eur(settings.max_trade_eur, 0)),
@@ -3192,7 +3200,9 @@ def _settings_context(
         "groups": payload["groups"],
         "paper_field": paper_field,
         "live_blocker": payload["live_blocker"],
-        "live": _live_context(request, settings, key_state),
+        "live": _live_context(
+            request, settings, key_state, paper_open=len(open_positions(session, "paper"))
+        ),
         "config_warning": payload["warning"],
         "errors": errors,
         "message": message,
@@ -3294,11 +3304,16 @@ async def settings_save(request: Request, session: Session = Depends(get_session
             raw[key] = str(sent[-1])  # a checkbox posts after its hidden "false" twin
         elif cfg.SPEC_BY_KEY[key].kind == "bool":
             raw[key] = "false"
-    extra = {"confirm_live": str(form.get("confirm_live") or "")[:20]}
+    extra = {
+        "confirm_live": str(form.get("confirm_live") or "")[:20],
+        "reset_paper_on_live": str(form.get("reset_paper_on_live") or "") == "1",
+    }
     old: Settings = request.app.state.settings
+    to_live = False
     try:
         values, candidate = await _check_settings(request, session, raw)
-        if candidate.trading_mode == "live" and request.app.state.broker.mode != "live":
+        to_live = candidate.trading_mode == "live" and request.app.state.broker.mode != "live"
+        if to_live:
             # Switching to real money in the portal: the live confirmation is typed, not clicked.
             if extra["confirm_live"].strip().upper() != "LIVE":
                 raise SettingsError(
@@ -3317,11 +3332,17 @@ async def settings_save(request: Request, session: Session = Depends(get_session
         return page(400, errors=exc.errors, submitted=raw, form_group=group, form_extra=extra)
     except StepUpError as exc:
         return step_up_failed(group, exc, submitted=raw)
-    response = flash.redirect_with_flash(
-        f"/settings?saved={group}#{group}",
-        "ok",
-        _saved_text(title, cfg.changes(old, candidate, cfg.keys_in_group(group))),
-    )
+    text = _saved_text(title, cfg.changes(old, candidate, cfg.keys_in_group(group)))
+    if to_live and extra["reset_paper_on_live"]:
+        # Offered in the live panel (UX-01): the paper portfolio starts afresh, so no paper
+        # position is guarded next to the real ones. The password was checked for the switch.
+        closed = _reset_paper_portfolio(session)
+        text += (
+            f" De oefenportefeuille is gereset; {closed} open "
+            f"{'oefenpositie is' if closed == 1 else 'oefenposities zijn'} gesloten zonder "
+            "resultaat."
+        )
+    response = flash.redirect_with_flash(f"/settings?saved={group}#{group}", "ok", text)
     for key in cfg.keys_in_group(group):
         warning = cfg.model_warning(getattr(candidate, key)) if key in values else None
         if warning and cfg.SPEC_BY_KEY[key].kind == "model":
@@ -3889,6 +3910,7 @@ async def _dashboard_context(
         "fee_pct": engine.fee_pct,
         "order_form": order_form or _order_form(settings, limits),
         "order_default_amount": _default_amount(limits),
+        "order_token": secrets.token_urlsafe(16),
         "order_flashes": order_flashes or [],
         # A refused password: the field is marked, so app.js puts the focus there.
         "order_password_error": any(
@@ -3974,6 +3996,35 @@ async def hide_getting_started(session: Session = Depends(get_session)):
     )
 
 
+# One use per rendered order form (UX-100). app.js stops a double click; this stops the same
+# form being sent again later (Back and send again, a browser retrying a slow request), which
+# would otherwise place a second order. Kept in memory: one process (uvicorn --workers 1).
+ORDER_TOKEN_TTL_S = 30 * 60
+_order_tokens: dict[str, float] = {}
+
+
+def _claim_order_token(token: str) -> bool:
+    """True the first time a form's token places an order (within the TTL), False after."""
+    now = time.monotonic()
+    for old, at in list(_order_tokens.items()):
+        if now - at > ORDER_TOKEN_TTL_S:
+            del _order_tokens[old]
+    if token in _order_tokens:
+        return False
+    _order_tokens[token] = now
+    return True
+
+
+class _OrderResent(Exception):
+    """The order form was sent before: nothing is placed again."""
+
+
+ORDER_RESENT = (
+    "Order niet geplaatst: dit formulier was al verstuurd, dus de order is niet nog een keer "
+    "geplaatst. Kijk bij Laatste orders wat er gebeurde."
+)
+
+
 @app.post("/orders")
 async def dashboard_order(
     request: Request,
@@ -3982,6 +4033,7 @@ async def dashboard_order(
     amount_quote: str = Form("", max_length=64),
     sell_all: str = Form("", max_length=8),
     current_password: str = Form(""),
+    order_token: str = Form("", max_length=64),
     client: BitvavoClient = Depends(get_client),
     broker: Broker = Depends(get_broker),
     budget: BudgetGuard = Depends(get_budget),
@@ -4000,7 +4052,12 @@ async def dashboard_order(
         if mode == "live":
             # Real money: ask for the current password again (step-up).
             await require_current_password(request, session, current_password)
+        if order_token and not _claim_order_token(order_token):
+            kind, status = "warn", 409
+            raise _OrderResent
         order = await engine.manual_order(session, market, side, amount)
+    except _OrderResent:
+        text = ORDER_RESENT
     except StepUpError as exc:
         text, status = f"Order niet geplaatst: {exc.message}", exc.status
     except OrderUncertain:
