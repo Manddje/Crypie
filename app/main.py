@@ -11,7 +11,8 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Path, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
@@ -82,6 +83,7 @@ from app.trading.engine import (
     recent_decisions,
 )
 from app.trading.events import parse_calendar
+from app.trading.health import bot_health, risk_now
 from app.trading.history import (
     PERIODS,
     candle_dicts,
@@ -347,6 +349,9 @@ async def lifespan(app: FastAPI):
     _apply_risk_off(engine, settings)
     with SessionLocal() as session:
         engine.load_state(session)
+        if engine.last_run is None:
+            # No cycle time kept in the engine state yet: the scheduler's start time is close.
+            engine.last_run = _load_last_run("trading cycle")
         # Orders sent before a crash or restart whose outcome was never recorded.
         try:
             settled = await asyncio.wait_for(engine.reconcile(session), RECONCILE_TIMEOUT_S)
@@ -463,8 +468,8 @@ async def exit_scheduler(app: FastAPI) -> None:
 
     async def job(session: Session) -> None:
         engine: TradingEngine = app.state.engine
-        await engine.reconcile(session)
-        results = await engine.run_exits(session)
+        # Settles unknown orders first; a failure there does not skip the stop checks.
+        results = await engine.exit_check(session)
         if results:
             log.info("exit check: %s", [r.as_dict() for r in results])
 
@@ -1201,6 +1206,50 @@ def _trading_status(engine: TradingEngine, session: Session, settings: Settings)
     }
 
 
+def _health(
+    request: Request,
+    engine: TradingEngine,
+    session: Session,
+    *,
+    figures: dict | None = None,
+    paused: bool | None = None,
+    strategy_invalid: bool | None = None,
+) -> dict:
+    """bot_health() with what the app knows: Claude budget, the scheduler's last start."""
+    if strategy_invalid is None:
+        strategy_invalid = load_strategy_checked(session)[1] is not None
+    return bot_health(
+        engine,
+        session,
+        request.app.state.settings,
+        paused=paused,
+        budget=request.app.state.budget.status(session),
+        scheduled_last=_load_last_run("trading cycle"),
+        risk_figures=figures,
+        strategy_invalid=strategy_invalid,
+    )
+
+
+@app.get("/api/status")
+async def api_status(
+    request: Request,
+    engine: TradingEngine = Depends(get_engine),
+    session: Session = Depends(get_session),
+):
+    """A light status for pages that refresh themselves: the bot's health, the limits as they
+    stand and the unprotected positions. No Bitvavo calls (fast, also while Bitvavo is down);
+    /health stays the bare liveness check for Docker and the proxy."""
+    figures = risk_now(engine, session, request.app.state.settings)
+    body = {
+        "mode": engine.mode,
+        "health": _health(request, engine, session, figures=figures),
+        "risk_now": figures,
+        "unprotected_positions": engine.unprotected,
+        "now": datetime.now(UTC),
+    }
+    return JSONResponse(jsonable_encoder(body), headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/trading/status")
 async def trading_status(
     request: Request,
@@ -1403,9 +1452,14 @@ def _trading_context(
         else:
             row["problems"] = []
         evaluation_rows.append(row)
+    status = _trading_status(engine, session, settings)
+    figures = risk_now(engine, session, settings)
     return {
         "settings": settings,
-        "status": _trading_status(engine, session, settings),
+        "status": status,
+        # One status for the hero (app/trading/health.py) and the limits as current figures.
+        "health": _health(request, engine, session, figures=figures, paused=status["paused"]),
+        "risk_now": figures,
         "open_positions": open_positions(session, engine.mode),
         "closed_positions": closed_positions(session, engine.mode)[:20],
         "decisions": recent_decisions(
@@ -2023,9 +2077,22 @@ async def _dashboard_context(
         error = error or str(exc)
     engine: TradingEngine = request.app.state.engine
     mode = engine.mode
+    engine.remember_prices(prices_)
     strategy, strategy_warning = load_strategy_checked(session)
+    paused = risk.is_paused(session)
+    figures = risk_now(engine, session, settings, balances=balances or None, prices=prices_ or None)
     return {
         "settings": settings,
+        # One status for the hero (app/trading/health.py) and the limits as current figures.
+        "health": _health(
+            request,
+            engine,
+            session,
+            figures=figures,
+            paused=paused,
+            strategy_invalid=strategy_warning is not None,
+        ),
+        "risk_now": figures,
         "prices": prices_,
         "balances": balances,
         "portfolio": _portfolio(balances, prices_),
@@ -2038,7 +2105,7 @@ async def _dashboard_context(
         "sentiments": [market_sentiment(session, c, 48) for c in settings.coins],
         "open_positions": open_positions(session, mode),
         "performance": performance_summary(session, mode),
-        "paused": risk.is_paused(session),
+        "paused": paused,
         "last_run": engine.last_run,
         "config_warning": request.app.state.config_warning,
         "unprotected_positions": engine.unprotected,
