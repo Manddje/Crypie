@@ -196,12 +196,12 @@ async def test_refused_form_post_goes_back_to_its_page_with_a_message(api):
 
 
 async def test_invalid_form_input_is_explained(api):
-    r = await api.post(
-        "/orders", data={"market": "BTC-EUR", "side": "buy", "amount_quote": "abc"}, headers=HTML
-    )
+    # The order form checks the amount itself (tests/test_ux_dashboard.py); a field that is
+    # missing altogether is the generic case.
+    r = await api.post("/orders", data={"market": "BTC-EUR", "amount_quote": "10"}, headers=HTML)
     assert r.status_code == 303 and r.headers["location"] == "/"
     assert flashes_from_response(r) == [
-        {"kind": "error", "text": "Niet verwerkt: bedrag is geen geldig getal."}
+        {"kind": "error", "text": "Niet verwerkt: kopen of verkopen ontbreekt."}
     ]
     r = await api.get("/news?hours=0", headers=HTML)
     assert r.status_code == 400 and "Ongeldig adres" in r.text and 'href="/news"' in r.text
