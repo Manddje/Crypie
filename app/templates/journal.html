@@ -103,7 +103,7 @@
       {% if chips|length > 1 %}<a class="small" href="{{ '/journal?mode=' ~ mode if mode != engine_mode else '/journal' }}">Alle filters wissen</a>{% endif %}
     </div>
     {% endif %}
-    <div class="stats journal-stats">
+    <div class="stats stats-6 journal-stats">
       {{ ui.stat("Netto resultaat", totals.total_pnl_eur|eur, (totals.return_pct|pct ~ " op de inleg") if totals.return_pct is not none else "na kosten", totals.total_pnl_eur|pnl_class if totals.closed else "") }}
       {{ ui.stat("Winnende trades", totals.win_rate_pct|pct(0, false) if totals.win_rate_pct is not none else "–", (totals.wins ~ " van " ~ totals.closed ~ " met netto winst") if totals.closed else "nog geen afgeronde trades") }}
       {{ ui.stat("Per trade", totals.avg_pnl_eur|eur if totals.avg_pnl_eur is not none else "–", (totals.avg_pnl_pct|pct ~ " gemiddeld, netto") if totals.avg_pnl_pct is not none else "gemiddeld", totals.avg_pnl_eur|pnl_class) }}

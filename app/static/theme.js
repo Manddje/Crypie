@@ -5,6 +5,9 @@
  * colour (meta theme-color) follows the choice. app.js uses window.CrypieTheme for the button. */
 (function () {
   "use strict";
+  // Scripts are on: CSS may fold what only scripts can open again (.js-only, the settings
+  // blocks). Set before the page paints, so nothing jumps.
+  document.documentElement.classList.add("js");
   var KEY = "crypie-theme";
   var COLORS = { light: "#f5f5f7", dark: "#000000" };
 

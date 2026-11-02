@@ -206,7 +206,7 @@
     default fits a strategy you can still edit, the proposal on Handelen passes its own. -#}
 {% macro strategy_diff(diff, title="Verschil met de actieve strategie", level=3, old="Nu", new="Voorstel", outdated="De regels veranderen, maar de omschrijving niet. Pas de omschrijving (description) aan, anders spreekt die straks de regels tegen.") -%}
 {% if diff is not none %}
-<h{{ level }} class="fs-body mt-4">{{ title }}</h{{ level }}>
+<h{{ level }} class="subhead mt-4">{{ title }}</h{{ level }}>
 {% if diff %}
 <div class="table-wrap strategy-diff mt-2" data-region="{{ title }}">
 <table class="small">

@@ -2806,7 +2806,7 @@ BITVAVO_TEST_REPEAT_S = 10.0
 # Flash texts are cut at 400 characters (app/flash.py); keep a list of changes below that.
 CHANGES_TEXT_MAX = 330
 # The blocks of the settings page that can show a message after an action (?saved=<block>).
-SETTINGS_BLOCKS = (*cfg.GROUPS, cfg.PAPER_GROUP, "omgeving")
+SETTINGS_BLOCKS = (*cfg.GROUPS, *cfg.OWN_FORM_PARTS, cfg.PAPER_GROUP, "omgeving")
 
 
 def _editable_values(settings: Settings) -> dict:
@@ -2823,7 +2823,7 @@ def live_requirements(settings: Settings, client: BitvavoClient) -> list[dict]:
             "label": "De login staat aan",
             "missing": "de login staat uit (AUTH_ENABLED=false)",
             "missing_nl": "de login staat uit",
-            "fix": "Zet AUTH_ENABLED=true in de serveromgeving en herstart de app.",
+            "fix": "Zet de login aan in de serveromgeving (op true) en herstart de app.",
             "env": "AUTH_ENABLED",
         },
         {
@@ -2842,7 +2842,7 @@ def live_requirements(settings: Settings, client: BitvavoClient) -> list[dict]:
             "label": "Live handelen is op de server bevestigd",
             "missing": "LIVE_TRADING_ACK staat niet op true in de serveromgeving",
             "missing_nl": "live handelen is nog niet bevestigd op de server",
-            "fix": "Zet LIVE_TRADING_ACK=true in de serveromgeving en herstart de app.",
+            "fix": "Bevestig live handelen in de serveromgeving (op true) en herstart de app.",
             "env": "LIVE_TRADING_ACK",
         },
     ]
@@ -3473,24 +3473,33 @@ async def settings_save(request: Request, session: Session = Depends(get_session
         return await _reset_paper_action(request, session, form, password, page, step_up_failed)
     if group not in cfg.GROUPS:
         raise HTTPException(400, "onbekende groep")
-    title = cfg.GROUPS[group][0]
+    # A part with a form of its own (Weergave, UX-57) saves only its fields; the block saves
+    # the rest. ``block`` is where the page shows the result.
+    part = str(form.get("part") or "")
+    if part and part not in cfg.OWN_FORM_PARTS:
+        raise HTTPException(400, "onbekend onderdeel")
+    form_keys = cfg.keys_in_form(group, part)
+    if not form_keys:
+        raise HTTPException(400, "onbekend onderdeel")
+    block = part or group
+    title = cfg.OWN_FORM_PARTS[part][1] if part else cfg.GROUPS[group][0]
     if action == "reset":
         # The mode is never part of a block reset: it changes only through its own choice.
-        keys = [k for k in cfg.keys_in_group(group) if k != "trading_mode"]
+        keys = [k for k in form_keys if k != "trading_mode"]
         try:
             _, changed = await _reset_settings(request, session, keys, password)
         except StepUpError as exc:
-            return step_up_failed(group, exc)
+            return step_up_failed(block, exc)
         except SettingsError as exc:
-            return page(409, errors=exc.errors, form_group=group)
+            return page(409, errors=exc.errors, form_group=block)
         text = (
             f"Standaardwaarden hersteld in {title}: {_join_changes(changed)}."
             if changed
             else f"In {title} stond alles al op de standaard."
         )
-        return flash.redirect_with_flash(f"/settings?saved={group}#{group}", "ok", text)
+        return flash.redirect_with_flash(f"/settings?saved={block}#{block}", "ok", text)
     raw: dict[str, str] = {}
-    for key in cfg.keys_in_group(group):
+    for key in form_keys:
         sent = form.getlist(key)
         if sent:
             raw[key] = str(sent[-1])  # a checkbox posts after its hidden "false" twin
@@ -3518,13 +3527,13 @@ async def settings_save(request: Request, session: Session = Depends(get_session
         if loosened and str(form.get("confirm_loosen") or "") != "1":
             # A hard limit more than twice as loose in one go: ask once more (before the
             # password, so nothing is checked or counted yet).
-            return page(409, submitted=raw, form_group=group, loosened=loosened)
+            return page(409, submitted=raw, form_group=block, loosened=loosened)
         await _commit_settings(request, session, values, candidate, password)
     except SettingsError as exc:
-        return page(400, errors=exc.errors, submitted=raw, form_group=group, form_extra=extra)
+        return page(400, errors=exc.errors, submitted=raw, form_group=block, form_extra=extra)
     except StepUpError as exc:
-        return step_up_failed(group, exc, submitted=raw)
-    changes = cfg.changes(old, candidate, cfg.keys_in_group(group))
+        return step_up_failed(block, exc, submitted=raw)
+    changes = cfg.changes(old, candidate, form_keys)
     text = _saved_text(title, changes)
     if to_live and extra["reset_paper_on_live"]:
         # Offered in the live panel (UX-01): the paper portfolio starts afresh, so no paper
@@ -3537,8 +3546,8 @@ async def settings_save(request: Request, session: Session = Depends(get_session
         )
     # Nothing changed is no success to report: a neutral note instead of a green one.
     kind = "ok" if changes or extra["reset_paper_on_live"] else "info"
-    response = flash.redirect_with_flash(f"/settings?saved={group}#{group}", kind, text)
-    for key in cfg.keys_in_group(group):
+    response = flash.redirect_with_flash(f"/settings?saved={block}#{block}", kind, text)
+    for key in form_keys:
         warning = cfg.model_warning(getattr(candidate, key)) if key in values else None
         if warning and cfg.SPEC_BY_KEY[key].kind == "model":
             flash.add_flash(

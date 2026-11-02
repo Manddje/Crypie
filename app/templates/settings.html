@@ -163,6 +163,12 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
 </div>
 {%- endmacro %}
 
+{#- Opens or folds a block (UX-56). Only with scripts on (.js-only): without them every block
+    is open and the button would do nothing. -#}
+{% macro block_toggle(key, open_now, closed_label="Openen") -%}
+<button type="button" class="btn btn-sm btn-tint block-toggle js-only" aria-expanded="{{ 'true' if open_now else 'false' }}" aria-controls="{{ key }}-body" data-block-toggle><span data-when-closed{% if open_now %} hidden{% endif %}>{{ closed_label }}</span><span data-when-open{% if not open_now %} hidden{% endif %}>Inklappen</span></button>
+{%- endmacro %}
+
 {#- The current-password field of a block. -#}
 {% macro password_row(key, help) -%}
 {%- set pwid = "pw-" ~ key -%}
@@ -204,19 +210,28 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
       <li><a href="#oefenportefeuille" data-toc="oefenportefeuille">Oefenportefeuille</a></li>
       <li><a href="#omgeving" data-toc="omgeving">Uit de omgeving</a></li>
     </ul>
+    {#- With scripts on, the blocks are folded to a summary line; this opens them all. -#}
+    <button type="button" class="link-btn toc-all js-only" data-open-all aria-pressed="false">Alles openklappen</button>
   </nav>
 
   <div class="settings-main">
     {% for g in groups %}
     {% set pw_failed = password_error and password_error[0] == g.key %}
-    <section class="card settings-block" id="{{ g.key }}" aria-labelledby="{{ g.key }}-title">
+    {#- UX-56: with scripts on, a block shows its summary until it is opened; the block that was
+        just saved, sent back with an error or has unsaved edits stays open. -#}
+    {% set open_now = g.key == form_group or g.key == saved_block or g.unsaved or g.errors %}
+    <section class="card settings-block{{ '' if open_now else ' is-collapsed' }}" id="{{ g.key }}" aria-labelledby="{{ g.key }}-title" data-block>
       <form method="post" action="/settings#{{ g.key }}" novalidate data-settings-form data-block-title="{{ g.title }}"{% if g.key == form_group %} data-submitted{% endif %}{% if g.reset_needs_password and step_up %} data-reset-needs-password{% endif %}>
-        <input type="hidden" name="group" value="{{ g.key }}">
+        <input type="hidden" name="group" value="{{ g.group }}">
+        {% if g.part %}<input type="hidden" name="part" value="{{ g.part }}">{% endif %}
         <div class="card-header">
           <h2 class="card-title" id="{{ g.key }}-title">{{ g.title }}</h2>
           <span class="pill pill-orange" data-dirty-pill{% if not g.unsaved %} hidden{% endif %}>Niet opgeslagen</span>
           {% if g.changed %}<span class="pill">{{ g.changed|length }} aangepast</span>{% else %}<span class="pill">standaard</span>{% endif %}
+          {{ block_toggle(g.key, open_now) }}
         </div>
+        <p class="block-summary" id="{{ g.key }}-summary">{{ g.summary }}</p>
+        <div class="settings-block-body" id="{{ g.key }}-body">
         <p class="card-desc">{{ g.description }}</p>
         {% if g.changed %}<p class="settings-changed">Aangepast ten opzichte van de serveromgeving: {{ g.changed|map(attribute="label")|join(", ") }}.</p>{% endif %}
         {% if step_up and g.sensitive %}<p class="settings-lock-note">{{ ui.icon("lock") }}<span>Velden met een slotje vragen om je huidige wachtwoord; dat vul je onderaan dit blok in.</span></p>{% endif %}
@@ -256,15 +271,19 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
           </div>
           <p class="settings-actions-note" id="{{ g.key }}-reset-note">Opslaan geldt alleen voor dit blok.{% if not g.resettable %} Standaard herstellen kan zodra hier iets is aangepast.{% endif %}</p>
         </div>
+        </div>
       </form>
-      <p class="settings-top"><a href="#top">Terug naar boven</a></p>
     </section>
     {% endfor %}
 
     {% set pf = paper_field %}
     {% set paper_failed = password_error and password_error[0] == "paper" %}
-    <section class="card settings-block" id="oefenportefeuille" aria-labelledby="oefenportefeuille-title">
-      <div class="card-header"><h2 class="card-title" id="oefenportefeuille-title">Oefenportefeuille</h2><span class="pill pill-paper">fictief geld</span></div>
+    {% set paper_open_now = form_group == "paper" or saved_block == "paper" %}
+    {% set n_paper = paper_open_markets|length %}
+    <section class="card settings-block{{ '' if paper_open_now else ' is-collapsed' }}" id="oefenportefeuille" aria-labelledby="oefenportefeuille-title" data-block>
+      <div class="card-header"><h2 class="card-title" id="oefenportefeuille-title">Oefenportefeuille</h2><span class="pill pill-paper">fictief geld</span>{{ block_toggle("oefenportefeuille", paper_open_now) }}</div>
+      <p class="block-summary" id="oefenportefeuille-summary">Startbedrag {{ pf.display }} · {% if n_paper %}{{ n_paper }} open {{ "oefenpositie" if n_paper == 1 else "oefenposities" }}{% else %}geen open oefenposities{% endif %}</p>
+      <div class="settings-block-body" id="oefenportefeuille-body">
       {% if settings.trading_mode == "paper" %}
       <p class="card-desc">Begin opnieuw met een vers oefensaldo. Open oefenposities worden gesloten zonder resultaat; het logboek met beslissingen en orders blijft bewaard.</p>
       <form method="post" action="/settings#oefenportefeuille" novalidate data-settings-form data-block-title="Oefenportefeuille"{% if form_group == "paper" %} data-submitted{% endif %} data-confirm="Oefenportefeuille resetten? Het saldo gaat terug naar het startbedrag en open oefenposities worden gesloten zonder resultaat.">
@@ -295,17 +314,20 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
         </div>
       </form>
       {% endif %}
-      <p class="settings-top"><a href="#top">Terug naar boven</a></p>
+      </div>
     </section>
 
-    <section class="card settings-block" id="omgeving" aria-labelledby="omgeving-title">
-      <div class="card-header"><h2 class="card-title" id="omgeving-title">Uit de omgeving</h2><span class="card-meta">alleen op de server</span></div>
+    {% set ks = key_state %}
+    {% set env_open_now = saved_block == "omgeving" %}
+    <section class="card settings-block{{ '' if env_open_now else ' is-collapsed' }}" id="omgeving" aria-labelledby="omgeving-title" data-block>
+      <div class="card-header"><h2 class="card-title" id="omgeving-title">Uit de omgeving</h2><span class="card-meta">alleen op de server</span>{{ block_toggle("omgeving", env_open_now, "Bekijken") }}</div>
+      <p class="block-summary" id="omgeving-summary">Bitvavo-sleutel {{ ks.label }} · Claude-sleutel {{ "ingesteld" if environment.anthropic_key else "niet ingesteld" }} · meldingen {{ "aan" if environment.notify else "uit" }} · login {{ "aan" if environment.auth else "uit" }}</p>
+      <div class="settings-block-body" id="omgeving-body">
       <p class="card-desc">Sleutels, de login, de live-bevestiging en het meldingskanaal beheer je bewust niet in het portaal. Je stelt ze in bij de omgevingsvariabelen van de app in Coolify (of in <span class="mono">.env</span>) en herstart de app.</p>
       {{ block_feedback("omgeving") }}
       <dl class="kv env-list">
         <dt>Bitvavo-sleutel</dt>
         <dd>
-          {% set ks = key_state %}
           {% if ks.state == "missing" %}<span class="pill">niet ingesteld</span>
           {% elif ks.state == "ok" %}<span class="pill pill-green">werkt</span>
           {% elif ks.state == "rejected" %}<span class="pill pill-red">geweigerd door Bitvavo</span>
@@ -350,7 +372,7 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
         <dt>Database</dt>
         <dd>{{ environment.database }}</dd>
       </dl>
-      <p class="settings-top"><a href="#top">Terug naar boven</a></p>
+      </div>
     </section>
   </div>
 </div>

@@ -40,8 +40,8 @@ async def api():
 
 
 def _block(html: str, key: str) -> str:
-    """The HTML of one settings block (its <section>)."""
-    start = html.index(f'<section class="card settings-block" id="{key}"')
+    """The HTML of one settings block (its <section>, folded or not)."""
+    start = re.search(rf'<section class="card settings-block[^"]*" id="{key}"', html).start()
     return html[start : html.index("</section>", start)]
 
 
@@ -421,10 +421,23 @@ async def test_fields_under_a_switch_are_dimmed_while_it_is_off(api):
 async def test_settings_page_has_a_list_of_parts_and_sensible_blocks(api):
     page = (await api.get("/settings")).text
     nav = re.search(r'<nav class="settings-toc".*?</nav>', page, re.S).group(0)
-    for key in ("trading", "limits", "costs", "claude", "news", "oefenportefeuille", "omgeving"):
+    for key in (
+        "trading",
+        "limits",
+        "costs",
+        "claude",
+        "news",
+        "weergave",
+        "oefenportefeuille",
+        "omgeving",
+    ):
         assert f'href="#{key}"' in nav
     assert "segmented" not in nav  # a list of links, not tabs
-    assert page.count('href="#top">Terug naar boven</a>') == len(cfg.GROUPS) + 2
+    # UX-56: every block (and Weergave on its own, UX-57) folds to a summary with scripts on.
+    blocks = len(cfg.GROUPS) + len(cfg.OWN_FORM_PARTS) + 2
+    assert page.count("data-block-toggle") == blocks
+    assert page.count('class="block-summary"') == blocks
+    assert "Alles openklappen" in nav
     costs = _block(page, "costs")
     assert "Handelskosten per order" in costs and "Handelskosten in backtests" in costs
     assert "Handelskosten" not in _block(page, "limits") and "backtests" not in _block(
@@ -434,7 +447,11 @@ async def test_settings_page_has_a_list_of_parts_and_sensible_blocks(api):
     assert 'name="paper_start_eur"' in paper and 'value="reset_paper"' in paper
     assert 'name="paper_start_eur"' not in _block(page, "trading")
     assert "Maximum aantal orders per dag" in page and ">orders<" in page
-    assert ">Weergave<" in _block(page, "trading")
+    assert ">Weergave<" in _block(page, "weergave") and "decision_history_days" not in _block(
+        page, "trading"
+    )
+    assert 'name="part" value="weergave"' in _block(page, "weergave")
+    assert 'name="current_password"' not in _block(page, "weergave")
     assert 'class="mono">MAX_TRADE_EUR_CEILING' in page and "€ 1.000" in page
 
 

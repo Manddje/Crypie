@@ -417,3 +417,48 @@ def test_brand_tokens_are_used_and_match_the_tab_icons():
     for icon in (root / "static/icons").glob("*.svg"):
         svg = icon.read_text(encoding="utf-8")
         assert one in svg and two in svg, icon.name
+
+
+# -- UX-57: Weergave saves on its own -------------------------------------------------------------
+
+
+async def test_weergave_saves_without_the_handelen_block(api):
+    from app.flash import flashes_from_response
+
+    before = app.state.settings
+    data = {"group": "trading", "part": "weergave", "decision_history_days": "14"}
+    r = await api.post("/settings", data=data, headers=HTML)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/settings?saved=weergave#weergave"
+    (msg,) = flashes_from_response(r)
+    assert msg["text"].startswith("Weergave opgeslagen")
+    now = app.state.settings
+    assert now.decision_history_days == 14
+    # The switches of Handelen were not in this form and did not turn off.
+    assert now.trading_enabled == before.trading_enabled
+    assert now.risk_off_enabled == before.risk_off_enabled
+    bad = {"group": "trading", "part": "bestaatniet", "decision_history_days": "3"}
+    assert (await api.post("/settings", data=bad)).status_code == 400
+    wrong_group = {"group": "limits", "part": "weergave", "decision_history_days": "3"}
+    assert (await api.post("/settings", data=wrong_group)).status_code == 400
+    # Handelen without the part leaves Weergave alone.
+    from app import settings_store as cfg
+
+    assert "decision_history_days" not in cfg.keys_in_form("trading")
+    assert cfg.keys_in_form("trading", "weergave") == ["decision_history_days"]
+    r = await api.post("/settings", data=data | {"decision_history_days": "7"})
+    assert app.state.settings.decision_history_days == 7
+
+
+# -- UX-107: many markets do not push the news down -----------------------------------------------
+
+
+async def test_news_shows_three_coin_cards_and_folds_the_rest(api, monkeypatch):
+    markets = ["BTC-EUR", "ETH-EUR", "SOL-EUR", "XRP-EUR", "ADA-EUR", "DOGE-EUR"]
+    monkeypatch.setattr(
+        app.state, "settings", app.state.settings.model_copy(update={"markets": markets})
+    )
+    page = (await api.get("/news", headers=HTML)).text
+    assert page.count('class="card news-coin"') <= 4  # three coins, plus the whole market
+    assert "Sentiment van de andere 3 coins" in page
+    assert page.index("news-more-coins") < page.index('id="berichten"')

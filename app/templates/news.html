@@ -9,6 +9,7 @@
 <a{% if cls %} class="{{ cls }}"{% endif %} href="{{ url }}" target="_blank" rel="noopener noreferrer"{% if lang and lang != "nl" %} lang="{{ lang }}"{% endif %}>{{ text }}<span class="visually-hidden"> (opent in nieuw tabblad)</span>{{ ui.icon("external", "ext-icon") }}</a>
 {%- endmacro %}
 {% block content %}
+{%- set NEWS_CARDS = 3 %}
 <div class="page-header">
   <h1>Nieuws</h1>
   <p class="subtitle">Wat de cryptomedia en het wereldnieuws melden, en welk nieuws de bot meeweegt.</p>
@@ -56,7 +57,9 @@
         <p class="small muted">Fear &amp; Greed-index {{ market_mood.value }} van 100 (0 = extreme angst, 100 = extreme hebzucht), bron alternative.me. Claude krijgt dit mee bij elke beslissing.</p>
       </section>
       {% endif %}
-      {% for s in sentiments %}
+      {#- UX-107: a card for the first coins; with many markets the rest is one compact,
+          folded table, so the messages do not start screens further down. -#}
+      {% for s in sentiments[:NEWS_CARDS] %}
       <section class="card news-coin" aria-labelledby="coin-{{ s.coin }}">
         <div class="card-header">
           <h3 class="card-title" id="coin-{{ s.coin }}">{{ s.coin }}</h3>
@@ -82,6 +85,28 @@
       </section>
       {% endfor %}
     </div>
+    {% if sentiments|length > NEWS_CARDS %}
+    {% set rest = sentiments[NEWS_CARDS:] %}
+    <details class="card news-more-coins">
+      <summary>Sentiment van de andere {{ rest|length }} {{ "coin" if rest|length == 1 else "coins" }}</summary>
+      {% call ui.table_wrap("Sentiment per coin") %}
+      <table class="table-stack">
+        <thead><tr><th scope="col">Coin</th><th scope="col">Sentiment</th><th scope="col" class="num">Score</th><th scope="col" class="num">Nieuwsfeiten</th><th scope="col">Belangrijkste nieuws</th></tr></thead>
+        <tbody>
+        {% for s in rest %}
+        <tr>
+          <td class="nowrap"><strong>{{ s.coin }}</strong></td>
+          <td><span class="pill {{ s.label()|sentiment_pill }}">{{ s.label() }}</span></td>
+          <td class="num">{{ signed(s.score) }}</td>
+          <td class="num">{{ s.items }}{% if s.high_impact %} <span class="sub">{{ s.high_impact }} middel of groot</span>{% endif %}</td>
+          <td>{% if s.top %}{% set t = s.top[0] %}{% set text = t.summary_nl or t.title %}{% set lang = none if t.summary_nl else t.lang %}{% if t.list_url %}<a href="{{ t.list_url }}"{% if lang and lang != "nl" %} lang="{{ lang }}"{% endif %}>{{ text }}</a>{% elif t.safe_url %}{{ external(t.safe_url, text, lang) }}{% else %}<span{% if lang and lang != "nl" %} lang="{{ lang }}"{% endif %}>{{ text }}</span>{% endif %}{% else %}<span class="muted">geen</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% endcall %}
+    </details>
+    {% endif %}
   </section>
 
   <section class="card" id="berichten" aria-labelledby="berichten-title">

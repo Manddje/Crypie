@@ -97,6 +97,58 @@ SECTIONS: dict[str, list[tuple[str, str, str]]] = {
     ],
 }
 
+# Parts with a block (a form and an Opslaan button) of their own on the page, apart from the
+# block they belong to (UX-57): what a page shows is saved without the mode and the markets.
+# Only parts without a sensitive setting: the block's password field stays with the block.
+# part -> (group, title, description).
+OWN_FORM_PARTS: dict[str, tuple[str, str, str]] = {
+    "weergave": (
+        "trading",
+        "Weergave",
+        "Alleen wat je op de pagina's ziet; de bot handelt er niet anders door.",
+    ),
+}
+
+# The line under a folded block's title (UX-56): the values that matter most, as
+# (setting, wording with {} for its value).
+SUMMARY: dict[str, tuple[tuple[str, str], ...]] = {
+    "trading": (
+        ("trading_mode", "{}"),
+        ("markets", "{}"),
+        ("trade_interval_min", "elke {}"),
+        ("trading_enabled", "automatisch handelen {}"),
+        ("risk_off_enabled", "risk-off {}"),
+    ),
+    "limits": (
+        ("max_trade_eur", "max. {} per order"),
+        ("max_exposure_pct", "max. {} in crypto"),
+        ("daily_loss_limit_pct", "max. {} dagverlies"),
+        ("max_trades_per_day", "max. {} per dag"),
+    ),
+    "costs": (("trading_fee_pct", "{} per order"), ("backtest_fee_pct", "{} in backtests")),
+    "claude": (
+        ("claude_monthly_budget_usd", "{} per maand"),
+        ("evaluation_interval_hours", "evaluatie elke {}"),
+    ),
+    "news": (
+        ("news_enabled", "automatisch ophalen {}"),
+        ("news_fetch_interval_min", "elke {}"),
+        ("news_rss_feeds", "{}"),
+    ),
+    "weergave": (("decision_history_days", "beslissingen van de laatste {}"),),
+}
+
+
+def block_summary(block: str, fields: list[dict]) -> str:
+    """'Oefenmodus · BTC-EUR, ETH-EUR · elke 60 minuten · automatisch handelen aan'."""
+    by_key = {f["key"]: f for f in fields}
+    return " · ".join(
+        wording.format(by_key[key]["display"])
+        for key, wording in SUMMARY.get(block, ())
+        if key in by_key
+    )
+
+
 # How a hard limit becomes looser: "higher" (a bigger number allows more), "lower" (a smaller
 # number allows more) or "capital" (more money, and 0 means the whole account). A save that
 # makes one more than twice as loose in one go asks for an extra confirmation in the portal.
@@ -636,9 +688,8 @@ def group_has_sensitive(group: str) -> bool:
 
 # What the current-password field of each block is needed for (the password row's help text).
 STEP_UP_HELP: dict[str, str] = {
-    "trading": "Nodig als je de modus, automatisch handelen aan/uit, de markten, het gedrag "
-    "zonder Claude, de exit-controle of risk-off (aan/uit, het venster ervoor en erna, de "
-    "schok-pauze en de agenda) wijzigt of terugzet.",
+    "trading": "Nodig voor elk veld met een slotje: de modus, automatisch handelen aan/uit, "
+    "de markten, het gedrag zonder Claude, de exit-controle en alles van risk-off.",
     "limits": "Nodig als je een harde limiet wijzigt of terugzet: elk veld in dit blok.",
     "costs": "Nodig als je de handelskosten per order wijzigt of terugzet.",
     "claude": "Nodig als je het maandbudget wijzigt of terugzet.",
@@ -780,6 +831,16 @@ def reset_overrides(session: Session, keys: list[str] | None = None) -> int:
 
 def keys_in_group(group: str) -> list[str]:
     return [s.key for s in SPECS if s.group == group]
+
+
+def keys_in_form(group: str, part: str = "") -> list[str]:
+    """The settings one form of the page saves: a part with its own form (OWN_FORM_PARTS), or
+    the rest of the block."""
+    if part:
+        if OWN_FORM_PARTS.get(part, ("",))[0] != group:
+            return []
+        return [s.key for s in SPECS if s.group == group and s.section == part]
+    return [s.key for s in SPECS if s.group == group and s.section not in OWN_FORM_PARTS]
 
 
 # -- parsing & validation ---------------------------------------------------------------
@@ -1231,9 +1292,12 @@ def describe(session: Session, current: Settings, env: Settings | None = None) -
     overrides = load_overrides(session)
     groups: list[dict] = []
     for group, (title, desc) in GROUPS.items():
-        fields = [_field(s, current, env, overrides) for s in SPECS if s.group == group]
+        specs = [s for s in SPECS if s.group == group and s.section not in OWN_FORM_PARTS]
+        fields = [_field(s, current, env, overrides) for s in specs]
         sections = []
         for key, sec_title, sec_help in SECTIONS.get(group, [("", "", "")]):
+            if key in OWN_FORM_PARTS:
+                continue
             in_section = [f for f in fields if f["section"] == key or not key]
             if in_section:
                 sections.append(
@@ -1242,12 +1306,32 @@ def describe(session: Session, current: Settings, env: Settings | None = None) -
         groups.append(
             {
                 "key": group,
+                "group": group,
+                "part": "",
                 "title": title,
                 "description": desc,
                 "fields": fields,
                 "sections": sections,
                 "sensitive": group_has_sensitive(group),
                 "step_up_help": STEP_UP_HELP.get(group, ""),
+                "summary": block_summary(group, fields),
+            }
+        )
+    for part, (group, title, desc) in OWN_FORM_PARTS.items():
+        specs = [s for s in SPECS if s.group == group and s.section == part]
+        fields = [_field(s, current, env, overrides) for s in specs]
+        groups.append(
+            {
+                "key": part,
+                "group": group,
+                "part": part,
+                "title": title,
+                "description": desc,
+                "fields": fields,
+                "sections": [{"key": "", "title": "", "help": "", "fields": fields}],
+                "sensitive": any(s.key in SENSITIVE_KEYS for s in specs),
+                "step_up_help": "",
+                "summary": block_summary(part, fields),
             }
         )
     return groups

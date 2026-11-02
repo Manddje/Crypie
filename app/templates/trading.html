@@ -74,7 +74,7 @@
 {% else %}
   {% if e.diff is not none %}
   {#- Like ui.strategy_diff, with 'Vóór' and 'Na' instead of 'Nu' and 'Voorstel'. -#}
-  <h{{ level }} class="fs-body mt-4">Wat er veranderde{% if e.applied_at %} op {{ e.applied_at|dt }}{% endif %}</h{{ level }}>
+  <h{{ level }} class="subhead mt-4">Wat er veranderde{% if e.applied_at %} op {{ e.applied_at|dt }}{% endif %}</h{{ level }}>
   {% if e.diff %}
   <div class="table-wrap strategy-diff mt-2" data-region="Wat er veranderde">
   <table class="small">
@@ -159,7 +159,7 @@
         </div>
         <p class="decision-line"><span class="pill pill-red">Mislukt</span> <span class="decision-summary"><span aria-hidden="true">· </span>de laatste cyclus kon deze markt niet verwerken</span></p>
         <p class="small">Reden: {{ f.reason }}.</p>
-        <p class="small muted">Klopt de markt niet, pas hem dan aan bij <a href="/settings#trading">Instellingen › Handelen</a>; de andere markten draaien gewoon door.</p>
+        <p class="small muted">Klopt de markt niet, pas hem dan aan bij <a href="/settings#row-markets">Instellingen › Handelen</a>; de andere markten draaien gewoon door.</p>
       </article>
       {% endfor %}
       {% for v in last_cycle %}{% set d = v.d %}
@@ -196,7 +196,7 @@
     {% if other_positions %}
     {% set n = other_positions|length %}
     <div class="other-mode mt-5" id="andere-modus">
-      <h3 class="fs-body">Ook open in {{ "Oefenmodus" if live else "Live" }} <span class="pill {{ 'pill-paper' if live else 'pill-red' }}">{{ "fictief geld" if live else "echt geld" }}</span></h3>
+      <h3 class="subhead">Ook open in {{ "Oefenmodus" if live else "Live" }} <span class="pill {{ 'pill-paper' if live else 'pill-red' }}">{{ "fictief geld" if live else "echt geld" }}</span></h3>
       <p class="form-help">{% if live %}{{ "Deze oefenpositie wordt" if n == 1 else "Deze oefenposities worden" }} nog bewaakt door stop-loss, trailing stop en take-profit, met fictief geld: {{ "ze staat" if n == 1 else "ze staan" }} niet op Bitvavo en {{ "telt" if n == 1 else "tellen" }} niet mee in je live portefeuille of limieten. Sluiten kan met een reset in <a href="/settings#oefenportefeuille">Instellingen › Oefenportefeuille</a>.{% else %}{{ "Deze live positie wordt" if n == 1 else "Deze live posities worden" }} met echt geld op Bitvavo bewaakt door stop-loss, trailing stop en take-profit, ook nu je in Oefenmodus zit. Zelf verkopen kan in Live of op Bitvavo.{% endif %}</p>
 {{ positions_table(other_positions, "Open posities in " ~ ("Oefenmodus" if live else "Live")) }}
     </div>
@@ -250,7 +250,7 @@
         </section>
 
         <section aria-labelledby="agenda-title">
-          <div class="context-head"><h3 class="context-title" id="agenda-title">Agenda en risk-off</h3><a class="card-link" href="/settings#trading">Agenda aanpassen{{ ui.icon("chevron", "link-chevron") }}</a></div>
+          <div class="context-head"><h3 class="context-title" id="agenda-title">Agenda en risk-off</h3><a class="card-link" href="/settings#row-event_calendar">Agenda aanpassen{{ ui.icon("chevron", "link-chevron") }}</a></div>
           {% if not agenda.enabled %}
           <p class="small muted">Risk-off staat uit: de bot koopt ook rond agendamomenten en na nieuwsschokken.</p>
           {% elif agenda.active_event %}
@@ -309,7 +309,7 @@
   <section class="card" id="gesloten-posities" aria-labelledby="gesloten-title">
     {{ ui.card_header("Gesloten posities", 2, meta="laatste 30 dagen", href="/journal", link="Naar het journaal", id="gesloten-title") }}
     {% if closed_positions %}
-    <div class="stats mb-4">
+    <div class="stats stats-4 mb-4">
       {{ ui.stat("Netto resultaat", perf.total_pnl_eur|eur, perf.closed_positions ~ (" trade" if perf.closed_positions == 1 else " trades"), perf.total_pnl_eur|pnl_class) }}
       {% set wins = ((perf.win_rate_pct or 0) * perf.closed_positions / 100)|round|int %}
       {{ ui.stat("Winnende trades", perf.win_rate_pct|pct(0, false) if perf.win_rate_pct is not none else "–", wins ~ " van " ~ perf.closed_positions ~ " met netto winst") }}
@@ -369,7 +369,7 @@
         {% if featured and featured.id == e.id %}
         <p class="small mt-3"><a href="#voorstel">Het voorstel '{{ e.proposal_name }}' staat bovenaan deze pagina</a></p>
         {% else %}
-        <h4 class="evaluation-proposal">Voorstel: {{ e.proposal_name or "geen geldige strategie" }}</h4>
+        <h4 class="subhead evaluation-proposal">Voorstel: {{ e.proposal_name or "geen geldige strategie" }}</h4>
         {{ proposal_body(e, 5) }}
         {% endif %}
       {% endif %}
@@ -388,7 +388,7 @@
   {#- The log comes last: it is the longest part of the page, and it is paged. -#}
   {%- set c = cycles -%}
   <section class="card" id="cycli" aria-labelledby="cycli-title">
-    {{ ui.card_header("Alle cycli", 2, meta=("laatste " ~ settings.decision_history_days ~ " dagen · " ~ c.total_all ~ (" beslissing" if c.total_all == 1 else " beslissingen")), href="/settings#trading", link="Bewaartermijn aanpassen", id="cycli-title") }}
+    {{ ui.card_header("Alle cycli", 2, meta=("laatste " ~ settings.decision_history_days ~ " dagen · " ~ c.total_all ~ (" beslissing" if c.total_all == 1 else " beslissingen")), href="/settings#weergave", link="Bewaartermijn aanpassen", id="cycli-title") }}
     {% if c.total_all or c.market %}
     <div class="cycles-filters">
       <nav class="segmented" aria-label="Welke beslissingen">

@@ -85,7 +85,7 @@
     {% call ui.card_header(("Voorstel van Claude: " if kind == "propose" else "Geteste strategie: ") ~ proposal.name, 2, id="resultaat-title") %}{% if proposal_diff %}<span class="pill">Nog niet opgeslagen</span>{% else %}<span class="pill">Gelijk aan de actieve strategie</span>{% endif %}{% endcall %}
     {{ strategy_summary(proposal, 2) }}
     {% if explanation %}
-    <h3 class="fs-body mt-5">Toelichting van Claude</h3>
+    <h3 class="subhead mt-5">Toelichting van Claude</h3>
     {{ explanation|md(4) }}
     {% endif %}
     {{ ui.strategy_diff(proposal_diff, level=3, new="Voorstel" if kind == "propose" else "Getest") }}
@@ -95,7 +95,7 @@
       {% if backtest %}
       {% set b = backtest %}
       <div class="row-between">
-        <h3 class="fs-lead m-0">Backtest op {{ b.market }}</h3>
+        <h3 class="subhead m-0">Backtest op {{ b.market }}</h3>
         <span class="card-meta">{{ b.candles }} candles van {{ b.interval|nl }} ({{ bt.period }}) · start {{ b.start_eur|eur(0) }}</span>
       </div>
       <p class="strategy-verdict">
@@ -113,14 +113,14 @@
         <figcaption id="curve-desc"><span class="legend-item"><span class="legend-strategy" aria-hidden="true"></span>Strategie {{ b.start_eur|eur(0) }} → {{ b.final_eur|eur(0) }}</span> <span class="legend-item"><span class="legend-hold" aria-hidden="true"></span>Kopen en vasthouden {{ b.start_eur|eur(0) }} → {{ (b.start_eur * (1 + b.buy_hold_return_pct / 100))|eur(0) }}</span> <span class="legend-item">laagste stand strategie {{ c.strategy_low|eur(0) }}</span></figcaption>
       </figure>
       {% endif %}
-      <div class="stats">
+      {#- Six tiles (3+3, 2+2+2): the live buy signal shares a tile with the signal now. -#}
+      <div class="stats stats-6">
         {{ ui.stat("Rendement strategie", b.return_pct|pct, "netto, na kosten", b.return_pct|pnl_class(1) if not bt.no_trades else "") }}
         {{ ui.stat("Kopen en vasthouden", b.buy_hold_return_pct|pct, "koersverandering, ter vergelijking", b.buy_hold_return_pct|pnl_class(1)) }}
         {{ ui.stat("Grootste daling", b.max_drawdown_pct|pct(1, false), "van de hoogste naar de laagste stand van het testsaldo") }}
-        {{ ui.stat("Afgeronde trades", b.trades ~ (" (+1 open)" if b.open_position else ""), "aankoop plus verkoop") }}
+        {{ ui.stat("Afgeronde trades", b.trades, "aankoop plus verkoop" ~ (" · nog 1 open" if b.open_position else "")) }}
         {{ ui.stat("Winnende trades", (b.win_rate_pct|pct(0, false)) if b.win_rate_pct is not none else "–", (bt.wins ~ " van " ~ b.trades ~ " met netto winst") if b.trades else "nog geen afgeronde trades") }}
-        {{ ui.stat("Signaal nu", b.latest.signal|nl, "op de laatste candle", "pos" if b.latest.signal == "buy" else ("neg" if b.latest.signal == "sell" else "")) }}
-        {% if b.live_buy_signal_pct is not none %}{{ ui.stat("Koopsignaal live", b.live_buy_signal_pct|pct(1, false), "van de candles na " ~ b.warmup_candles ~ " candles opwarmen", "neg" if bt.loose else "") }}{% endif %}
+        {{ ui.stat("Signaal nu", b.latest.signal|nl, "op de laatste candle" ~ ((" · live koopsignaal op " ~ b.live_buy_signal_pct|pct(1, false) ~ " van de candles") if b.live_buy_signal_pct is not none else ""), "pos" if b.latest.signal == "buy" else ("neg" if b.latest.signal == "sell" else ""), "neg" if bt.loose else "") }}
       </div>
       {% if bt.no_trades %}{{ ui.notice("info", "Geen trades: niets getest. Test op meer candles (tot 1440), op een andere markt, of maak de koopregels ruimer.", live=false) }}
       {% elif bt.few_trades %}{{ ui.notice("warn", "Maar " ~ b.trades ~ (" afgeronde trade" if b.trades == 1 else " afgeronde trades") ~ " in deze periode: te weinig om op te bouwen. Eén trade meer of minder verandert de uitkomst sterk. Test op meer candles (tot 1440) of op een andere markt.", live=false) }}{% endif %}

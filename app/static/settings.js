@@ -15,13 +15,97 @@
  *   - what you typed is kept in this tab (sessionStorage, never passwords or the live
  *     confirmation) while the form is sent, so it can be put back if the session expired;
  *   - saving one block while another has edits asks first, and those edits come back (still
- *     marked as not saved) after the page reloads, instead of being lost silently.
+ *     marked as not saved) after the page reloads, instead of being lost silently;
+ *   - blocks are folded to a summary line until opened (button, list of parts, a link or
+ *     #address into the block, find-in-page), so the page is an overview first.
  */
 (function () {
   "use strict";
 
   var forms = Array.prototype.slice.call(document.querySelectorAll("form[data-settings-form]"));
   if (!forms.length) return;
+
+  // -- Folded blocks (UX-56) ------------------------------------------------------------------
+  // The server folds every block except the one just saved or sent back; CSS hides a folded
+  // block's body only with scripts on (html.js). A block opens with its button, from the list
+  // of parts, for a link or #address into it, for find-in-page, and for edits put back.
+  var blocks = Array.prototype.slice.call(document.querySelectorAll("section[data-block]"));
+  function setOpen(block, open) {
+    if (!block) return;
+    block.classList.toggle("is-collapsed", !open);
+    var toggle = block.querySelector("[data-block-toggle]");
+    if (toggle) {
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      var closedText = toggle.querySelector("[data-when-closed]");
+      var openText = toggle.querySelector("[data-when-open]");
+      if (closedText) closedText.hidden = open;
+      if (openText) openText.hidden = !open;
+    }
+    var body = block.querySelector(".settings-block-body");
+    if (body) {
+      // Folded but still found by the browser's find-in-page, which opens it (beforematch).
+      if (open) body.removeAttribute("hidden");
+      else if ("onbeforematch" in body) body.setAttribute("hidden", "until-found");
+      else body.hidden = true;
+    }
+    block.classList.add("is-ready");
+    syncOpenAll();
+  }
+  function blockOf(el) {
+    return el && el.closest ? el.closest("section[data-block]") : null;
+  }
+  function openFor(id, focus) {
+    var target = id ? document.getElementById(id) : null;
+    var block = blockOf(target);
+    if (!block) return false;
+    var wasClosed = block.classList.contains("is-collapsed");
+    setOpen(block, true);
+    if (wasClosed) {
+      target.scrollIntoView({ block: target === block ? "start" : "center" });
+      if (focus && target !== block && target.matches("input, select, textarea, button")) {
+        target.focus({ preventScroll: true });
+      }
+    }
+    return true;
+  }
+  var openAll = document.querySelector("[data-open-all]");
+  function syncOpenAll() {
+    if (!openAll) return;
+    var allOpen = blocks.every(function (b) { return !b.classList.contains("is-collapsed"); });
+    openAll.textContent = allOpen ? "Alles inklappen" : "Alles openklappen";
+    openAll.setAttribute("aria-pressed", allOpen ? "true" : "false");
+  }
+  blocks.forEach(function (block) {
+    var toggle = block.querySelector("[data-block-toggle]");
+    if (toggle) {
+      toggle.addEventListener("click", function () {
+        setOpen(block, block.classList.contains("is-collapsed"));
+      });
+    }
+    var body = block.querySelector(".settings-block-body");
+    if (body) body.addEventListener("beforematch", function () { setOpen(block, true); });
+    setOpen(block, !block.classList.contains("is-collapsed"));
+  });
+  if (openAll) {
+    openAll.addEventListener("click", function () {
+      var open = openAll.getAttribute("aria-pressed") !== "true";
+      blocks.forEach(function (b) {
+        // A block with unsaved edits stays open.
+        var form = b.querySelector("form.is-dirty");
+        setOpen(b, open || !!form);
+      });
+    });
+  }
+  // A link into a folded block (the list of parts, 'Kapitaal instellen', an error summary).
+  document.addEventListener("click", function (ev) {
+    var link = ev.target.closest ? ev.target.closest('a[href^="#"]') : null;
+    if (!link || link.hasAttribute("data-focus-link")) return;
+    openFor(decodeURIComponent(link.getAttribute("href").slice(1)), false);
+  });
+  window.addEventListener("hashchange", function () {
+    openFor(decodeURIComponent(location.hash.slice(1)), false);
+  });
+  if (location.hash.length > 1) openFor(decodeURIComponent(location.hash.slice(1)), false);
   var DRAFT_KEY = "crypie-settings-draft";
   var DRAFT_MAX_AGE_MS = 30 * 60 * 1000;
   var leaving = false;
@@ -266,6 +350,7 @@
     if (field) field.focus();
   }
   function offerDraft(form, draft) {
+    setOpen(blockOf(form), true);
     draftNotice(
       form,
       "Je wijzigingen in dit blok van " + clockOf(new Date(draft.at)) + " zijn niet opgeslagen " +
@@ -280,6 +365,7 @@
     restore(form, draft.values);
     dropDraft(blockKey(form));
     if (!form.classList.contains("is-dirty")) return;
+    setOpen(blockOf(form), true);
     draftNotice(
       form,
       "Nog niet opgeslagen: je wijzigingen in " + titleOf(form) + " staan er weer, maar alleen " +
@@ -503,6 +589,7 @@
       var target = document.getElementById(link.getAttribute("href").slice(1));
       if (!target) return;
       ev.preventDefault();
+      setOpen(blockOf(target), true);
       target.scrollIntoView({ block: "center" });
       target.focus({ preventScroll: true });
     });
@@ -519,8 +606,19 @@
         if (visible[id] && current === null) current = id;
       });
       links.forEach(function (a) {
-        if (a.getAttribute("data-toc") === current) a.setAttribute("aria-current", "true");
-        else a.removeAttribute("aria-current");
+        if (a.getAttribute("data-toc") === current) {
+          a.setAttribute("aria-current", "true");
+          // On a narrow screen the list is one row that scrolls sideways: keep it in view.
+          var row = a.closest(".settings-toc");
+          if (row && row.scrollWidth > row.clientWidth) {
+            var left = a.offsetLeft - row.offsetLeft;
+            if (left < row.scrollLeft || left + a.offsetWidth > row.scrollLeft + row.clientWidth) {
+              row.scrollLeft = Math.max(0, left - 16);
+            }
+          }
+        } else {
+          a.removeAttribute("aria-current");
+        }
       });
     };
     var observer = new IntersectionObserver(function (entries) {
