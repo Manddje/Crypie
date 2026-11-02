@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from app.ai.budget import PRICES
 from app.config import Settings, get_settings
 from app.db import Setting
+from app.news.sources import validate_feed_url
 from app.trading.events import validate_calendar_lines
 
 log = logging.getLogger(__name__)
@@ -105,7 +106,8 @@ SPECS: tuple[Spec, ...] = (
         "trading_enabled",
         "trading",
         "Bot automatisch laten handelen",
-        "Uit: de bot draait geen cycli meer, behalve als je er zelf een start.",
+        "Uit: de bot draait geen cycli meer, behalve als je er zelf een start. Stop-loss, "
+        "trailing stop en take-profit van open posities blijven wel elke paar minuten draaien.",
         kind="bool",
     ),
     Spec(
@@ -242,9 +244,13 @@ SPECS: tuple[Spec, ...] = (
         "claude_unavailable_mode",
         "trading",
         "Als Claude niet beschikbaar is",
-        "Bij een signaal zonder werkende Claude (budget op, geen sleutel, storing).",
+        "Bij een signaal zonder werkende Claude (budget op, geen sleutel, storing). Een "
+        "verkoopsignaal op een open positie wordt in beide gevallen gevolgd.",
         kind="choice",
-        choices=(("hold", "Afwachten, niets doen"), ("indicators", "Het strategiesignaal volgen")),
+        choices=(
+            ("hold", "Afwachten, niet kopen"),
+            ("indicators", "Het strategiesignaal volgen (kopen met half bedrag)"),
+        ),
     ),
     # -- limits --
     Spec(
@@ -293,7 +299,8 @@ SPECS: tuple[Spec, ...] = (
         "daily_loss_limit_pct",
         "limits",
         "Dagverlieslimiet",
-        "Bij dit gerealiseerde verlies op één dag koopt de bot de rest van de dag niets.",
+        "Bij dit verlies op één dag (gerealiseerd plus ongerealiseerd op open posities) koopt de "
+        "bot de rest van de dag niets.",
         kind="float",
         min=0.1,
         max=100,
@@ -691,6 +698,12 @@ def _feed_problem(url: str) -> str | None:
         # Single-label names resolve on the local network; numeric forms like 2130706433 or
         # 0x7f.1 are IP addresses in disguise.
         return f"'{shown}': gebruik een volledige domeinnaam"
+    try:
+        # The news fetcher's own check (also .local/.internal names and control characters),
+        # so the portal refuses what the fetcher would skip anyway.
+        validate_feed_url(url)
+    except ValueError as exc:
+        return f"'{shown}': {exc}"
     return None
 
 

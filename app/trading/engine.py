@@ -29,7 +29,7 @@ from app.ai.evaluator import Evaluator
 from app.bitvavo.broker import Broker, OrderUncertain
 from app.bitvavo.client import BitvavoClient, BitvavoError
 from app.db import Decision, Evaluation, NewsItem, Order, Position, Setting
-from app.news.service import load_market_mood, market_sentiment
+from app.news.service import load_market_mood, market_sentiment, outlet_of
 from app.strategy.describe import ConditionCheck, explain_signal, levels_summary, signal_reason_nl
 from app.strategy.engine import backtest, compute_series, signal_at
 from app.strategy.model import LOOKBACK_OPS, Strategy
@@ -71,6 +71,10 @@ ENGINE_STATE_KEY = "engine_state"
 
 class ManualOrderError(ValueError):
     """A manual order that the rules do not allow; the message is Dutch, for the owner."""
+
+
+class EvaluationBusy(RuntimeError):
+    """An evaluation is already running; a second one would only spend the budget twice."""
 
 
 # -- positions ---------------------------------------------------------------------------
@@ -225,7 +229,9 @@ def news_sources(
             continue
         if not positive and sentiment > NEWS_EXIT_MAX_SCORE:
             continue
-        best = max(best, len({_outlet(m) for m in members}))
+        # Distinct by publisher name and by site (the news page's rule) alike: two names on
+        # one site, or one feed's name on two hosts, are still one outlet.
+        best = max(best, min(len({_outlet(m) for m in members}), len(set(map(outlet_of, members)))))
     return best
 
 
@@ -360,6 +366,7 @@ class TradingEngine:
         self.unprotected: list[dict[str, Any]] = []
         self.last_exit_run: datetime | None = None
         self._locks: dict[str, asyncio.Lock] = {}
+        self._evaluation_lock = asyncio.Lock()
         self.market_timeout_s = MARKET_RUN_TIMEOUT_S
         self.data_timeout_s = DATA_TIMEOUT_S
         self.decision_timeout_s = DECISION_TIMEOUT_S
@@ -1688,7 +1695,19 @@ class TradingEngine:
 
     # -- evaluation --
 
+    @property
+    def evaluation_busy(self) -> bool:
+        return self._evaluation_lock.locked()
+
     async def run_evaluation(self, session: Session, days: int = 7) -> Evaluation:
+        """One evaluation at a time (button, API and scheduler); a second request while one
+        runs raises EvaluationBusy instead of paying Claude twice."""
+        if self._evaluation_lock.locked():
+            raise EvaluationBusy("Er loopt al een evaluatie; probeer het straks opnieuw.")
+        async with self._evaluation_lock:
+            return await self._run_evaluation(session, days)
+
+    async def _run_evaluation(self, session: Session, days: int) -> Evaluation:
         strategy = load_strategy(session)
         closed = closed_positions(session, self.mode, days)
         decisions = [d for d in recent_decisions(session, self.mode, 200) if d.source != "rules"]

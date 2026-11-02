@@ -31,12 +31,14 @@ from app.auth.service import (
     session_secret_is_weak,
 )
 from app.bitvavo.broker import PAPER_WALLET_KEY, Broker, LiveBroker, PaperBroker, recent_orders
-from app.bitvavo.client import BitvavoClient, BitvavoError
+from app.bitvavo.client import BitvavoClient, BitvavoError, InvalidMarketError
 from app.config import Settings, get_settings
 from app.db import Evaluation, SessionLocal, Setting, get_session, init_db
 from app.news.service import (
+    NEWS_RETENTION_DAYS,
     NewsService,
     annotate_groups,
+    clear_market_mood,
     count_status,
     group_items,
     load_market_mood,
@@ -64,6 +66,7 @@ from app.trading.engine import (
     NEWS_ENTRY_MIN_SCORE,
     NEWS_ENTRY_SIZE_FACTOR,
     NEWS_EXIT_MAX_SCORE,
+    EvaluationBusy,
     TradingEngine,
     closed_positions,
     latest_decisions,
@@ -628,6 +631,8 @@ async def candles(
     market = _tracked_market(request, market)
     try:
         return await client.candles(market, interval, limit)
+    except InvalidMarketError as exc:
+        raise HTTPException(400, str(exc)) from exc
     except BitvavoError as exc:
         raise HTTPException(502, str(exc)) from exc
 
@@ -1005,16 +1010,20 @@ def _news_dict(it, tracked: list[str]) -> dict:
     }
 
 
+# News is only kept this long; larger windows would only overflow timedelta.
+NEWS_HOURS_MAX = NEWS_RETENTION_DAYS * 24
+
+
 @app.get("/api/news")
 async def list_news(
     request: Request,
-    hours: int = 24,
-    limit: int = 100,
+    hours: int = Query(24, ge=1, le=NEWS_HOURS_MAX),
+    limit: int = Query(100, ge=1, le=500),
     counts: bool | None = None,
     session: Session = Depends(get_session),
 ):
     tracked = request.app.state.settings.coins
-    rows = [_news_dict(it, tracked) for it in recent_items(session, hours, min(limit, 500))]
+    rows = [_news_dict(it, tracked) for it in recent_items(session, hours, limit)]
     if counts is not None:
         rows = [r for r in rows if r["counts"] == counts]
     return rows
@@ -1029,7 +1038,9 @@ async def refresh_news(
 
 @app.get("/api/news/sentiment")
 async def news_sentiment(
-    request: Request, hours: int = 48, session: Session = Depends(get_session)
+    request: Request,
+    hours: int = Query(48, ge=1, le=NEWS_HOURS_MAX),
+    session: Session = Depends(get_session),
 ):
     return {
         coin: market_sentiment(session, coin, hours).as_dict()
@@ -1040,8 +1051,9 @@ async def news_sentiment(
 @app.get("/news", response_class=HTMLResponse)
 async def news_page(
     request: Request,
-    hours: int = 24,
-    telt: str = "",  # "ja" = only facts that weigh in the sentiment, "nee" = only the rest
+    hours: int = Query(24, ge=1, le=NEWS_HOURS_MAX),
+    # "ja" = only facts that weigh in the sentiment, "nee" = only the rest
+    telt: str = Query("", max_length=8),
     news: NewsService = Depends(get_news),
     session: Session = Depends(get_session),
 ):
@@ -1206,6 +1218,8 @@ async def run_evaluation(
         raise HTTPException(503, "ANTHROPIC_API_KEY is not configured")
     try:
         ev = await engine.run_evaluation(session, days)
+    except EvaluationBusy as exc:
+        raise HTTPException(409, str(exc)) from exc
     except BudgetExceeded as exc:
         raise HTTPException(429, str(exc)) from exc
     except RuntimeError as exc:
@@ -1352,7 +1366,11 @@ async def trading_action(
     elif action == "cycle":
         await engine.run_cycle(session)
     elif action == "evaluate" and engine.evaluator.available:
-        await engine.run_evaluation(session)
+        try:
+            await engine.run_evaluation(session)
+        except EvaluationBusy as exc:
+            ctx = _trading_context(request, engine, session, error=str(exc))
+            return templates.TemplateResponse(request, "trading.html", ctx, status_code=409)
     elif action.startswith("apply:"):
         match = APPLY_ACTION_RE.fullmatch(action)
         if match is None:
@@ -1607,8 +1625,15 @@ def _save_settings(request: Request, session: Session, raw: dict) -> Settings:
     cfg.save_overrides(session, values, app_.state.env)
     _log_setting_changes(app_.state.settings, candidate)
     apply_settings(app_, candidate)
+    _drop_disabled_mood(session, candidate)
     app_.state.config_warning = None
     return candidate
+
+
+def _drop_disabled_mood(session: Session, settings: Settings) -> None:
+    """With the Fear & Greed feed off, Claude must not keep getting its last stored value."""
+    if not settings.fear_greed_enabled:
+        clear_market_mood(session)
 
 
 def _log_setting_changes(old: Settings, new: Settings) -> None:
@@ -1626,6 +1651,7 @@ def _reset_settings(request: Request, session: Session, keys: list[str] | None) 
         # The environment itself says live but live is not possible: stay in paper mode.
         new = new.model_copy(update={"trading_mode": "paper"})
     apply_settings(request.app, new)
+    _drop_disabled_mood(session, new)
     return removed
 
 
@@ -1799,7 +1825,9 @@ async def _dashboard_context(
         balances = await broker.balances(session)
     except Exception as exc:
         error = error or str(exc)
-    mode = request.app.state.engine.mode
+    engine: TradingEngine = request.app.state.engine
+    mode = engine.mode
+    strategy, strategy_warning = load_strategy_checked(session)
     return {
         "settings": settings,
         "prices": prices_,
@@ -1809,13 +1837,16 @@ async def _dashboard_context(
         "error": error,
         "rate_limit": client.rate_limit_remaining,
         "budget": budget.status(session),
-        "strategy": load_strategy(session),
+        "strategy": strategy,
+        "strategy_warning": strategy_warning,
         "sentiments": [market_sentiment(session, c, 48) for c in settings.coins],
         "open_positions": open_positions(session, mode),
         "performance": performance_summary(session, mode),
         "paused": risk.is_paused(session),
-        "last_run": request.app.state.engine.last_run,
+        "last_run": engine.last_run,
         "config_warning": request.app.state.config_warning,
+        "unprotected_positions": engine.unprotected,
+        "session_secret_weak": getattr(request.app.state, "session_secret_weak", False),
         "chart_periods": list(PERIODS),
     }
 

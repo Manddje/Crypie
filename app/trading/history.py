@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.db import Decision, Order
@@ -25,6 +25,14 @@ PERIODS: dict[str, tuple[str, int]] = {
     "90d": ("1d", 90),
 }
 DEFAULT_PERIOD = "7d"
+# Orders that moved no coins: refused, still in flight or with an unknown outcome. A
+# cancelled order that filled nothing has amount 0 and is skipped by the amount filter.
+NOT_FILLED = ("rejected", "pending", "unknown")
+# Old rows may lack the amount; they keep showing as before.
+_FILLED = (
+    Order.status.not_in(NOT_FILLED),
+    or_(Order.amount.is_(None), Order.amount > 0),
+)
 
 INTERVAL_SECONDS: dict[str, int] = {
     "1m": 60,
@@ -175,7 +183,7 @@ def market_actions(
     orders = session.scalars(
         select(Order)
         .where(Order.mode == mode, Order.market == market, Order.created_at >= since)
-        .where(Order.status != "rejected")
+        .where(*_FILLED)
         .order_by(Order.created_at)
     )
     decisions = session.scalars(
@@ -196,7 +204,8 @@ def trade_actions(session: Session, mode: str, since: datetime, interval: str) -
     """Executed buys and sells in every market since ``since``, oldest first."""
     orders = session.scalars(
         select(Order)
-        .where(Order.mode == mode, Order.created_at >= since, Order.status != "rejected")
+        .where(Order.mode == mode, Order.created_at >= since)
+        .where(*_FILLED)
         .order_by(Order.created_at)
     )
     return [_order_action(o, interval) for o in orders]
@@ -221,7 +230,8 @@ def portfolio_history(
     orders = list(
         session.scalars(
             select(Order)
-            .where(Order.mode == mode, Order.created_at >= since, Order.status != "rejected")
+            .where(Order.mode == mode, Order.created_at >= since)
+            .where(*_FILLED)
             .order_by(Order.created_at.desc())
         )
     )

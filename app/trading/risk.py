@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import astuple, dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
@@ -146,6 +147,10 @@ def check_buy(
     now = now or datetime.now(UTC)
     if is_paused(session):
         return 0.0, "handelen is gepauzeerd (kill switch)"
+    # Fail closed: NaN compares False, so it would slip through every check below.
+    numbers = (*astuple(limits), amount_quote, portfolio_value, exposure_value, unrealized)
+    if not all(math.isfinite(float(x)) for x in numbers):
+        return 0.0, "ongeldige waarde in de limieten of de portefeuille (geen getal)"
     if trades_today(session, mode, now) >= limits.max_trades_per_day:
         return 0.0, f"maximum van {limits.max_trades_per_day} trades per dag bereikt"
     if portfolio_value > 0:

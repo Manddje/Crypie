@@ -702,21 +702,24 @@ async def test_news_shock_pauses_buying_but_not_selling(session):
         TradeDecision(action="buy", confidence=0.9, amount_quote=100, reasoning_nl="Kopen.")
     )
     engine = make_engine_(session, {"BTC-EUR": candles(BUY_SERIES)}, {"BTC-EUR": 12.0}, decider)
-    session.add(
-        NewsItem(
-            source="rss",
-            source_name="Src",
-            url="https://x/hack",
-            title="Exchange hacked",
-            summary_nl="Grote beurs gehackt.",
-            published_at=datetime.now(UTC) - timedelta(hours=1),
-            assessed=True,
-            relevant=True,
-            sentiment=-0.9,
-            impact=3,
-            coins="ALL",
+    # A shock needs two outlets reporting the same event (F37).
+    for hours_ago, outlet in ((1, "coindesk.com"), (2, "theblock.co")):
+        session.add(
+            NewsItem(
+                source="rss",
+                source_name=outlet,
+                url=f"https://{outlet}/hack",
+                title="Exchange hacked",
+                summary_nl="Grote beurs gehackt.",
+                published_at=datetime.now(UTC) - timedelta(hours=hours_ago),
+                assessed=True,
+                relevant=True,
+                sentiment=-0.9,
+                impact=3,
+                coins="ALL",
+                event_key="exchange-hack",
+            )
         )
-    )
     session.commit()
     (result,) = await engine.run_cycle(session)
     assert result.action == "hold" and "nieuwsschok (Grote beurs gehackt.)" in result.reason

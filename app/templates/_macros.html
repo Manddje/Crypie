@@ -74,3 +74,20 @@
 {% endif %}
 {% endif %}
 {%- endmacro %}
+
+{# Open positions whose mode cannot trade now: no stop-loss or take-profit runs for them. #}
+{% macro unprotected_notice(positions) -%}
+{% if positions %}
+{% call notice("error", positions|length ~ (" open positie wordt" if positions|length == 1 else " open posities worden") ~ " NIET bewaakt door stop-loss, trailing stop of take-profit, omdat hun modus nu niet kan handelen (live zonder Bitvavo-sleutel of LIVE_TRADING_ACK). Zet live handelen weer aan of verkoop ze zelf op Bitvavo.") %}
+  <ul class="small">
+    {% for u in positions %}
+    <li>{{ u.market }} ({{ "live" if u.mode == "live" else "oefenmodus" }}, positie #{{ u.id }}): {{ u.amount|compact }} stuks{% if u.stop_price %}, stop-loss op {{ u.stop_price|compact }}{% endif %}{% if u.price %}, koers nu {{ u.price|compact }}{% endif %}</li>
+    {% endfor %}
+  </ul>
+{% endcall %}
+{% endif %}
+{%- endmacro %}
+
+{% macro session_secret_notice(weak) -%}
+{% if weak %}{{ notice("warn", "SESSION_SECRET ontbreekt of is korter dan 32 tekens. Stel in de omgeving een lange willekeurige waarde in (bijvoorbeeld de uitvoer van 'openssl rand -hex 32') en herstart de app. Daarna log je opnieuw in en maak je nieuwe herstelcodes aan.") }}{% endif %}
+{%- endmacro %}

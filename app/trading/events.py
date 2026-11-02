@@ -156,27 +156,41 @@ def upcoming_events(
 
 def recent_shock(session, coin: str, hours: int, now: datetime | None = None):
     """The newest highest-impact, strongly negative news fact for ``coin`` (or the whole market)
-    within ``hours``; None when there is none. Returns the NewsItem."""
+    within ``hours``; None when there is none. Returns the NewsItem.
+
+    Like the sentiment, a shock needs a second outlet: one article (one press release, one
+    hostile feed) cannot pause buying for every coin. The other outlets' articles about the
+    same event (same event key) count as confirmation whatever impact they were given.
+    """
     from sqlalchemy import select
 
     from app.db import NewsItem
+    from app.news.service import MIN_CONFIRMING_OUTLETS, event_key_for, outlet_of
 
     if hours <= 0:
         return None
     now = now or datetime.now(UTC)
+    window = (
+        NewsItem.assessed.is_(True),
+        NewsItem.relevant.is_(True),
+        NewsItem.published_at >= now - timedelta(hours=hours),
+    )
     rows = session.scalars(
         select(NewsItem)
         .where(
-            NewsItem.assessed.is_(True),
-            NewsItem.relevant.is_(True),
+            *window,
             NewsItem.impact >= SHOCK_MIN_IMPACT,
             NewsItem.sentiment <= SHOCK_MAX_SENTIMENT,
-            NewsItem.published_at >= now - timedelta(hours=hours),
         )
         .order_by(NewsItem.published_at.desc())
     ).all()
-    for it in rows:
-        coins = it.coin_list()
-        if coin in coins or "ALL" in coins:
+    candidates = [it for it in rows if coin in it.coin_list() or "ALL" in it.coin_list()]
+    if not candidates:
+        return None
+    outlets: dict[str, set[str]] = {}
+    for it in session.scalars(select(NewsItem).where(*window)):
+        outlets.setdefault(event_key_for(it), set()).add(outlet_of(it))
+    for it in candidates:
+        if len(outlets.get(event_key_for(it), ())) >= MIN_CONFIRMING_OUTLETS:
             return it
     return None

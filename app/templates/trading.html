@@ -9,6 +9,7 @@
 
 <div class="stack">
   {% if error %}{{ ui.notice("error", error) }}{% endif %}
+  {{ ui.unprotected_notice(status.unprotected_positions) }}
   {% if status.last_error %}{{ ui.notice("error", "Laatste fout: " ~ status.last_error) }}{% endif %}
   {% if not status.claude_available %}{{ ui.notice("info", "De Claude-sleutel (ANTHROPIC_API_KEY) ontbreekt. Bij een signaal doet de bot nu: " ~ ("afwachten" if settings.claude_unavailable_mode == "hold" else "de indicatoren volgen") ~ ".") }}{% endif %}
 

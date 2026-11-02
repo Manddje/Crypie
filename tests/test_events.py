@@ -67,11 +67,11 @@ def session():
         yield s
 
 
-def _news(session, title, sentiment, impact, coins, hours_ago, now):
+def _news(session, title, sentiment, impact, coins, hours_ago, now, outlet="x.com"):
     it = NewsItem(
         source="rss",
-        source_name="Src",
-        url=f"https://x/{title}",
+        source_name=outlet,
+        url=f"https://{outlet}/{title}",
         title=title,
         published_at=now - timedelta(hours=hours_ago),
         assessed=True,
@@ -91,9 +91,15 @@ def test_recent_shock_needs_top_impact_and_strong_negative(session):
     _news(session, "medium", -0.9, 2, "ALL", 1, now)  # impact too low
     _news(session, "old", -0.9, 3, "ALL", 9, now)  # outside the window
     _news(session, "sol-only", -0.9, 3, "SOL", 2, now)
+    _news(session, "sol-only", -0.7, 2, "SOL", 2, now, outlet="y.org")  # second outlet
     assert recent_shock(session, "BTC", 6, now) is None
     assert recent_shock(session, "SOL", 6, now).title == "sol-only"
-    hack = _news(session, "hack", -0.8, 3, "ALL", 1, now)
-    assert recent_shock(session, "BTC", 6, now) is hack
-    assert recent_shock(session, "SOL", 6, now) is hack  # newest shock wins
+    _news(session, "hack", -0.8, 3, "ALL", 1, now)
+    # One outlet is not enough to pause every coin (F37).
+    assert recent_shock(session, "BTC", 6, now) is None
+    _news(session, "hack", -0.9, 3, "ALL", 1, now, outlet="news.x.com")  # same outlet
+    assert recent_shock(session, "BTC", 6, now) is None
+    _news(session, "hack", -0.9, 3, "ALL", 1, now, outlet="z.net")
+    assert recent_shock(session, "BTC", 6, now).title == "hack"
+    assert recent_shock(session, "SOL", 6, now).title == "hack"  # newest shock wins
     assert recent_shock(session, "BTC", 0, now) is None  # pause switched off
