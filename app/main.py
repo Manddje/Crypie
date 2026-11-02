@@ -2300,6 +2300,8 @@ def _plan_context(request: Request, engine: TradingEngine, session: Session) -> 
         "fields": PLAN_FIELDS,
         "max_length": PLAN_MAX_LENGTH,
         "strategy": strategy,
+        # Indicator ids as people read them ('rsi14' -> 'RSI 14'), as on Handelen.
+        "indicator_labels": display.indicator_labels(strategy),
         "mode": engine.mode,
         "limits": engine.limits,
         "fee_pct": engine.fee_pct,
@@ -2752,6 +2754,8 @@ def bitvavo_key_state(request: Request) -> dict:
 
 
 templates.env.globals["bitvavo_key_state"] = bitvavo_key_state
+# 'rsi14 lager dan 35' -> 'RSI 14 lager dan 35' (a page passes the labels of its strategy).
+templates.env.filters["readable_condition"] = display.readable_condition
 
 
 async def fetch_market_names(client: BitvavoClient) -> set[str] | None:

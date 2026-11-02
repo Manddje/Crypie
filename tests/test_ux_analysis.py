@@ -463,7 +463,7 @@ async def test_plan_separates_own_text_from_derived_rules(api):
     assert "impact middel of groot" in r.text and "hoge impact" not in r.text
     assert '$ 0,00</span> van <span class="money">$ 100' in r.text and "dollar" not in r.text
     assert "Koop als RSI onder 35" not in r.text  # the free description is not on the plan
-    assert "rsi14 lager dan 35" in r.text
+    assert "RSI 14 lager dan 35" in r.text and "rsi14 lager dan 35" not in r.text
     assert 'style="' not in r.text.split("<main", 1)[1]
 
     # Written and emptied again: 'nog leeg', not 'laatst gewijzigd'.

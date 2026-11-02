@@ -97,14 +97,14 @@
       <h4 class="plan-h">Koopsignaal: alle harde voorwaarden gelden</h4>
       <ul class="rules">
         {% for c in strategy.buy %}
-        <li class="{{ 'soft' if c.soft else 'hard' }}"><span class="mark" aria-hidden="true">{{ "~" if c.soft else "•" }}</span>{{ c|condition_nl }}</li>
+        <li class="{{ 'soft' if c.soft else 'hard' }}"><span class="mark" aria-hidden="true">{{ "~" if c.soft else "•" }}</span>{{ c|condition_nl|readable_condition(indicator_labels) }}</li>
         {% endfor %}
       </ul>
       {% if strategy.buy|selectattr("soft")|list %}
       <p class="form-help">Een <strong>zacht filter</strong> (~) hoeft niet te gelden. Geldt het niet, dan weegt Claude dat af tegen het nieuws en koopt hij hoogstens {{ half_order_pct }}% van het maximum, alleen bij neutraal tot positief nieuws.</p>
       {% endif %}
       <h4 class="plan-h">Dipbewaking</h4>
-      <p class="small">{% if settings.watch_interval_min > 0 %}Gelden de dip-voorwaarden maar de draai nog niet, dan kijkt de bot elke {{ settings.watch_interval_min }} minuten opnieuw, maximaal {{ settings.watch_max_min }} minuten. Zodra de draai er is, gaat de situatie naar Claude.{% else %}Uit: de bot kijkt alleen in de gewone cyclus.{% endif %}</p>
+      <p class="small">{% if settings.watch_interval_min > 0 %}Gelden de dip-voorwaarden maar de draai nog niet, dan kijkt de bot elke {{ settings.watch_interval_min }} minuten opnieuw, maximaal {{ settings.watch_max_min }} minuten. Zodra de draai er is, draait de bot meteen een cyclus{% if claude.active %} en beslist Claude of hij koopt{% elif settings.claude_unavailable_mode == "indicators" %} en koopt hij op het signaal van de strategie (zonder Claude){% else %}; zonder Claude koopt hij dan niet{% endif %}.{% else %}Uit: de bot kijkt alleen in de gewone cyclus.{% endif %}</p>
       <h4 class="plan-h">Instappen op nieuws</h4>
       <p class="small">Zonder koopsignaal mag Claude alleen kopen als het nieuws voor de coin sterk positief is (score {{ news_entry_min_score|num(1) }} of hoger) met minstens één nieuwsfeit van impact middel of groot, gemeld door minstens {{ news_min_sources }} bronnen, en dan hoogstens {{ half_order_pct }}% van het maximum. Slecht nieuws is nooit een reden om de dip te kopen.</p>
       <h4 class="plan-h">Risk-off</h4>
@@ -124,7 +124,7 @@
       <h4 class="plan-h">Verkoopsignaal: alle voorwaarden gelden</h4>
       <ul class="rules">
         {% for c in strategy.sell %}
-        <li class="{{ 'soft' if c.soft else 'hard' }}"><span class="mark" aria-hidden="true">{{ "~" if c.soft else "•" }}</span>{{ c|condition_nl }}</li>
+        <li class="{{ 'soft' if c.soft else 'hard' }}"><span class="mark" aria-hidden="true">{{ "~" if c.soft else "•" }}</span>{{ c|condition_nl|readable_condition(indicator_labels) }}</li>
         {% endfor %}
       </ul>
       <p class="small">Bij een verkoopsignaal beslist Claude of hij verkoopt; zonder Claude volgt de bot het signaal. De noodstop houdt een verkoop op een verkoopsignaal niet tegen.</p>

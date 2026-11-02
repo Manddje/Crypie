@@ -1712,7 +1712,16 @@ form.is-dirty .settings-actions {
   .setting-control { align-items: stretch; }
   .setting .switch { align-self: flex-start; }
   .settings-top { text-align: left; }
-  form.is-dirty .settings-actions { margin-left: -18px; margin-right: -18px; padding-left: 18px; padding-right: 18px; }
+  form.is-dirty .settings-actions { margin-left: -18px; margin-right: -18px; padding-left: 18px; padding-right: 18px; gap: 6px; }
+  /* A compact bar on a phone: it covers less of the fields you are editing. */
+  form.is-dirty .settings-actions-note { display: none; }
+  form.is-dirty .settings-actions .actions { gap: 6px 8px; }
+  form.is-dirty .settings-actions .btn { padding: 8px 14px; font-size: var(--fs-help); }
+}
+/* Tab to a field under the sticky Opslaan bar: the browser scrolls it above the bar. */
+html:has(form.is-dirty) { scroll-padding-bottom: 170px; }
+@media (max-width: 640px) {
+  html:has(form.is-dirty) { scroll-padding-bottom: 200px; }
 }
 
 /* ==== Pagina: Inloggen en account ==== */

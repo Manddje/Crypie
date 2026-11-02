@@ -298,7 +298,9 @@ async def api():
 async def test_plan_page_and_api(api):
     r = await api.get("/plan")
     assert r.status_code == 200
-    assert "Tradingplan" in r.text and "Harde limieten" in r.text and "rsi14 lager dan 35" in r.text
+    assert (
+        "Tradingplan" in r.text and "Harde limieten" in r.text and "RSI 14 lager dan 35" in r.text
+    )
 
     r = await api.post("/plan", data={"goal": "Rustig opbouwen", "rules": "Geen weekend"})
     # A one-time message instead of ?saved=1, so a reload shows no stale confirmation. Without
