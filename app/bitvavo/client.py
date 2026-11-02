@@ -36,6 +36,11 @@ RATE_LIMIT_FLOOR = 25
 MAX_BACKOFF_S = 300.0
 # "No order found" (also returned briefly while an order is still being processed).
 ORDER_NOT_FOUND_CODE = 240
+# Bitvavo answers 300-319 when it refuses the API key itself: wrong length or signature, no
+# active key, not this IP address, missing rights, a locked account. 310 means the key may not
+# trade (it can still read), so it is kept apart from the rest.
+KEY_ERROR_CODES = set(range(300, 320))
+NO_TRADING_RIGHTS_CODE = 310
 
 
 class BitvavoError(RuntimeError):
@@ -128,6 +133,12 @@ class BitvavoClient:
         self._candle_cache: dict[tuple[str, str, int], tuple[float, list[list[float]]]] = {}
         self._markets_ttl = markets_ttl_s
         self._markets_cache: tuple[float, dict[str, dict[str, Any]]] | None = None
+        # What Bitvavo said about the API key, so the portal never shows a refused key as
+        # simply 'ingesteld': the last refusal ({"status", "code", "error", "at"}) or None,
+        # and when a signed request last succeeded (epoch seconds).
+        self.key_problem: dict[str, Any] | None = None
+        self.trade_problem: dict[str, Any] | None = None
+        self.key_ok_at: float | None = None
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -239,13 +250,36 @@ class BitvavoClient:
             err = BitvavoError(resp.status_code, payload)
             if err.rate_limited:
                 self._back_off(err, resp.headers)
+            elif auth:
+                self._note_key_refusal(err)
             raise err
         if not isinstance(payload, dict | list):
             # Every endpoint answers with a JSON object or list. Anything else is treated
             # like a 5xx: ambiguous, so an order behind it is looked up, never assumed.
             raise BitvavoError(502, {"error": f"unexpected response: {str(payload)[:80]!r}"})
         self._backoff_s = 0.0
+        if auth:
+            self.key_ok_at = time.time()
+            self.key_problem = None
+            if method == "POST" and endpoint == "/order":
+                self.trade_problem = None
         return payload
+
+    def _note_key_refusal(self, err: BitvavoError) -> None:
+        """Remember a refusal of the key itself (401/403 or a 3xx error code)."""
+        if err.status not in (401, 403) and err.code not in KEY_ERROR_CODES:
+            return
+        message = err.payload.get("error") if isinstance(err.payload, dict) else err.payload
+        problem = {
+            "status": err.status,
+            "code": err.code,
+            "error": str(message or "")[:200],
+            "at": time.time(),
+        }
+        if err.code == NO_TRADING_RIGHTS_CODE:
+            self.trade_problem = problem
+        else:
+            self.key_problem = problem
 
     # -- public endpoints -------------------------------------------------------------
 
