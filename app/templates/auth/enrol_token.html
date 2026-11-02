@@ -1,0 +1,19 @@
+{% extends "auth/_base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Authenticator instellen{% endblock %}
+{% block content %}
+<h1>Authenticator instellen</h1>
+<p class="auth-sub">Eerst de eenmalige code van de server</p>
+{% if error %}{{ ui.notice("error", error) }}{% endif %}
+<p class="muted">Er is nog geen authenticator gekoppeld. Om er een te koppelen heb je de eenmalige code nodig die <span class="mono">python -m app.auth reset-mfa</span> of <span class="mono">create-account</span> op de server afdrukt. De code is een uur geldig.</p>
+<form method="post" action="/login/mfa/setup" class="auth-form">
+  <input type="hidden" name="next" value="{{ next }}">
+  <label>Code van de server
+    <input class="code-input" type="text" name="enrol_token" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="64" required autofocus>
+  </label>
+  <button class="btn btn-primary btn-block" type="submit">Verder</button>
+</form>
+{% endblock %}
+{% block below %}
+<form method="post" action="/logout" class="auth-below"><button class="btn btn-sm" type="submit">Terug naar inloggen</button></form>
+{% endblock %}

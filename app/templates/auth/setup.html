@@ -7,6 +7,7 @@
 {% if error %}{{ ui.notice("error", error) }}{% endif %}
 <p class="muted">Er is nog geen account. Kies een gebruikersnaam en wachtwoord; daarna koppel je een authenticator-app voor de tweede stap bij het inloggen.</p>
 <form method="post" action="/setup" class="auth-form">
+  <input type="hidden" name="token" value="{{ token }}">
   <label>Gebruikersnaam
     <input type="text" name="username" value="{{ username }}" autocomplete="username" autocapitalize="off" spellcheck="false" minlength="2" maxlength="64" required autofocus>
   </label>

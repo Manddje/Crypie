@@ -20,16 +20,28 @@
       {% if codes_left <= 2 %}<p class="form-help">Je hebt nog maar {{ codes_left }} herstelcode{{ "" if codes_left == 1 else "s" }}. Maak hieronder nieuwe aan.</p>{% endif %}
     </section>
     <section class="card">
-      <div class="card-header"><h2>Authenticator en herstelcodes</h2></div>
-      <p class="card-desc">Vul ter bevestiging je wachtwoord in.</p>
+      <div class="card-header"><h2>Herstelcodes</h2></div>
+      <p class="card-desc">Vul ter bevestiging je wachtwoord in. Je oude herstelcodes werken daarna niet meer en andere browsers worden uitgelogd.</p>
       <form method="post" action="/account" class="auth-form">
+        <input type="hidden" name="action" value="recovery">
         <label>Wachtwoord
           <input type="password" name="password" autocomplete="current-password" required>
         </label>
-        <div class="actions">
-          <button class="btn" name="action" value="recovery" type="submit">Nieuwe herstelcodes</button>
-          <button class="btn btn-danger" name="action" value="reenrol" type="submit">Authenticator opnieuw instellen</button>
-        </div>
+        <div class="actions"><button class="btn" type="submit">Nieuwe herstelcodes</button></div>
+      </form>
+    </section>
+    <section class="card">
+      <div class="card-header"><h2>Authenticator opnieuw instellen</h2></div>
+      <p class="card-desc">Vul ter bevestiging je wachtwoord in plus een code uit je huidige authenticator-app of een herstelcode. Daarna koppel je binnen 5 minuten de nieuwe app.</p>
+      <form method="post" action="/account" class="auth-form">
+        <input type="hidden" name="action" value="reenrol">
+        <label>Wachtwoord
+          <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <label>Huidige code of herstelcode
+          <input class="code-input" type="text" name="code" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" maxlength="32" placeholder="123 456" required>
+        </label>
+        <div class="actions"><button class="btn btn-danger" type="submit">Authenticator opnieuw instellen</button></div>
       </form>
     </section>
     <section class="card">
@@ -48,6 +60,14 @@
         <div class="actions"><button class="btn btn-primary" type="submit">Wachtwoord wijzigen</button></div>
       </form>
       <p class="form-help">Wachtwoord kwijt? Draai op de server <span class="mono">python -m app.auth reset-password</span>.</p>
+    </section>
+    <section class="card">
+      <div class="card-header"><h2>Overal uitloggen</h2></div>
+      <p class="card-desc">Logt elke browser uit, ook deze. Gebruik dit als je denkt dat iemand anders bij je sessie kan.</p>
+      <form method="post" action="/account" class="auth-form">
+        <input type="hidden" name="action" value="logout_all">
+        <div class="actions"><button class="btn btn-danger" type="submit">Overal uitloggen</button></div>
+      </form>
     </section>
   </div>
 </div>

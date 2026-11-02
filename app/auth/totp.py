@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hmac
+import re
 import secrets
 import struct
 import time
@@ -12,6 +13,8 @@ from urllib.parse import quote
 
 STEP_SECONDS = 30
 DIGITS = 6
+_CODE_RE = re.compile(rf"[0-9]{{{DIGITS}}}")  # ASCII digits only, not other Unicode digits
+SECRET_RE = re.compile(r"[A-Z2-7]{32}")  # what new_secret() makes
 
 
 def new_secret() -> str:
@@ -49,14 +52,14 @@ def verify(
     already used (``last_counter``) so an intercepted code cannot be replayed.
     """
     cleaned = code.strip().replace(" ", "")
-    if len(cleaned) != DIGITS or not cleaned.isdigit():
+    if not _CODE_RE.fullmatch(cleaned):
         return None
     base = current_counter(now)
     for offset in range(-window, window + 1):
         counter = base + offset
         if last_counter is not None and counter <= last_counter:
             continue
-        if hmac.compare_digest(code_at(secret, counter), cleaned):
+        if hmac.compare_digest(code_at(secret, counter).encode(), cleaned.encode()):
             return counter
     return None
 

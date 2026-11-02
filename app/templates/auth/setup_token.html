@@ -1,0 +1,13 @@
+{% extends "auth/_base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Account aanmaken{% endblock %}
+{% block content %}
+<h1>Account aanmaken</h1>
+<p class="auth-sub">Alleen met de setup-link van de server</p>
+{% if error %}{{ ui.notice("error", error) }}{% endif %}
+<p class="muted">Een account aanmaken kan alleen met de geheime setup-link. De server zet die bij het starten in de logs: zoek naar <span class="mono">/setup?token=</span> en open die link. Heb je zelf <span class="mono">SETUP_TOKEN</span> ingesteld, gebruik dan <span class="mono">/setup?token=</span> met die waarde.</p>
+<p class="small muted">Of maak het account op de server aan met <span class="mono">python -m app.auth create-account</span>.</p>
+{% endblock %}
+{% block below %}
+<p class="auth-below"><a class="btn btn-sm" href="/login">Naar inloggen</a></p>
+{% endblock %}

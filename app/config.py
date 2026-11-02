@@ -102,6 +102,12 @@ class Settings(BaseSettings):
     auth_enabled: bool = True
     session_secret: str = ""  # optional; empty = generated once and kept in the database
     auth_session_hours: int = 24
+    # Web hardening. SETUP_TOKEN: secret for /setup while there is no account (empty = a new
+    # one per start, printed in the log). TRUSTED_ORIGINS: extra origins (comma-separated, e.g.
+    # "https://crypie.example.nl") allowed to POST besides the site itself.
+    setup_token: str = ""
+    trusted_origins: Annotated[list[str], NoDecode] = []
+    api_docs_enabled: bool = False  # /docs, /redoc and /openapi.json (still behind the login)
 
     @field_validator("markets", mode="before")
     @classmethod
@@ -126,6 +132,13 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             parsed = [f.strip() for f in value.split(",") if f.strip()]
             return parsed or cls.model_fields["news_rss_feeds"].default
+        return value
+
+    @field_validator("trusted_origins", mode="before")
+    @classmethod
+    def _split_origins(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [o.strip().rstrip("/").lower() for o in value.split(",") if o.strip()]
         return value
 
     @property
