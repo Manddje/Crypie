@@ -1,4 +1,4 @@
-"""The contracts between the front-end and back-end foundation: the bot status from
+"""The contracts between the foundations and the page packages: the bot status from
 bot_health() through ui.status, the kill switch's return address, flashes on every layout and
 error pages inside the page frame."""
 
@@ -116,3 +116,37 @@ async def test_error_page_sits_in_the_frame_without_grabbing_focus(api):
     assert r.status_code == 404 and 'id="main"' in r.text and "Hoofdnavigatie" in r.text
     # The page is the message: no alert role, so app.js does not move the focus to it.
     assert 'notice notice-error">' in r.text and 'role="alert"' not in r.text
+
+
+# -- Round 2: the page packages against each other ---------------------------------------------
+
+
+async def test_strategy_page_points_to_the_proposal_handelen_shows(api):
+    """Strategie links to Handelen's #voorstel only when Handelen features that proposal: the
+    newest unapplied one, and only when it can be applied. An older applicable proposal behind
+    a newer refused one is in the evaluation list, not at the top, so it is not linked."""
+    from tests.test_ux_trading import _add_evaluation, _clean, _proposal
+
+    _clean()
+    try:
+        _add_evaluation(_proposal(name="Ouder en goed", stop_loss_pct=4))
+        _add_evaluation(_proposal(name="Zonder stop", stop_loss_pct=None, trailing_stop_pct=None))
+        trading = (await api.get("/trading", headers=HTML)).text
+        strategy = (await api.get("/strategy", headers=HTML)).text
+        assert 'id="voorstel"' not in trading
+        assert 'href="/trading#voorstel"' not in strategy and "Ouder en goed" not in strategy
+
+        ev_id = _add_evaluation(_proposal(name="Nieuw en goed", stop_loss_pct=3))
+        trading = (await api.get("/trading", headers=HTML)).text
+        strategy = (await api.get("/strategy", headers=HTML)).text
+        assert "Voorstel van Claude: Nieuw en goed" in trading
+        assert 'href="/trading#voorstel"' in strategy and "Nieuw en goed" in strategy
+
+        # Applied on Handelen: no longer waiting, and the strategy page offers the old one back.
+        r = await api.post("/trading/action", data={"action": f"apply:{ev_id}"}, headers=HTML)
+        assert r.status_code == 303 and r.headers["location"] == "/trading"
+        strategy = (await api.get("/strategy", headers=HTML)).text
+        assert 'href="/trading#voorstel"' not in strategy
+        assert "Vorige strategie terugzetten" in strategy
+    finally:
+        _clean()

@@ -16,7 +16,7 @@ from app.db import Decision, Evaluation, Position, SessionLocal, Setting, init_d
 from app.flash import flashes_from_response
 from app.main import APPLIED_PROPOSALS_KEY, app
 from app.strategy.model import DEFAULT_STRATEGY
-from app.strategy.store import STRATEGY_KEY, load_strategy
+from app.strategy.store import PREVIOUS_KEY, STRATEGY_KEY, load_strategy
 from app.trading import display, risk
 from app.trading.engine import EvaluationBusy
 
@@ -50,7 +50,9 @@ def _clean():
     with SessionLocal() as s:
         for table in (Decision, Evaluation, Position):
             s.execute(delete(table))
-        s.execute(delete(Setting).where(Setting.key.in_((STRATEGY_KEY, APPLIED_PROPOSALS_KEY))))
+        # Applying a proposal also keeps the replaced strategy (strategy:previous).
+        keys = (STRATEGY_KEY, APPLIED_PROPOSALS_KEY, PREVIOUS_KEY)
+        s.execute(delete(Setting).where(Setting.key.in_(keys)))
         s.commit()
         risk.set_paused(s, False)
 

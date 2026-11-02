@@ -1077,16 +1077,15 @@ async def run_backtest(
 
 
 def _waiting_proposal(session: Session, settings: Settings, current: Strategy) -> dict | None:
-    """The newest proposal from an evaluation that waits on Handelen and could be applied as
-    it is (UX-15), so the strategy page can point to it."""
+    """The proposal that waits at the top of Handelen (``#voorstel``), so the strategy page can
+    point to it (UX-15). Same rule as Handelen: the newest unapplied proposal of the last
+    evaluations, and only when it can be applied as it is; an older one is not offered."""
     for ev in session.scalars(select(Evaluation).order_by(Evaluation.id.desc()).limit(5)):
         if not ev.proposed_strategy or ev.applied:
             continue
         proposal = _proposal(ev)
-        if proposal is None or proposal.market not in settings.markets:
-            continue
-        if use_problems(proposal) or _proposal_guard_problems(current, proposal, ev):
-            continue
+        if proposal is None or _proposal_problems(ev, current, settings):
+            return None
         return {"name": proposal.name, "created_at": ev.created_at, "id": ev.id}
     return None
 
