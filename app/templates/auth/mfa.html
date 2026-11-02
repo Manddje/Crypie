@@ -9,7 +9,7 @@
 <form method="post" action="/login/mfa" class="auth-form">
   <input type="hidden" name="next" value="{{ next }}">
   <label>Code
-    <input class="code-input" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}|[a-zA-Z0-9-]{10,11}" placeholder="123 456" required autofocus>
+    <input class="code-input" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}|[a-zA-Z0-9\-]{10,11}" placeholder="123 456" required autofocus>
   </label>
   <button class="btn btn-primary btn-block" type="submit">Inloggen</button>
 </form>
