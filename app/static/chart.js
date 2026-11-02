@@ -643,6 +643,10 @@
     portfolioStatus.appendChild(document.createTextNode(" ("));
     portfolioStatus.appendChild(el("span", pnlClass(diff), change));
     portfolioStatus.appendChild(document.createTextNode(") · " + orders + " in deze periode · tijden in " + (portfolioData.interval === "1d" ? "UTC-dagen" : zoneNow())));
+    // A market without prices is left out instead of breaking the chart: say which and why.
+    (portfolioData.skipped || []).forEach(function (s) {
+      portfolioStatus.appendChild(el("span", "block neg", "Zonder " + s.market + ": " + s.reason + "."));
+    });
   }
 
   function loadPortfolio(period) {
@@ -658,6 +662,7 @@
         portfolioData.actions = data.actions;
         portfolioData.interval = data.interval;
         portfolioData.startEur = data.start_eur;
+        portfolioData.skipped = data.skipped || [];
         if (!portfolioChart) buildPortfolioChart();
         overlay(portfolioWrap, data.points.length ? null : "Nog geen gegevens.");
         renderPortfolio();

@@ -1303,6 +1303,8 @@ footer.site .footer-alert { color: var(--red); font-weight: 500; }
 
 /* Last cycle per market. */
 .cycle { padding: 14px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); }
+.cycle-failed { border-color: var(--red); }
+.cycle-failed p + p { margin-top: 6px; }
 .cycle-head { display: flex; justify-content: space-between; align-items: baseline; gap: 4px 10px; flex-wrap: wrap; margin-bottom: 8px; }
 .cycle-market { font-size: var(--fs-lead); }
 .decision-line { line-height: 1.8; }

@@ -125,8 +125,21 @@
       <p class="small muted">Wacht op: {{ w.waiting_for }}. Zodra dat gebeurt, draait de bot meteen een cyclus{% if h.claude_available %} en beslist Claude of hij koopt{% elif settings.claude_unavailable_mode == "indicators" %} en koopt hij op het signaal van de strategie (zonder Claude){% else %}; zonder Claude koopt hij dan niet{% endif %}.</p>
     </div>
     {% endfor %}
-    {% if last_cycle %}
+    {% if last_cycle or failed_markets %}
     <div class="grid-2">
+      {#- UX-53: a market whose last cycle failed (a typo, a delisted coin, Bitvavo refusing it)
+          gets its own card with the reason, instead of disappearing from the list. -#}
+      {% for f in failed_markets %}
+      <article class="cycle cycle-failed" aria-labelledby="cycle-failed-{{ loop.index }}">
+        <div class="cycle-head">
+          <h3 class="cycle-market" id="cycle-failed-{{ loop.index }}">{{ f.market }}</h3>
+          {% if f.at %}<span class="small muted">{{ f.at|dt }}</span>{% endif %}
+        </div>
+        <p class="decision-line"><span class="pill pill-red">Mislukt</span> <span class="decision-summary"><span aria-hidden="true">· </span>de laatste cyclus kon deze markt niet verwerken</span></p>
+        <p class="small">Reden: {{ f.reason }}</p>
+        <p class="small muted">Klopt de markt niet, pas hem dan aan bij <a href="/settings#trading">Instellingen › Handelen</a>; de andere markten draaien gewoon door.</p>
+      </article>
+      {% endfor %}
       {% for v in last_cycle %}{% set d = v.d %}
       <article class="cycle" aria-labelledby="cycle-{{ d.id }}">
         <div class="cycle-head">

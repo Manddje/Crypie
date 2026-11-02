@@ -321,3 +321,41 @@ async def test_handelen_points_to_trades_of_the_other_mode(api):  # noqa: F811
         with SessionLocal() as s:
             s.execute(delete(Position).where(Position.id == pid))
             s.commit()
+
+
+async def test_a_failing_market_has_its_own_card_and_does_not_break_the_chart(api, monkeypatch):  # noqa: F811
+    """UX-53: a market Bitvavo refuses shows up as 'Mislukt' with its reason on Handelen, and
+    the portfolio chart leaves it out instead of failing for every market."""
+    from app.bitvavo.client import BitvavoError
+    from app.main import app
+
+    engine = app.state.engine
+    monkeypatch.setattr(
+        engine,
+        "last_results",
+        [
+            {
+                "market": "ETH-EUR",
+                "signal": "error",
+                "reason": "Bitvavo 400 (code 205): market does not exist",
+            }
+        ],
+    )
+    page = (await api.get("/trading", headers=HTML)).text
+    assert 'class="cycle cycle-failed"' in page
+    assert "Reden: Bitvavo weigerde het verzoek (fout 400, code 205: market does not exist)" in page
+
+    async def candles(market, interval, limit):
+        if market == "ETH-EUR":
+            raise BitvavoError(400, {"errorCode": 205, "error": "market does not exist"})
+        return [[1_700_000_000_000, 1.0, 1.0, 1.0, 1.0, 1.0]]
+
+    monkeypatch.setattr(app.state.client, "candles", candles)
+    body = (await api.get("/api/portfolio/history?period=7d")).json()
+    assert [s["market"] for s in body["skipped"]] == ["ETH-EUR"] and body["points"]
+
+    async def none(market, interval, limit):
+        raise BitvavoError(0, "time-out")
+
+    monkeypatch.setattr(app.state.client, "candles", none)
+    assert (await api.get("/api/portfolio/history?period=7d")).status_code == 502

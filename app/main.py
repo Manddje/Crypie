@@ -868,15 +868,29 @@ async def portfolio_history_api(
     """Portfolio value per candle, rebuilt from today's balance and the order history."""
     settings: Settings = request.app.state.settings
     key, interval, limit = period_spec(period)
+    results = await asyncio.gather(
+        *(client.candles(m, interval, limit) for m in settings.markets), return_exceptions=True
+    )
+    # One market Bitvavo refuses (a typo, a delisted coin) must not take the whole chart with
+    # it (UX-53): leave it out and say so. Only when every market fails is it an error.
+    failed = [
+        (m, r)
+        for m, r in zip(settings.markets, results, strict=True)
+        if isinstance(r, BaseException)
+    ]
+    for _, exc in failed:
+        if not isinstance(exc, BitvavoError):
+            raise exc
+    if settings.markets and len(failed) == len(settings.markets):
+        raise HTTPException(502, str(failed[0][1]))
     try:
-        results = await asyncio.gather(
-            *(client.candles(m, interval, limit) for m in settings.markets)
-        )
         balances = await broker.balances(session)
     except BitvavoError as exc:
         raise HTTPException(502, str(exc)) from exc
     candles_by_market = {
-        m: candle_dicts(rows) for m, rows in zip(settings.markets, results, strict=True)
+        m: candle_dicts(rows)
+        for m, rows in zip(settings.markets, results, strict=True)
+        if not isinstance(rows, BaseException)
     }
     starts = [rows[0]["time"] for rows in candles_by_market.values() if rows]
     since = datetime.fromtimestamp(min(starts), UTC) if starts else period_start(interval, limit)
@@ -888,6 +902,7 @@ async def portfolio_history_api(
         "start_eur": settings.paper_start_eur if mode == "paper" else None,
         "points": portfolio_history(session, mode, balances, candles_by_market, since),
         "actions": trade_actions(session, mode, since, interval),
+        "skipped": [{"market": m, "reason": _bitvavo_problem(exc)} for m, exc in failed],
     }
 
 
@@ -2052,6 +2067,25 @@ def _parse_moment(value: object) -> datetime | None:
 RECENTLY_APPLIED = timedelta(hours=24)
 
 
+_BITVAVO_ERROR_RE = re.compile(r"^Bitvavo (\d+) \(code ([^)]*)\): (.*)$", re.S)
+
+
+def _cycle_failure_nl(reason: str | None) -> str:
+    """Why one market's part of a cycle failed, in words (the engine keeps the exception text:
+    'Bitvavo 400 (code 205): ...')."""
+    text = str(reason or "").strip()
+    m = _BITVAVO_ERROR_RE.match(text)
+    if not m:
+        return text or "onbekend"
+    status, code, message = int(m[1]), m[2], m[3].strip()
+    if status == 0:
+        return "Bitvavo reageert niet (geen verbinding of een time-out)"
+    if status >= 500:
+        return f"Bitvavo had een storing (fout {status})"
+    detail = f"fout {status}" + (f", code {code}" if code and code != "None" else "")
+    return f"Bitvavo weigerde het verzoek ({detail}: {message})"
+
+
 def _trading_context(
     request: Request,
     engine: TradingEngine,
@@ -2130,6 +2164,16 @@ def _trading_context(
             labels=labels,
         ),
         "last_cycle": [display.decision_view(d, labels) for d in last_cycle],
+        # Markets whose part of the last cycle failed (engine.run_cycle keeps the others going).
+        "failed_markets": [
+            {
+                "market": r.get("market"),
+                "reason": _cycle_failure_nl(r.get("reason")),
+                "at": engine.last_run,
+            }
+            for r in engine.last_results or []
+            if r.get("signal") == "error" and r.get("market") in engine.markets
+        ],
         "levels": {d.id: levels_summary(strategy, d.indicator_values()) for d in last_cycle},
         "evaluations": evaluation_rows,
         "featured": featured,
