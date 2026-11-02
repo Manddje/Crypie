@@ -71,9 +71,8 @@
 
   <footer class="site">
     {% if base_cfg %}
-    {#- A long list of markets would fill the footer (20 are allowed): name a few and count the rest. -#}
-    {%- set base_markets = base_cfg.markets or [] %}
-    <span>Markten: {% if base_markets|length > 4 %}{{ base_markets[:3]|join(", ") }} en {{ base_markets|length - 3 }} andere{% elif base_markets %}{{ base_markets|join(", ") }}{% else %}geen{% endif %} · <a href="/settings#trading">aanpassen</a></span>
+    {#- A long list of markets would fill the footer (20 are allowed): a few, and the count. -#}
+    <span>Markten: {{ base_cfg.markets|market_list }} · <a href="/settings#trading">aanpassen</a></span>
     {%- set base_key = bitvavo_key_state(request) if bitvavo_key_state is defined else none %}
     {% if base_key and base_key.state in ("rejected", "no_trading") %}
     <span class="footer-alert">Bitvavo-sleutel {{ base_key.label }}: {{ base_key.reason }} · <a href="/settings#omgeving">bekijken</a></span>

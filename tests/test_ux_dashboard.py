@@ -132,7 +132,9 @@ def test_amounts_accept_a_decimal_comma(text, value):
     [
         ("1.000", "onduidelijk"),
         ("2,500", "onduidelijk"),
-        ("1.000,50", "geen geldig getal"),
+        ("1.000,50", "onduidelijk"),
+        ("25,", "geen geldig getal"),
+        (",5", "geen geldig getal"),
         ("0,125", "twee cijfers"),
         ("abc", "geen geldig getal"),
         ("inf", "geen geldig getal"),

@@ -79,6 +79,7 @@ from app.news.service import (
 )
 from app.news.sources import NewsFetcher
 from app.notify import Notifier, notify_configured, send_test
+from app.numbers import AmbiguousNumber, ambiguous_nl, split_decimal, strip_spaces
 from app.security import NO_STORE_PREFIXES, BodySizeLimit, CrossOriginProtection, SecurityHeaders
 from app.settings_store import SettingsError
 from app.strategy.describe import levels_summary, strategy_diff
@@ -155,7 +156,7 @@ from app.trading.journal import (
 from app.trading.plan import PLAN_FIELDS, PLAN_MAX_LENGTH, TradingPlan, load_plan, save_plan
 from app.trading.risk import RiskLimits
 from app.trading.trend import load_trends, refresh_trends
-from app.web import STATIC_DIR, templates
+from app.web import STATIC_DIR, refusal_nl, templates
 from app.web import amount as fmt_amount
 from app.web import eur as fmt_eur
 from app.web import nl as fmt_nl
@@ -848,7 +849,10 @@ async def chart_market(
         "period": key,
         "interval": interval,
         "candles": candles_,
-        "actions": market_actions(session, mode, market, since, interval),
+        "actions": [
+            {**a, "detail": refusal_nl(a["detail"])} if a["kind"] == "blocked" else a
+            for a in market_actions(session, mode, market, since, interval)
+        ],
     }
 
 
@@ -2080,6 +2084,15 @@ def _trading_context(
             None,
         )
     status = _trading_status(engine, session, settings)
+    # The dip watch journals its conditions with indicator ids ('rsi14 stijgt'): readable names.
+    status["watch"] = [
+        {
+            **w,
+            "dip": display.readable_conditions(w.get("dip"), labels),
+            "waiting_for": display.readable_conditions(w.get("waiting_for"), labels),
+        }
+        for w in status.get("watch") or []
+    ]
     figures = risk_now(engine, session, settings)
     prices = engine.last_prices or {}
     claude_ok = engine.evaluator.available
@@ -3435,7 +3448,6 @@ _price_failures: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 # The order form: the amount filled in for a new buy, and the longest amount text accepted.
 ORDER_DEFAULT_EUR = 25.0
 AMOUNT_MAX_LENGTH = 32
-_AMOUNT_RE = re.compile(r"(\d+)(?:[.,](\d+))?")
 _AMOUNT_CHARS = re.compile(r"[0-9 .,€ ]*")
 # "Hele positie verkopen": more than any position is worth. manual_order caps a sell at the
 # position, so this sells all of it.
@@ -3456,26 +3468,26 @@ GETTING_STARTED_KEY = "dashboard_getting_started_hidden"
 def parse_amount_eur(text: object) -> float:
     """An amount in euro as typed in the order form: '25', '25,50' or '25.50' -> 25.5.
 
-    A decimal comma is fine (a Dutch keyboard), but an amount whose separator could also
-    separate thousands ('1.000', '2,500') is refused rather than guessed, and so is anything
-    that is not a plain number ('1e3', 'inf', '-5'). Raises ValueError with a Dutch message.
+    The same rule as the settings fields (app/numbers.py): a decimal comma is fine (a Dutch
+    keyboard), but an amount whose separator could also separate thousands ('1.000', '2,500',
+    '1.000,50') is refused rather than guessed, and so is anything that is not a plain positive
+    number ('1e3', 'inf', '-5', '25,'). Raises ValueError with a Dutch message.
     """
-    cleaned = str(text or "").replace("€", "").replace(" ", "").replace(" ", "").strip()
+    cleaned = strip_spaces(str(text or "").replace("€", ""))
     if not cleaned:
         raise ValueError("vul een bedrag in")
     if len(cleaned) > AMOUNT_MAX_LENGTH:
         raise ValueError("het bedrag is te lang")
-    match = _AMOUNT_RE.fullmatch(cleaned)
-    if match is None:
-        raise ValueError("het bedrag is geen geldig getal; schrijf het als 25 of 25,50")
-    whole, frac = match.group(1), match.group(2) or ""
+    invalid = "het bedrag is geen geldig getal; schrijf het als 25 of 25,50"
+    try:
+        sign, whole, separator, frac = split_decimal(cleaned)
+    except AmbiguousNumber:
+        raise ValueError(ambiguous_nl(cleaned, "1000 of 25,50")) from None
+    except ValueError:
+        raise ValueError(invalid) from None
+    if sign or not whole or (separator and not frac):
+        raise ValueError(invalid)
     if len(frac) > 2:
-        if len(frac) == 3 and whole.lstrip("0"):
-            raise ValueError(
-                f"'{cleaned}' is onduidelijk, want een punt of komma kan ook duizendtallen "
-                "scheiden. Schrijf het bedrag zonder scheidingsteken voor duizendtallen, "
-                "bijvoorbeeld 1000 of 25,50"
-            )
         raise ValueError("gebruik hoogstens twee cijfers achter de komma")
     return float(f"{whole}.{frac or '0'}")
 
@@ -3520,26 +3532,8 @@ def _order_form(
 
 
 def _order_problem_nl(text: str) -> str:
-    """A refusal from the engine or the limits as the order card shows it: amounts in Dutch
-    notation and the app's own words. The engine keeps its wording for the API and the log."""
-    text = text.replace(" (maximum per order)", "")
-    text = text.replace(
-        "handelen is gepauzeerd (kill switch); kopen kan niet",
-        "de noodstop staat aan: kopen is gepauzeerd (verkopen kan wel)",
-    )
-    text = text.replace(
-        "handelen is gepauzeerd (kill switch)", "de noodstop staat aan: kopen is gepauzeerd"
-    )
-    text = re.sub(r"\b(\d+) trades per dag", r"\1 orders per dag", text)
-    text = re.sub(
-        r"minimum van (\d+(?:\.\d+)?) EUR", lambda m: f"minimum van {fmt_eur(float(m[1]))}", text
-    )
-    text = re.sub(r"€ ?(\d+(?:\.\d+)?)", lambda m: fmt_eur(float(m[1])), text)
-    return re.sub(
-        r"(\d+)\.(\d+)%",
-        lambda m: m[1] + ("" if not m[2].strip("0") else "," + m[2].rstrip("0")) + "%",
-        text,
-    )
+    """A refusal as the order card shows it (see app.web.refusal_nl)."""
+    return refusal_nl(text)
 
 
 def _bitvavo_problem(exc: BaseException) -> str:
@@ -3728,7 +3722,7 @@ def _getting_started(
         {
             "title": "Markten en limieten kiezen",
             "text": "Welke munten de bot volgt, en hoeveel hij per order en per dag mag inzetten.",
-            "href": "/settings#limits",
+            "href": "/settings#trading",
             "link": "Naar Instellingen",
             "done": tuned,
         },
@@ -3767,21 +3761,47 @@ def _getting_started(
     return {"steps": steps, "done": sum(1 for s in steps if s["done"])}
 
 
-def _live_reminders(env: Settings, settings: Settings) -> list[str]:
+class LiveAdvice(str):
+    """One piece of advice for live mode. The string itself is the whole sentence with the
+    server variable (for the log and the API); the overview shows ``text`` with a link and the
+    variable as secondary text (UX-51)."""
+
+    text: str
+    env: str
+    href: str
+    link: str
+
+    def __new__(cls, text: str, env: str, href: str, link: str) -> LiveAdvice:
+        advice = super().__new__(cls, f"{text} ({env})")
+        advice.text, advice.env, advice.href, advice.link = text, env, href, link
+        return advice
+
+
+def _live_reminders(env: Settings, settings: Settings) -> list[LiveAdvice]:
     """Advice for live mode that is not enforced (enforcing it would stop live trading on the
     next deploy): own capital for the bot, and a restricted Bitvavo key."""
     out = []
     if settings.live_capital_eur <= 0:
         out.append(
-            "LIVE_CAPITAL_EUR staat op 0: de limieten rekenen met je hele Bitvavo-account, ook "
-            "met coins die je buiten de bot houdt. Stel het bedrag in dat de bot mag beheren, "
-            "of gebruik een apart subaccount."
+            LiveAdvice(
+                "Er is geen kapitaal voor de bot ingesteld, dus de limieten rekenen met je hele "
+                "Bitvavo-account, ook met coins die je buiten de bot houdt. Stel in hoeveel de "
+                "bot mag beheren, of gebruik een apart subaccount.",
+                "LIVE_CAPITAL_EUR",
+                "/settings#f-live_capital_eur",
+                "Kapitaal instellen",
+            )
         )
     if not env.bitvavo_key_restricted:
         out.append(
-            "Controleer de Bitvavo-sleutel: alleen de rechten 'bekijken' en 'handelen' (nooit "
-            "'opnemen') en een IP-whitelist op het serveradres. Zet daarna "
-            "BITVAVO_KEY_RESTRICTED=true in de serveromgeving; dan verdwijnt deze melding."
+            LiveAdvice(
+                "Geef de Bitvavo-sleutel alleen de rechten 'bekijken' en 'handelen' (nooit "
+                "'opnemen') en een IP-whitelist op het adres van je server. Bevestig dat daarna "
+                "in de serveromgeving; dan verdwijnt dit advies.",
+                "BITVAVO_KEY_RESTRICTED=true",
+                "/settings#omgeving",
+                "Sleutel bekijken",
+            )
         )
     return out
 
@@ -3848,6 +3868,8 @@ async def _dashboard_context(
         "rate_limit": client.rate_limit_remaining,
         "budget": budget.status(session),
         "strategy": strategy,
+        # A proposal of Claude that waits on Handelen (same rule as the strategy page).
+        "waiting_proposal": _waiting_proposal(session, settings, strategy),
         "strategy_warning": strategy_warning,
         "sentiments": [market_sentiment(session, c, 48) for c in settings.coins],
         "open_positions": positions,

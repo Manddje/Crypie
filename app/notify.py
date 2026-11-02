@@ -237,6 +237,15 @@ class Notifier:
 _last_test = 0.0
 
 
+def _failure_nl(exc: BaseException) -> str:
+    """Why a message did not arrive, in plain words; the technical detail follows separately."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"de dienst weigerde het bericht (fout {exc.response.status_code})"
+    if isinstance(exc, TimeoutError | httpx.TimeoutException):
+        return "de dienst antwoordde niet op tijd"
+    return "het adres is niet te bereiken"
+
+
 async def send_test(settings: Any) -> tuple[bool, str]:
     """Send a test message now (for a "Testmelding sturen" button). Returns (ok, Dutch text)."""
     global _last_test
@@ -259,5 +268,8 @@ async def send_test(settings: Any) -> tuple[bool, str]:
         await asyncio.wait_for(_post(settings, message), SEND_TIMEOUT_S + 5)
     except Exception as exc:  # noqa: BLE001
         log.warning("test notification failed: %s", describe_error(exc))
-        return False, f"De testmelding is niet aangekomen: {describe_error(exc)}."
+        return False, (
+            f"De testmelding is niet aangekomen: {_failure_nl(exc)}. Controleer NOTIFY_URL in "
+            f"de serveromgeving. (Technisch: {describe_error(exc)})"
+        )
     return True, "Testmelding verstuurd. Controleer je telefoon of de webhook."

@@ -15,9 +15,21 @@
 <div class="stack dash">
   {{ ui.unprotected_notice(unprotected_positions) }}
   {{ ui.session_secret_notice(session_secret_weak) }}
-  {% for reminder in live_reminders %}{{ ui.notice("warn", reminder, live=false) }}{% endfor %}
+  {% if live_reminders %}
+  {#- Advice for live, bundled in one box: what to do, where, and the server variable last. -#}
+  {% call ui.notice("warn", "", live=false, title="Advies voor live:") %}
+    <ul>
+      {% for a in live_reminders %}<li>{{ a.text }} <a href="{{ a.href }}">{{ a.link }}</a> <span class="mono">{{ a.env }}</span></li>{% endfor %}
+    </ul>
+  {% endcall %}
+  {% endif %}
   {% if config_warning %}{{ ui.notice("warn", config_warning, live=false) }}{% endif %}
   {% if strategy_warning %}{{ ui.notice("warn", strategy_warning, live=false) }}{% endif %}
+  {% if waiting_proposal %}
+  {% call ui.notice("info", "Claude heeft een strategievoorstel gedaan: '" ~ waiting_proposal.name ~ "'. Het wacht op je beoordeling; er verandert niets tot je het toepast.", live=false) %}
+  <a href="/trading#voorstel">Voorstel bekijken op Handelen</a>
+  {% endcall %}
+  {% endif %}
   {% if price_problem %}
   {% call ui.notice("warn", "", live=false, title="Koersen niet bijgewerkt:") %}
     {{ price_problem }}.
@@ -135,7 +147,7 @@
     {% if paper_positions %}
     {% set n = paper_positions|length %}
     {% call ui.notice("info", "", live=false) %}
-      Nog {{ n }} open {{ "oefenpositie" if n == 1 else "oefenposities" }} met fictief geld: {{ paper_positions|map(attribute="market")|join(", ") }}. Stop-loss en take-profit bewaken {{ "die" if n == 1 else "ze" }} nog, maar {{ "die staat" if n == 1 else "ze staan" }} niet op Bitvavo en {{ "telt" if n == 1 else "tellen" }} niet mee in je live portefeuille. Verkopen of de oefenportefeuille resetten kan alleen in Oefenmodus (<a href="/settings#trading">Instellingen › Handelen</a>).
+      Nog {{ n }} open {{ "oefenpositie" if n == 1 else "oefenposities" }} met fictief geld: {{ paper_positions|map(attribute="market")|join(", ") }}. Stop-loss en take-profit bewaken {{ "die" if n == 1 else "ze" }} nog, maar {{ "die staat" if n == 1 else "ze staan" }} niet op Bitvavo en {{ "telt" if n == 1 else "tellen" }} niet mee in je live portefeuille. Verkopen of de oefenportefeuille resetten kan alleen in Oefenmodus (<a href="/settings#oefenportefeuille">Instellingen › Oefenportefeuille</a>).
     {% endcall %}
     {% endif %}
   </section>
@@ -239,7 +251,7 @@
     <section class="card dash-strategy" aria-labelledby="strategy-title">
       {{ ui.card_header("Strategie", 2, href="/strategy", link="Naar Strategie", id="strategy-title") }}
       <p class="fw-bold">{{ strategy.name }}</p>
-      <p class="small muted">Candles van {{ strategy.interval|nl }} · voor elke gevolgde markt</p>
+      <p class="small muted">Geldt voor {{ settings.markets|market_list }} · candles van {{ strategy.interval|nl }}</p>
       {% if strategy.description %}<p class="small dash-oneline mt-2">{{ strategy.description }}</p>{% endif %}
       <div class="chips mt-3">
         {% for ind in strategy.indicators %}<span class="chip">{{ ind|indicator_nl }}</span>{% endfor %}

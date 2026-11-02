@@ -1016,7 +1016,8 @@ class TradingEngine:
                 "geen beoordeeld nieuws"
                 if sentiment.items == 0
                 else f"nieuws {sentiment.label()} ({sentiment.score:+.2f}, "
-                f"{sentiment.items} nieuwsfeiten uit {sentiment.articles} berichten, "
+                f"{sentiment.items} nieuwsfeit{'' if sentiment.items == 1 else 'en'} uit "
+                f"{sentiment.articles} bericht{'' if sentiment.articles == 1 else 'en'}, "
                 f"{sentiment.high_impact} van hoge impact)"
             )
             if (news_entry_hint or news_exit_hint) and not confirmed:

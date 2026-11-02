@@ -129,7 +129,8 @@ def test_market_actions_keeps_orders_claude_and_blocked_only():
     assert actions[1]["label"] == "Claude adviseert afwachten" and actions[1]["executed"] is False
     assert actions[2]["label"] == "Kopen geblokkeerd"
     assert actions[2]["detail"] == "daglimiet bereikt"
-    assert actions[3]["label"] == "Stop-loss" and actions[3]["short"] == "Stop-loss"
+    assert actions[3]["label"] == "Verkocht: stop-loss geraakt"
+    assert actions[3]["short"] == "Stop-loss"
     assert actions[3]["bar_time"] == int((T0 + timedelta(hours=3)).timestamp())
 
 

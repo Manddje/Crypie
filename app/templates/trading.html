@@ -122,7 +122,7 @@
     <div class="dip-watch">
       <p><span class="pill pill-orange"><span class="dot" aria-hidden="true"></span>Dipbewaking {{ w.market }}</span> <span class="small muted">sinds {{ w.since|dt }} · laatste controle {{ w.last_check|ago }}</span></p>
       <p class="small">{{ w.dip }}</p>
-      <p class="small muted">Wacht op: {{ w.waiting_for }}. Zodra dat gebeurt, gaat het naar Claude.</p>
+      <p class="small muted">Wacht op: {{ w.waiting_for }}. Zodra dat gebeurt, draait de bot meteen een cyclus{% if h.claude_available %} en beslist Claude of hij koopt{% elif settings.claude_unavailable_mode == "indicators" %} en koopt hij op het signaal van de strategie (zonder Claude){% else %}; zonder Claude koopt hij dan niet{% endif %}.</p>
     </div>
     {% endfor %}
     {% if last_cycle %}
@@ -140,7 +140,7 @@
         {% endfor %}
         {{ news_line(v) }}
         {% if v.explanation %}<p class="small decision-why">{{ v.explanation }}</p>{% endif %}
-        {% if d.blocked_by %}<p class="small neg">Niet uitgevoerd: {{ d.blocked_by }}</p>{% endif %}
+        {% if d.blocked_by %}<p class="small neg">Niet uitgevoerd: {{ d.blocked_by|refusal }}</p>{% endif %}
       </article>
       {% endfor %}
     </div>
@@ -223,8 +223,8 @@
           <dl class="kv">
             <dt>Per order</dt><dd>max. {{ status.limits.max_trade_eur|eur(0) }}</dd>
             <dt>In crypto</dt><dd>max. {{ status.limits.max_exposure_pct|num(0) }}% van de portefeuille</dd>
-            <dt>Dagverlies</dt><dd>kopen stopt bij {{ status.limits.daily_loss_limit_pct|num(0) }}% verlies</dd>
-            <dt>Orders per dag</dt><dd>max. {{ status.limits.max_trades_per_day }}</dd>
+            <dt>Dagverlieslimiet</dt><dd>{{ daily_loss_rule_nl(status.limits.daily_loss_limit_pct)|capfirst }}.</dd>
+            <dt>Orders per dag</dt><dd>{{ max_orders_rule_nl(status.limits.max_trades_per_day)|capfirst }}.</dd>
             <dt>Na een stop-loss</dt><dd>{{ status.limits.cooldown_min_after_stop }} min niet kopen in die markt</dd>
           </dl>
         </section>
@@ -395,7 +395,7 @@
         <tr class="cycle-detail">
           <td colspan="7">
             {% if v.explanation %}<p class="decision-why">{{ v.explanation }}</p>{% endif %}
-            {% if d.blocked_by %}<p class="neg">Niet uitgevoerd: {{ d.blocked_by }}</p>{% endif %}
+            {% if d.blocked_by %}<p class="neg">Niet uitgevoerd: {{ d.blocked_by|refusal }}</p>{% endif %}
             <details class="cycle-checks">
               <summary>{{ "Voorwaarden en nieuws" if v.has_checks else "Nieuws" }}</summary>
               {% if v.has_checks %}{{ ui.checks(v.checklist) }}{% endif %}

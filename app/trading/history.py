@@ -15,6 +15,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.db import Decision, Order
+from app.labels import CLOSE_REASONS_NL
 
 # Period shown on the chart -> (candle interval, number of candles). Each period covers
 # exactly the number of candles given, so Bitvavo is asked for just enough.
@@ -48,14 +49,12 @@ INTERVAL_SECONDS: dict[str, int] = {
     "1d": 86400,
 }
 
-# Why a position was closed -> short label on the marker and in the list below the chart.
+# Why a position was closed -> the label in the chart's tooltip and the list below it, in the
+# same words as the journal (app.labels.CLOSE_REASONS_NL): 'Verkocht: stop-loss geraakt'.
 SELL_REASONS_NL: dict[str, str] = {
-    "stop_loss": "Stop-loss",
-    "trailing_stop": "Trailing stop",
-    "take_profit": "Take-profit",
-    "signal": "Verkoopsignaal",
-    "news_exit": "Verkocht op nieuws",
-    "manual": "Handmatig verkocht",
+    reason: (phrase[:1].upper() + phrase[1:] if "verkocht" in phrase else f"Verkocht: {phrase}")
+    for reason, phrase in CLOSE_REASONS_NL.items()
+    if reason != "reset"
 }
 BUY_SOURCES_NL: dict[str, str] = {
     "claude": "Gekocht op advies van Claude",

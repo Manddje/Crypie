@@ -64,6 +64,13 @@ def indicator_labels(strategy: Strategy) -> dict[str, str]:
     return {ind.id: indicator_nl(ind) for ind in strategy.indicators}
 
 
+def readable_conditions(text: str | None, labels: dict[str, str]) -> str:
+    """Several conditions joined with '; ' (the dip watch), each made readable."""
+    if not text:
+        return ""
+    return "; ".join(readable_condition(part, labels) for part in str(text).split("; "))
+
+
 def readable_condition(text: str, labels: dict[str, str]) -> str:
     """'rsi14 lager dan 35' -> 'RSI 14 lager dan 35': the indicator ids on either side of the
     operator get their readable name; everything else stays as it was journaled."""
@@ -204,7 +211,8 @@ def _explain(d: Decision, checks: dict[str, list[dict]]) -> tuple[str | None, st
     news = None
     m = _NEWS.match(text)
     if m:
-        news = m.group(1)
+        # Older decisions said '1 nieuwsfeiten uit 1 berichten'.
+        news = re.sub(r"\b1 (nieuwsfeit|bericht)en\b", r"1 \1", m.group(1) or "") or None
         text = text[m.end() :].lstrip()
     return (text or None), news
 

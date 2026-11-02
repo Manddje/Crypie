@@ -4,7 +4,7 @@
 
 {# The rules of a strategy first, then its free description as a small note (UX-12). #}
 {% macro strategy_summary(s, level=3) -%}
-<p class="strategy-scope">Geldt voor <strong>{{ settings.markets|join(", ") }}</strong> · candles van {{ s.interval|nl }}{% if s.position_size_pct < 100 %} · {{ s.position_size_pct|num(0) }}% van het beschikbare bedrag per positie{% endif %}</p>
+<p class="strategy-scope">Geldt voor <strong>{{ settings.markets|market_list }}</strong> · candles van {{ s.interval|nl }}{% if s.position_size_pct < 100 %} · {{ s.position_size_pct|num(0) }}% van het beschikbare bedrag per positie{% endif %}</p>
 <div class="strategy-rules">
   <div>
     <h{{ level + 1 }} class="eyebrow">Kopen als</h{{ level + 1 }}>

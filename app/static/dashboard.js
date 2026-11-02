@@ -28,11 +28,14 @@
     return new Intl.NumberFormat("nl-NL").format(parseInt(parts[0], 10)) + (parts[1] ? "," + parts[1] : "");
   }
 
-  // Same rules as parse_amount_eur() in app/main.py.
+  // Same rules as parse_amount_eur() in app/main.py (and app/numbers.py).
   function parseAmount(text) {
     var cleaned = String(text || "").replace(/[€ \s]/g, "");
     if (!cleaned) return { empty: true };
     if (cleaned.length > 32) return { error: "Het bedrag is te lang." };
+    if ((cleaned.match(/[.,]/g) || []).length > 1) {
+      return { error: "'" + cleaned + "' is onduidelijk: een punt of komma kan ook duizendtallen scheiden. Schrijf 1000 of 25,50." };
+    }
     var m = /^(\d+)(?:[.,](\d+))?$/.exec(cleaned);
     if (!m) return { error: "Geen geldig bedrag. Schrijf het als 25 of 25,50." };
     var frac = m[2] || "";

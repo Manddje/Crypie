@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi.templating import Jinja2Templates
 
 from app.labels import CLOSE_REASONS_NL as _CLOSE_REASONS_NL
+from app.labels import daily_loss_rule_nl, max_orders_rule_nl
 from app.strategy.describe import (  # noqa: F401
     OPERATORS_NL,
     SERIES_NL,
@@ -514,6 +515,52 @@ def sentiment_class(score: float | None, threshold: float = 0.1) -> str:
     return "pos" if score > threshold else "neg" if score < -threshold else ""
 
 
+def market_list(markets: object, show: int = 3) -> str:
+    """'BTC-EUR, ETH-EUR', or with many markets 'BTC-EUR, ETH-EUR, SOL-EUR en 17 andere'
+    (20 are allowed; a full list would fill the line)."""
+    items = [str(m) for m in (markets or [])]
+    if not items:
+        return "geen markten"
+    if len(items) > show + 1:
+        return f"{', '.join(items[:show])} en {len(items) - show} andere"
+    return ", ".join(items)
+
+
+def capfirst(text: object) -> str:
+    """First letter upper case, the rest untouched (Jinja's capitalize would write 'utc')."""
+    out = str(text or "")
+    return out[:1].upper() + out[1:]
+
+
+def refusal_nl(text: object) -> str:
+    """A refusal from the engine or the hard limits as the pages show it: the app's own words
+    ('noodstop', 'orders per dag') and Dutch notation ('€ 100,00', '50%'). The engine keeps its
+    wording for the API, the log and the stored decisions (tests pin it); every page passes it
+    through here, so the order card, Handelen and the chart say the same thing."""
+    out = str(text or "")
+    out = out.replace(" (maximum per order)", "")
+    out = out.replace(
+        "handelen is gepauzeerd (kill switch); kopen kan niet",
+        "de noodstop staat aan: kopen is gepauzeerd (verkopen kan wel)",
+    )
+    out = out.replace(
+        "handelen is gepauzeerd (kill switch)", "de noodstop staat aan: kopen is gepauzeerd"
+    )
+    out = re.sub(r"\b(\d+) trades per dag", r"\1 orders per dag", out)
+    out = out.replace(
+        "(gerealiseerd plus ongerealiseerd)", "(gerealiseerd plus het verlies op open posities)"
+    )
+    out = re.sub(
+        r"minimum van (\d+(?:\.\d+)?) EUR", lambda m: f"minimum van {eur(float(m[1]))}", out
+    )
+    out = re.sub(r"€ ?(\d+(?:\.\d+)?)", lambda m: eur(float(m[1])), out)
+    return re.sub(
+        r"(\d+)\.(\d+)%",
+        lambda m: m[1] + ("" if not m[2].strip("0") else "," + m[2].rstrip("0")) + "%",
+        out,
+    )
+
+
 def sentiment_pill(label: str) -> str:
     """Pill colour for a sentiment label. Neutral and mixed labels get the grey pill: blue
     is reserved for links and information."""
@@ -574,6 +621,9 @@ templates.env.globals.update(
         "live_banner": LIVE_BANNER,
         "kill_switch_text": KILL_SWITCH_NL,
         "close_reasons_nl": CLOSE_REASONS_NL,
+        # The hard limits in one wording on every page (UX-105).
+        "daily_loss_rule_nl": daily_loss_rule_nl,
+        "max_orders_rule_nl": max_orders_rule_nl,
     }
 )
 templates.env.filters.update(
@@ -597,6 +647,9 @@ templates.env.filters.update(
         "md": md,
         "linkify": linkify,
         "close_reason": close_reason,
+        "refusal": refusal_nl,
+        "capfirst": capfirst,
+        "market_list": market_list,
         "order_reason": order_reason,
         "indicator_nl": indicator_nl,
         "condition_nl": condition_nl,

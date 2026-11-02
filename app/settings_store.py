@@ -26,6 +26,7 @@ from app.ai.budget import PRICES
 from app.config import Settings, get_settings
 from app.db import Setting
 from app.news.sources import validate_feed_url
+from app.numbers import AmbiguousNumber, ambiguous_nl, split_decimal, strip_spaces
 from app.trading.events import validate_calendar_lines
 from app.web import num
 
@@ -376,9 +377,9 @@ SPECS: tuple[Spec, ...] = (
         "daily_loss_limit_pct",
         "limits",
         "Dagverlieslimiet",
-        "Geen nieuwe aankopen meer vandaag bij dit verlies, inclusief het verlies op open "
-        "posities (gerealiseerd plus ongerealiseerd). Er wordt niets verkocht of gepauzeerd; om "
-        "00:00 UTC begint een nieuwe dag.",
+        "Geen nieuwe aankopen meer vandaag bij dit verlies: het gerealiseerde resultaat van "
+        "vandaag plus het verlies op open posities (winst op open posities telt niet mee). Er "
+        "wordt niets verkocht of gepauzeerd; om 00:00 UTC begint een nieuwe dag.",
         kind="float",
         min=0.1,
         max=100,
@@ -796,47 +797,31 @@ def _parse_bool(raw: Any) -> bool:
 
 
 # A typed number: optional sign, digits, and at most one decimal separator (comma or point).
-_NUMBER_RE = re.compile(r"([+-]?)(\d*)(?:([.,])(\d*))?")
-_SPACES = (" ", " ", " ")
 
 
 def parse_decimal(raw: Any) -> float:
     """A number as typed in a settings field: '2,5', '2.5', '1000' or '-3' (a JSON number
     passes as is). The decimal comma of a Dutch keyboard is fine, but a value whose separator
     could also group thousands ('1.000', '2,500', '1.000,50') is refused rather than guessed,
-    and so is anything that is not a plain number ('1e3', 'inf', 'nan')."""
+    and so is anything that is not a plain number ('1e3', 'inf', 'nan'). The same rule as the
+    order amount (app/numbers.py)."""
     if isinstance(raw, bool):
         raise ValueError("getal verwacht")
     if isinstance(raw, int | float):
         value = float(raw)
     else:
-        text = str(raw).strip()
-        for space in _SPACES:
-            text = text.replace(space, "")
+        text = strip_spaces(raw)
         if text == "":
             raise ValueError("vul een getal in")
-        if text.count(",") + text.count(".") > 1:
-            raise ValueError(_ambiguous(text))
-        match = _NUMBER_RE.fullmatch(text)
-        if match is None or not (match.group(2) or match.group(4)):
-            raise ValueError("geen geldig getal")
-        sign, whole, separator, frac = match.groups()
-        frac = frac or ""
-        if separator and len(frac) == 3 and whole.lstrip("0"):
-            # '1.000' is a thousand to a Dutch reader and one to an English one.
-            raise ValueError(_ambiguous(text))
+        try:
+            sign, whole, _, frac = split_decimal(text)
+        except AmbiguousNumber:
+            raise ValueError(ambiguous_nl(text, "1000 of 2,5")) from None
         value = float(f"{sign}{whole or '0'}.{frac or '0'}")
     if not math.isfinite(value):
         # NaN passes every min/max check (comparisons are False) and switches limits off.
         raise ValueError("geen geldig getal")
     return value
-
-
-def _ambiguous(text: str) -> str:
-    return (
-        f"'{text[:20]}' is onduidelijk, want een punt of komma kan ook duizendtallen scheiden. "
-        "Schrijf het getal zonder scheidingsteken voor duizendtallen, bijvoorbeeld 1000 of 2,5"
-    )
 
 
 def _parse_number(spec: Spec, raw: Any) -> float | int:
