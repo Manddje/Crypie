@@ -1016,7 +1016,7 @@ def test_live_candle_window_fits_the_longest_indicator():
     assert live_candle_limit(ema) == 402
     long = cross_strategy(
         indicators=[
-            {"type": "drawdown", "id": "fast", "period": 2000},
+            {"type": "drawdown", "id": "fast", "period": 900},
             {"type": "sma", "id": "slow", "period": 4},
         ]
     )

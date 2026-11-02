@@ -281,7 +281,9 @@ def live_candle_limit(strategy: Strategy) -> int:
     lookback = max(
         (int(c.right) for c in strategy.buy + strategy.sell if c.op in LOOKBACK_OPS), default=0
     )
-    return min(LIVE_CANDLES_MAX, max(LIVE_CANDLES_MIN, 2 * longest + lookback + 2))
+    # The strategy's own estimate (warm-up plus history) is a floor as well.
+    needed = max(LIVE_CANDLES_MIN, 2 * longest + lookback + 2, strategy.candles_needed())
+    return min(LIVE_CANDLES_MAX, needed)
 
 
 @dataclass
