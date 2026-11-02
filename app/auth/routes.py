@@ -46,6 +46,8 @@ STAGE_ONE_PATHS = {"/login/mfa", "/login/mfa/setup"}
 
 SETUP_SECRET_COOKIE = "crypie_mfa_setup"
 REAUTH_COOKIE = "crypie_reauth"
+# Set in the browser that made the account at /setup; it survives 'Later koppelen' (a logout).
+SETUP_RESUME_COOKIE = "crypie_setup_resume"
 
 # PBKDF2 runs in worker threads, at most this many at once; more concurrent attempts get a 429
 # straight away instead of queueing up (and an attacker cannot stall the trading loop).
@@ -323,8 +325,9 @@ def _setup_gate(
 def enrolment_unfinished(user: AuthUser | None, now: datetime | None = None) -> bool:
     """An account made at /setup whose first authenticator was never linked: no authenticator,
     never logged in, no one-time enrol code from the server, and made less than
-    SETUP_RESUME_SECONDS ago. Only then may the setup link plus the password start the linking
-    again (after 'Later koppelen' or the time limit). Later, or once ``reset-mfa`` or
+    SETUP_RESUME_SECONDS ago. Only then, and only in the browser that made the account (see
+    may_resume_enrolment), may the setup link plus the password start the linking again (after
+    'Later koppelen' or the time limit). Later, elsewhere, or once ``reset-mfa`` or
     ``create-account`` issued an enrol code, only that code works: it needs a shell on the
     server, where read access to the logs alone is not enough."""
     if (
@@ -348,6 +351,31 @@ def setup_resume_minutes() -> int:
     return SETUP_RESUME_SECONDS // 60
 
 
+def may_resume_enrolment(request: Request, auth: AuthService, user: AuthUser | None) -> bool:
+    """enrolment_unfinished, in the browser that made the account: whoever only has the setup
+    token (it is in the server log) and the password cannot link an authenticator of their own."""
+    return (
+        user is not None
+        and enrolment_unfinished(user)
+        and auth.setup_resume_allowed(user, _read_cookie(request, SETUP_RESUME_COOKIE))
+    )
+
+
+RESUME_CLOSED = (
+    "Opnieuw beginnen met de setup-link kan alleen in de browser waarin je het account aanmaakte, "
+    f"en tot {SETUP_RESUME_SECONDS // 60} minuten daarna. Log in met je wachtwoord en vul de code "
+    "in die de server geeft met python -m app.auth reset-mfa."
+)
+
+
+def _setup_closed(user: AuthUser | None) -> RedirectResponse:
+    """The setup link no longer opens anything for this account: off to /login, with the way out
+    when no authenticator is linked yet."""
+    if user is not None and not user.mfa_enrolled:
+        return redirect_with_flash("/login", "info", RESUME_CLOSED)
+    return RedirectResponse("/login", status_code=303)
+
+
 @router.get("/setup", response_class=HTMLResponse)
 async def setup_page(
     request: Request,
@@ -358,9 +386,10 @@ async def setup_page(
     if (gate := _setup_gate(request, auth, db, token)) is not None:
         return gate
     if auth.has_account(db):
-        if enrolment_unfinished(auth.account(db)):
+        user = auth.account(db)
+        if may_resume_enrolment(request, auth, user):
             return _page(request, "auth/setup_resume.html", username="", token=token)
-        return RedirectResponse("/login", status_code=303)
+        return _setup_closed(user)
     return _page(request, "auth/setup.html", username="", token=token)
 
 
@@ -379,9 +408,9 @@ async def setup_submit(
         return gate
     if auth.has_account(db):
         user = auth.account(db)
-        if action == "resume" and enrolment_unfinished(user):
+        if action == "resume" and may_resume_enrolment(request, auth, user):
             return await _resume_enrolment(request, auth, db, user, username, password, token)
-        return RedirectResponse("/login", status_code=303)
+        return _setup_closed(user)
     username = username.strip()
     error = None
     if not 2 <= len(username) <= 64:
@@ -407,6 +436,14 @@ async def setup_submit(
     # Having had the setup token is the proof that allows linking the first authenticator.
     _set_cookie(
         response, request, COOKIE_NAME, auth.stage_one_token(user, enrol=True), STAGE_ONE_SECONDS
+    )
+    # And this browser may start the linking again with the setup link for a while.
+    _set_cookie(
+        response,
+        request,
+        SETUP_RESUME_COOKIE,
+        auth.setup_resume_token(user),
+        SETUP_RESUME_SECONDS,
     )
     return response
 
@@ -753,6 +790,7 @@ async def mfa_setup_submit(
         username=user.username,
     )
     _clear_cookie(response, request, SETUP_SECRET_COOKIE)
+    _clear_cookie(response, request, SETUP_RESUME_COOKIE)
     _set_cookie(response, request, COOKIE_NAME, auth.full_token(user), auth.session_seconds)
     return response
 

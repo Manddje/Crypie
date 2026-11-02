@@ -17,7 +17,15 @@ from sqlalchemy.orm import Session
 
 from app.auth import totp
 from app.auth.passwords import hash_password, verify_password
-from app.auth.session import LOGIN, MFA_SETUP, REAUTH, SESSION, SessionData, SessionSigner
+from app.auth.session import (
+    LOGIN,
+    MFA_SETUP,
+    REAUTH,
+    SESSION,
+    SETUP_RESUME,
+    SessionData,
+    SessionSigner,
+)
 from app.config import Settings
 from app.db import AuthThrottle, AuthUser, Setting, utcnow
 
@@ -30,7 +38,8 @@ MFA_SETUP_SECONDS = 15 * 60  # time allowed to scan the QR code and confirm a co
 REAUTH_SECONDS = 5 * 60  # time allowed between re-entering password + code and re-linking
 ENROL_TOKEN_SECONDS = 60 * 60  # lifetime of the one-time enrol code printed by the CLI
 # How long after creating the account at /setup the setup link plus the password may restart the
-# linking of the first authenticator. Later only the enrol code from the CLI works (shell access).
+# linking of the first authenticator, and only in the browser that made the account (it holds a
+# signed cookie). Later, or elsewhere, only the enrol code from the CLI works (shell access).
 SETUP_RESUME_SECONDS = 60 * 60
 MIN_PASSWORD_LENGTH = 10
 MIN_SESSION_SECRET_LENGTH = 32
@@ -182,6 +191,7 @@ class AuthService:
                 LOGIN: STAGE_ONE_SECONDS,
                 MFA_SETUP: MFA_SETUP_SECONDS,
                 REAUTH: REAUTH_SECONDS,
+                SETUP_RESUME: SETUP_RESUME_SECONDS,
             },
         )
         self._code_key = hmac.new(secret.encode(), b"crypie recovery codes", sha256).digest()
@@ -462,6 +472,28 @@ class AuthService:
             purpose=REAUTH,
             account_id=user.account_id,
             version=user.session_version or 0,
+        )
+
+    def setup_resume_token(self, user: AuthUser) -> str:
+        """Given to the browser that made the account at /setup: with it, and only with it, the
+        setup link plus the password may restart the linking of the first authenticator."""
+        return self.signer.encode(
+            user.username,
+            mfa=False,
+            max_age=SETUP_RESUME_SECONDS,
+            purpose=SETUP_RESUME,
+            account_id=user.account_id,
+            version=user.session_version or 0,
+        )
+
+    def setup_resume_allowed(self, user: AuthUser, token: str | None) -> bool:
+        """True when ``token`` is this account's setup-resume cookie (see setup_resume_token)."""
+        data = self.signer.decode(token, purpose=SETUP_RESUME)
+        return (
+            data is not None
+            and data.account_id == user.account_id
+            and data.version == (user.session_version or 0)
+            and self.username_matches(user, data.username)
         )
 
     def setup_secret_token(self, user: AuthUser, secret: str) -> str:

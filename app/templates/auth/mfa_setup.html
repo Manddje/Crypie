@@ -6,7 +6,7 @@
 <p class="auth-sub">{{ "Vervangt de huidige koppeling en je herstelcodes" if reenrol else "Stap 2 van 3 · authenticator koppelen" }}</p>
 {% if error %}{{ ui.notice("error", error, live=true, id="setup-error") }}{% endif %}
 {% if deadline %}
-<p class="auth-deadline">{{ ui.icon("clock") }}<span>Rond dit af binnen {{ minutes_left }} {{ "minuut" if minutes_left == 1 else "minuten" }}, vóór {{ deadline|dt_text }}.{% if not reenrol %} Lukt dat niet, of kies je 'Later koppelen', dan begin je opnieuw met dezelfde setup-link (tot een uur na het aanmaken van je account) of met een code van de server: <span class="mono">python -m app.auth reset-mfa</span>.{% endif %}</span></p>
+<p class="auth-deadline">{{ ui.icon("clock") }}<span>Rond dit af binnen {{ minutes_left }} {{ "minuut" if minutes_left == 1 else "minuten" }}, vóór {{ deadline|dt_text }}.{% if not reenrol %} Lukt dat niet, of kies je 'Later koppelen', dan begin je opnieuw met dezelfde setup-link in deze browser (tot een uur na het aanmaken van je account) of met een code van de server: <span class="mono">python -m app.auth reset-mfa</span>.{% endif %}</span></p>
 {% elif reenrol %}
 <p class="auth-deadline">{{ ui.icon("clock") }}<span>Rond dit binnen 5 minuten af; daarna vraagt Account opnieuw om je wachtwoord en een code.</span></p>
 {% endif %}
@@ -33,7 +33,7 @@
 {% if reenrol %}
 <p class="auth-below"><a class="btn btn-sm" href="/account">Annuleren</a></p>
 {% else %}
-<form method="post" action="/logout" class="auth-below" data-confirm="Later koppelen? Je wordt uitgelogd. Daarna kun je de authenticator alleen nog koppelen met dezelfde setup-link (tot een uur na het aanmaken van je account) of met een code van de server: python -m app.auth reset-mfa.">
+<form method="post" action="/logout" class="auth-below" data-confirm="Later koppelen? Je wordt uitgelogd. Daarna kun je de authenticator alleen nog koppelen met dezelfde setup-link in deze browser (tot een uur na het aanmaken van je account) of met een code van de server: python -m app.auth reset-mfa.">
   <button class="btn btn-sm" type="submit">Later koppelen</button>
 </form>
 {% endif %}

@@ -269,6 +269,35 @@ async def test_setup_link_restart_closes_an_hour_after_the_account_was_made(clie
     assert COOKIE_NAME not in r.headers.get("set-cookie", "")
 
 
+async def test_setup_link_restart_only_works_in_the_browser_that_made_the_account(client):  # noqa: F811
+    """Security review round 3: the setup token from the log plus the password, in another
+    browser, must not link an authenticator, not even in the first hour."""
+    from httpx import ASGITransport, AsyncClient
+
+    token = _setup_token()
+    form = {"username": "kris", "password": PASSWORD, "password_repeat": PASSWORD}
+    r = await client.post("/setup", data=form | {"token": token})
+    assert routes.SETUP_RESUME_COOKIE in r.headers.get("set-cookie", "")
+    await client.post("/logout")  # 'Later koppelen' keeps the resume cookie
+    assert routes.enrolment_unfinished(_user()) is True
+    resume = {"username": "kris", "token": token, "action": "resume", "password": PASSWORD}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as other:
+        r = await other.get(f"/setup?token={token}")
+        assert r.status_code == 303 and r.headers["location"] == "/login"
+        assert "browser waarin je het account aanmaakte" in flashes_from_response(r)[0]["text"]
+        r = await other.post("/setup", data=resume)
+        assert r.status_code == 303 and r.headers["location"] == "/login"
+        assert COOKIE_NAME + "=" not in r.headers.get("set-cookie", "")
+        # A resume cookie of another account (or a forged one) does not open it either.
+        other.cookies.set(routes.SETUP_RESUME_COOKIE, "eyJwIjoic2V0dXBfcmVzdW1lIn0.fout")
+        r = await other.post("/setup", data=resume)
+        assert r.status_code == 303 and r.headers["location"] == "/login"
+    # The browser that made the account still can.
+    r = await client.post("/setup", data=resume)
+    assert r.status_code == 303 and r.headers["location"] == "/login/mfa/setup"
+    _clear_throttle()
+
+
 def test_startup_log_never_shows_the_setup_token_once_the_account_exists(caplog):
     from app.auth.service import AuthService
     from app.config import get_settings
