@@ -7,14 +7,25 @@ counts over the whole period), no red error after a refresh without a key, reada
 English titles marked as English. Plan and strategy: see the sections below.
 """
 
+import json
 import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+import respx
+from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import delete
 
-from app.db import Decision, NewsItem, Order, Position, SessionLocal, Setting, init_db
+from app.db import (
+    Decision,
+    Evaluation,
+    NewsItem,
+    Order,
+    Position,
+    SessionLocal,
+    Setting,
+    init_db,
+)
 from app.flash import flashes_from_response
 from app.main import app
 from app.trading import risk
@@ -25,7 +36,7 @@ HTML = {"accept": "text/html,application/xhtml+xml"}
 
 def _clean():
     with SessionLocal() as s:
-        for table in (Decision, Order, Position, NewsItem):
+        for table in (Decision, Order, Position, NewsItem, Evaluation):
             s.execute(delete(table))
         s.execute(
             delete(Setting).where(
@@ -468,3 +479,326 @@ async def test_plan_error_is_next_to_its_field(api):
     assert 'id="plan-goal" name="goal"' in r.text and 'aria-invalid="true"' in r.text
     assert 'id="plan-goal-error">Doel en horizon is te lang: 2001 tekens, maximaal 2000' in r.text
     assert "String should have" not in r.text
+
+
+# -- Strategy -----------------------------------------------------------------------------
+
+BASE = "https://api.bitvavo.com/v2"
+
+
+def _zigzag(n: int = 300, start: float = 30000.0) -> list[list]:
+    """Candles that go up 10 hours and down 10 hours: an RSI strategy trades on them."""
+    out, price = [], start
+    for i in range(n):
+        price *= 1.004 if (i // 10) % 2 == 0 else 0.9965
+        out.append(
+            [
+                1_700_000_000_000 + i * 3_600_000,
+                str(price),
+                str(price * 1.005),
+                str(price * 0.995),
+                str(price),
+                "5",
+            ]
+        )
+    return out
+
+
+def _rsi_strategy(**changes) -> dict:
+    data = {
+        "name": "RSI zigzag",
+        "description": "Koop bij een lage RSI.",
+        "market": "BTC-EUR",
+        "interval": "1h",
+        "indicators": [{"id": "rsi14", "type": "rsi", "period": 14}],
+        "buy": [{"left": "rsi14", "op": "<", "right": 45}],
+        "sell": [{"left": "rsi14", "op": ">", "right": 55}],
+        "stop_loss_pct": 5,
+    }
+    data.update(changes)
+    return data
+
+
+def _version_in(html: str) -> str:
+    m = re.search(r'name="base_version" value="([0-9a-f]{16})"', html)
+    assert m, "no base_version on the page"
+    return m.group(1)
+
+
+@respx.mock
+async def test_strategy_test_redirects_and_a_reload_runs_nothing_again(api):
+    """UX-16: a test lands on /strategy?result=…; reloading shows it without a new request."""
+    route = respx.get(f"{BASE}/BTC-EUR/candles").mock(return_value=Response(200, json=_zigzag()))
+    body = {"action": "backtest", "strategy_json": json.dumps(_rsi_strategy()), "limit": "300"}
+    r = await api.post("/strategy", data=body, headers=HTML)
+    assert r.status_code == 303
+    assert re.fullmatch(r"/strategy\?result=[A-Za-z0-9_-]+#resultaat", r.headers["location"])
+    page = (await api.get(r.headers["location"].split("#")[0])).text
+    await api.get(r.headers["location"].split("#")[0])
+    assert route.call_count == 1
+    # UX-43: the period, a verdict against buying and holding, labelled figures, a chart.
+    assert "300 candles van 1 uur (≈ 12 dagen," in page
+    assert "dan kopen en vasthouden</span>" in page and "procentpunt" in page
+    assert "Afgeronde trades" in page and "Winnende trades" in page and "Grootste daling" in page
+    assert (
+        'role="img" aria-labelledby="curve-desc"' in page
+        and "Kopen en vasthouden €\u00a01.000 →" in page
+    )
+    assert "Resultaat (bruto)" in page
+    # UX-10: the save button has its own form with the tested JSON, below the backtest.
+    form = page[page.index('class="strategy-save"') - 60 :]
+    assert 'data-tested-for="strategy-json"' in form and 'name="strategy_json" value="{' in form
+    assert page.index('id="backtest"') < page.index('class="strategy-save"')
+    assert "Geteste strategie opslaan en activeren" in page
+    # The test field remembers its value.
+    assert 'id="test-limit" class="input-xs" type="number" name="limit" value="300"' in page
+    # An unknown or expired result says so instead of failing.
+    r = await api.get("/strategy?result=bestaatniet123")
+    assert r.status_code == 200 and "Dit resultaat is niet meer beschikbaar" in r.text
+
+
+@respx.mock
+async def test_strategy_test_on_another_market_and_scope(api):
+    """UX-42: the strategy applies to all markets; 'market' only picks the backtest market."""
+    eth = respx.get(f"{BASE}/ETH-EUR/candles").mock(return_value=Response(200, json=_zigzag()))
+    r = await api.get("/strategy")
+    assert "Geldt voor <strong>BTC-EUR, ETH-EUR</strong>" in r.text
+    assert "bepaalt alleen op welke markt de backtest draait" in r.text
+    body = {
+        "action": "backtest",
+        "strategy_json": json.dumps(_rsi_strategy()),
+        "limit": "300",
+        "market": "ETH-EUR",
+    }
+    r = await api.post("/strategy", data=body)  # not a browser: the page itself
+    assert r.status_code == 200 and eth.call_count == 1
+    assert "Backtest op ETH-EUR" in r.text and 'value="ETH-EUR" selected' in r.text
+
+
+@respx.mock
+async def test_strategy_save_confirms_when_the_backtest_gives_reason(api, monkeypatch):
+    """UX-10 and UX-05: a question when live, or when the backtest lost to buying and holding
+    or bought on most candles."""
+    respx.get(f"{BASE}/BTC-EUR/candles").mock(return_value=Response(200, json=_zigzag()))
+    body = {"action": "backtest", "strategy_json": json.dumps(_rsi_strategy()), "limit": "300"}
+    page = (await api.post("/strategy", data=body)).text
+    m = re.search(
+        r'class="strategy-save" data-tested-for="strategy-json"(?: data-confirm="([^"]*)")?', page
+    )
+    assert m is not None
+    live = app.state.settings.model_copy(update={"trading_mode": "live"})
+    monkeypatch.setattr(app.state, "settings", live)
+    page = (await api.post("/strategy", data=body)).text
+    assert 'data-confirm="LIVE · echt geld: Strategie &#39;RSI zigzag&#39; opslaan' in page
+    assert 'Je handelt nu <strong class="strategy-mode is-live">live, met echt geld' in page
+
+
+def test_save_confirm_reasons():
+    from app.strategy.page import save_confirm
+
+    bt = {
+        "trades": 3,
+        "open_position": False,
+        "return_pct": -2.0,
+        "buy_hold_return_pct": 4.0,
+        "live_buy_signal_pct": 35.0,
+    }
+    text = save_confirm("X", ["BTC-EUR", "ETH-EUR"], bt, live=False)
+    assert "slechter dan kopen en vasthouden (-2,0% tegenover +4,0%)" in text
+    assert "op 35,0% van de candles een koopsignaal" in text
+    good = {
+        "trades": 9,
+        "open_position": False,
+        "return_pct": 6.0,
+        "buy_hold_return_pct": 4.0,
+        "live_buy_signal_pct": 5.0,
+    }
+    assert save_confirm("X", ["BTC-EUR"], good, live=False) is None
+    assert save_confirm("X", ["BTC-EUR"], good, live=True).startswith("LIVE · echt geld: ")
+    none = {"trades": 0, "open_position": False, "return_pct": 0.0, "buy_hold_return_pct": 1.0}
+    assert "geen enkele trade" in save_confirm("X", ["BTC-EUR"], none, live=False)
+
+
+async def test_strategy_save_from_an_old_tab_is_a_conflict(api):
+    """UX-10: a save with an outdated version shows what it would undo, and only 'Toch
+    overschrijven' (with the current version) goes through."""
+    from app.strategy.store import load_strategy
+
+    old_version = _version_in((await api.get("/strategy")).text)
+    r = await api.post(
+        "/strategy",
+        data={"action": "save", "strategy_json": json.dumps(_rsi_strategy(name="Nieuw"))},
+    )
+    assert r.status_code == 200 and "opgeslagen en actief" in r.text
+    stale = json.dumps(_rsi_strategy(name="Oud tabblad"))
+    r = await api.post(
+        "/strategy", data={"action": "save", "strategy_json": stale, "base_version": old_version}
+    )
+    assert r.status_code == 409 and "de strategie is intussen gewijzigd" in r.text
+    assert (
+        "Toch overschrijven" in r.text and "Laad de huidige" in r.text and "Jouw versie" in r.text
+    )
+    with SessionLocal() as s:
+        assert load_strategy(s).name == "Nieuw"
+    # From a browser: a redirect to the conflict, nothing saved.
+    r = await api.post(
+        "/strategy",
+        data={"action": "save", "strategy_json": stale, "base_version": old_version},
+        headers=HTML,
+    )
+    assert r.status_code == 303 and r.headers["location"].endswith("#conflict")
+    page = (await api.get(r.headers["location"].split("#")[0])).text
+    current = _version_in(page)
+    r = await api.post(
+        "/strategy",
+        data={"action": "save", "strategy_json": stale, "base_version": current},
+        headers=HTML,
+    )
+    assert r.status_code == 303 and r.headers["location"] == "/strategy#actief"
+    assert flashes_from_response(r)[0]["text"].startswith(
+        "Strategie 'Oud tabblad' opgeslagen en actief op BTC-EUR, ETH-EUR"
+    )
+
+
+async def test_previous_strategy_is_kept_and_can_be_put_back(api):
+    """UX-10: a save keeps the strategy it replaces; 'Vorige strategie terugzetten' swaps them,
+    but not from a page that is out of date."""
+    from app.strategy.model import DEFAULT_STRATEGY
+    from app.strategy.store import load_previous, load_strategy
+
+    await api.post(
+        "/strategy", data={"action": "save", "strategy_json": json.dumps(_rsi_strategy())}
+    )
+    with SessionLocal() as s:
+        previous, when = load_previous(s)
+        assert previous.name == DEFAULT_STRATEGY.name and when is not None
+    page = (await api.get("/strategy")).text
+    assert "Vorige strategie terugzetten" in page and DEFAULT_STRATEGY.name in page
+    version = _version_in(page)
+    r = await api.post(
+        "/strategy", data={"action": "restore_previous", "base_version": "0" * 16}, headers=HTML
+    )
+    assert r.status_code == 303 and flashes_from_response(r)[0]["kind"] == "error"
+    r = await api.post(
+        "/strategy", data={"action": "restore_previous", "base_version": version}, headers=HTML
+    )
+    assert r.status_code == 303
+    assert flashes_from_response(r)[-1]["text"].startswith(
+        f"Vorige strategie '{DEFAULT_STRATEGY.name}' teruggezet"
+    )
+    with SessionLocal() as s:
+        assert load_strategy(s).name == DEFAULT_STRATEGY.name
+        assert load_previous(s)[0].name == "RSI zigzag"
+
+
+async def test_strategy_errors_are_dutch_and_next_to_the_editor(api):
+    """UX-44: plain Dutch with where it is, under the editor, the field marked invalid."""
+    good = json.dumps(_rsi_strategy(), indent=2)
+    r = await api.post(
+        "/strategy",
+        data={"action": "backtest", "strategy_json": good.replace('"period": 14', '"period": 14,')},
+    )
+    assert r.status_code == 400
+    assert "Regel 10, kolom" in r.text and "een komma te veel" in r.text and "^ hier" in r.text
+    assert 'aria-invalid="true"' in r.text and 'aria-describedby="json-errors json-help"' in r.text
+    bad = _rsi_strategy(buy=[{"left": "rsi99", "op": "<<", "right": 45}])
+    r = await api.post("/strategy", data={"action": "backtest", "strategy_json": json.dumps(bad)})
+    assert "Koopregel 1 → vergelijking" in r.text and "kies een van:" in r.text
+    assert "Input should be" not in r.text
+    r = await api.post(
+        "/strategy",
+        data={"action": "save", "strategy_json": json.dumps(_rsi_strategy(stop_loss_pct=80))},
+    )
+    assert '<strong>Stop-loss</strong> <span class="mono">stop_loss_pct</span>' in r.text
+    assert "moet hoogstens 50 zijn" in r.text
+    bad = _rsi_strategy(buy=[{"left": "rsi99", "op": "<", "right": 45}])
+    r = await api.post("/strategy", data={"action": "save", "strategy_json": json.dumps(bad)})
+    assert "onbekende reeks &#39;rsi99&#39;. Beschikbaar:" in r.text
+    # A browser goes to the editor, with the text kept.
+    r = await api.post(
+        "/strategy", data={"action": "save", "strategy_json": json.dumps(bad)}, headers=HTML
+    )
+    assert r.status_code == 303 and r.headers["location"].endswith("#editor")
+    page = (await api.get(r.headers["location"].split("#")[0])).text
+    assert "rsi99" in page and "Ongeldige strategie, niet opgeslagen:" in page
+
+
+class _FakeAssistant:
+    available = True
+    calls = 0
+
+    async def propose(self, session, description, current, markets):
+        from app.ai.strategy_assistant import StrategyProposal
+        from app.strategy.model import Strategy
+
+        type(self).calls += 1
+        rules = _rsi_strategy(name="Claude-idee", description=current.description)
+        return StrategyProposal(
+            strategy=Strategy.model_validate(rules),
+            explanation="## Waarom\n**Sneller** instappen.\n\n- RSI 45\n<script>x</script> [link](https://e.vil)",
+        )
+
+
+@respx.mock
+async def test_proposal_is_shown_once_paid_for_and_rendered_safely(api, monkeypatch):
+    """UX-16 and UX-28: one Claude call, however often the result is reloaded; the explanation
+    as safe markdown; UX-12: a warning when the rules change but the description does not."""
+    respx.get(f"{BASE}/BTC-EUR/candles").mock(return_value=Response(200, json=_zigzag()))
+    monkeypatch.setattr(app.state, "assistant", _FakeAssistant())
+    _FakeAssistant.calls = 0
+    r = await api.post(
+        "/strategy",
+        data={"action": "propose", "description": "Koop sneller bij een dip", "limit": "300"},
+        headers=HTML,
+    )
+    assert r.status_code == 303 and r.headers["location"].endswith("#resultaat")
+    url = r.headers["location"].split("#")[0]
+    page = (await api.get(url)).text
+    await api.get(url)
+    assert _FakeAssistant.calls == 1
+    assert "Voorstel van Claude: Claude-idee" in page
+    assert '<div class="md"><h4>Waarom</h4><p><strong>Sneller</strong> instappen.</p>' in page
+    assert "<script>x</script>" not in page and 'href="https://e.vil"' not in page
+    assert "De regels veranderen, maar de omschrijving niet." in page
+    assert 'data-busy="Claude denkt na… (kan ~30 s duren)"' in page
+    assert "Koop sneller bij een dip" in page  # the wish stays in its field
+
+
+async def test_strategy_page_without_key_and_with_a_waiting_proposal(api):
+    """UX-46: no half-empty Claude card, the editor open; UX-15: a waiting proposal from an
+    evaluation is linked; UX-12: the free description is a small note under the rules."""
+    from app.strategy.model import DEFAULT_STRATEGY
+
+    proposal = json.loads(DEFAULT_STRATEGY.model_dump_json()) | {"name": "Uit de evaluatie"}
+    with SessionLocal() as s:
+        s.add(
+            Evaluation(
+                model="m", period_days=7, report_nl="r", proposed_strategy=json.dumps(proposal)
+            )
+        )
+        s.commit()
+    page = (await api.get("/strategy")).text
+    assert 'id="claude"' not in page and "Geavanceerd" not in page
+    assert '<details class="advanced strategy-editor" open>' in page
+    assert "Uit de evaluatie" in page and 'href="/trading#voorstel"' in page
+    assert "Toelichting (vrije tekst)" in page
+    assert page.index("Kopen als") < page.index("Toelichting (vrije tekst)")
+    assert "Standaardstrategie herstellen" in page and "btn btn-danger" in page
+    assert 'style="' not in page.split("<main", 1)[1]
+
+
+def test_equity_curve_rebuilds_the_backtest():
+    """The chart's strategy line ends where the backtest ends."""
+    from app.strategy.engine import backtest
+    from app.strategy.model import Strategy
+    from app.strategy.page import curve_svg, equity_curves
+
+    strategy = Strategy.model_validate(_rsi_strategy(position_size_pct=60))
+    candles = [[c[0], *(float(x) for x in c[1:])] for c in _zigzag()]
+    result = backtest(strategy, candles, 1000.0, 0.25)
+    assert len(result.closed_trades) >= 3
+    values, hold = equity_curves(candles, result, strategy.position_size_pct)
+    assert values[-1] == pytest.approx(result.final_eur, rel=1e-9)
+    assert hold[-1] == pytest.approx(1000 * (1 + result.buy_hold_return_pct / 100), rel=1e-9)
+    curve = curve_svg(values, hold)
+    assert len(curve["strategy"].split()) == 160 and curve["low"] <= min(values)

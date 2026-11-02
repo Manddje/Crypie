@@ -1259,7 +1259,52 @@ footer.site {
 }
 
 /* ==== Pagina: Strategie ==== */
-/* Regels die alleen strategy.html gebruikt: editor, voorstel en backtest. */
+/* Regels die alleen strategy.html gebruikt: de regels, het resultaat van een test of voorstel
+ * met de backtest, de editor en de fouten ernaast. */
+
+.strategy-mode { font-weight: 600; }
+.strategy-mode.is-paper { color: var(--paper); }
+.strategy-mode.is-live { color: var(--red); }
+.strategy-name { font-size: var(--fs-lead); margin: 0 0 4px; }
+.strategy-scope { color: var(--text-2); font-size: var(--fs-help); margin: 0 0 14px; }
+.strategy-rules { display: grid; gap: 16px 24px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.strategy-rules .eyebrow { margin: 0 0 6px; }
+.strategy-chips { margin: 14px 0 0; align-items: center; }
+.strategy-note { margin-top: 14px; padding: 10px 14px; border-left: 3px solid var(--hairline-strong); color: var(--text-2); font-size: var(--fs-detail); }
+.strategy-note p { margin: 4px 0 0; white-space: pre-line; overflow-wrap: anywhere; }
+.strategy-previous { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--hairline); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.strategy-previous p { margin: 0; }
+.strategy-conflict { border-color: var(--orange); }
+.strategy-conflict > .notice { margin-bottom: 4px; }
+
+.strategy-backtest { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--hairline); }
+.strategy-backtest > * + * { margin-top: 14px; }
+.strategy-verdict { font-size: var(--fs-help); line-height: 1.6; }
+.strategy-verdict .pill { margin-right: 6px; }
+.strategy-curve { margin: 14px 0 0; }
+.strategy-curve svg { display: block; width: 100%; height: 120px; overflow: visible; }
+.strategy-curve polyline { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.strategy-curve .curve-strategy { stroke: var(--accent); }
+.strategy-curve .curve-hold { stroke: var(--text-3); stroke-dasharray: 4 3; }
+.strategy-curve figcaption { margin-top: 6px; color: var(--text-2); font-size: var(--fs-detail); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.strategy-curve .legend-strategy, .strategy-curve .legend-hold { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--accent); }
+.strategy-curve .legend-hold { border-top: 2px dashed var(--text-3); margin-left: 8px; }
+.strategy-save { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--hairline); }
+.strategy-save > * + * { margin-top: 10px; }
+
+.strategy-editor > #json-form { margin-top: 14px; display: grid; gap: 8px; }
+.strategy-errors { padding: 12px 14px; border-radius: var(--radius-sm); background: var(--red-tint); font-size: var(--fs-help); }
+.strategy-errors ul { margin: 6px 0 0; padding-left: 20px; }
+.strategy-errors li { margin: 3px 0; overflow-wrap: anywhere; }
+.json-context { margin: 10px 0 0; padding: 8px 10px; border-radius: var(--radius-xs); background: var(--card); font-family: var(--mono); font-size: 12px; line-height: 1.5; overflow-x: auto; white-space: pre; }
+.json-context .here { font-weight: 600; color: var(--text); }
+.json-context .caret { color: var(--red); font-weight: 700; }
+.strategy-test-controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+.strategy-test-controls select { min-width: 9rem; }
+.strategy-reset { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--hairline); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+@media (max-width: 640px) {
+  .strategy-rules { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* ==== Pagina: Nieuws ==== */
 /* Regels die alleen news.html gebruikt: sentiment per coin, de berichten en hun bronnen. */

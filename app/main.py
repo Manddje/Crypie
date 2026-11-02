@@ -82,7 +82,24 @@ from app.strategy.model import (
     check_for_use,
     use_problems,
 )
-from app.strategy.store import load_strategy, load_strategy_checked, save_strategy
+from app.strategy.page import (
+    RESULT_TOKEN,
+    RESULTS,
+    StrategyInputError,
+    backtest_view,
+    curve_svg,
+    description_outdated,
+    equity_curves,
+    parse_strategy_json,
+    save_confirm,
+)
+from app.strategy.store import (
+    load_previous,
+    load_strategy,
+    load_strategy_checked,
+    save_strategy,
+    strategy_version,
+)
 from app.trading import risk
 from app.trading.engine import (
     NEWS_ENTRY_MIN_SCORE,
@@ -945,10 +962,16 @@ async def _run_backtest(
 ) -> dict:
     candles = await client.candles(strategy.market, strategy.interval, limit)
     result = backtest(strategy, candles, start_eur, request.app.state.settings.backtest_fee_pct)
+    strategy_curve, hold_curve = equity_curves(candles, result, strategy.position_size_pct)
     return {
         **result.summary(),
         "market": strategy.market,
         "interval": strategy.interval,
+        "first_time": int(candles[0][0]) if candles else None,
+        "last_time": int(candles[-1][0]) if candles else None,
+        "wins": sum(1 for t in result.closed_trades if (t.pnl_pct or 0) > 0),
+        # The value of the test account per candle (sampled), for the chart on the page.
+        "curve": curve_svg(strategy_curve, hold_curve),
         "latest": latest_snapshot(strategy, candles),
         "trade_log": [
             {
@@ -1028,30 +1051,174 @@ async def run_backtest(
         raise HTTPException(422, f"backtest failed: {exc}") from exc
 
 
+def _waiting_proposal(session: Session, settings: Settings, current: Strategy) -> dict | None:
+    """The newest proposal from an evaluation that waits on Handelen and could be applied as
+    it is (UX-15), so the strategy page can point to it."""
+    for ev in session.scalars(select(Evaluation).order_by(Evaluation.id.desc()).limit(5)):
+        if not ev.proposed_strategy or ev.applied:
+            continue
+        proposal = _proposal(ev)
+        if proposal is None or proposal.market not in settings.markets:
+            continue
+        if use_problems(proposal) or _proposal_guard_problems(current, proposal, ev):
+            continue
+        return {"name": proposal.name, "created_at": ev.created_at, "id": ev.id}
+    return None
+
+
+def _strategy_context(
+    request: Request,
+    session: Session,
+    assistant: StrategyAssistant,
+    state: dict | None = None,
+) -> dict:
+    """The strategy page. ``state`` is the outcome of a form (a test, a proposal, refused
+    input or a conflict), from the result store or straight from the POST."""
+    settings: Settings = request.app.state.settings
+    current, load_warning = load_strategy_checked(session)
+    state = state or {}
+    live = settings.trading_mode == "live"
+    previous = load_previous(session)
+    ctx: dict = {
+        "settings": settings,
+        "mode": settings.trading_mode,
+        "strategy": current,
+        "strategy_json": state.get("strategy_json") or current.model_dump_json(indent=2),
+        "version": strategy_version(session),
+        "load_warning": load_warning,
+        "assistant_available": assistant.available,
+        "assistant_model": settings.claude_model_strategy,
+        "waiting": _waiting_proposal(session, settings, current),
+        "previous": previous[0] if previous else None,
+        "previous_at": previous[1] if previous else None,
+        "previous_confirm": None,
+        "result_missing": state.get("missing", False),
+        "kind": state.get("kind"),
+        "description": state.get("description", ""),
+        "limit": state.get("limit", 500),
+        "test_market": state.get("market", ""),
+        "errors": state.get("errors", []),
+        "error_title": state.get("error_title"),
+        "json_context": state.get("json_context", []),
+        "claude_error": state.get("claude_error"),
+        "message": state.get("message"),
+        "proposal": None,
+        "proposal_json": None,
+        "proposal_diff": None,
+        "description_outdated": False,
+        "problems": [],
+        "explanation": state.get("explanation"),
+        "backtest": state.get("backtest"),
+        "bt": backtest_view(state["backtest"]) if state.get("backtest") else None,
+        "save_confirm": None,
+        "conflict": None,
+        "backtest_error": state.get("backtest_error"),
+        "editor_confirm": ("LIVE · echt geld: " if live else "")
+        + "Opslaan zonder test? De strategie in de editor wordt meteen actief op "
+        + ", ".join(settings.markets)
+        + ", zonder backtest.",
+        "reset_confirm": (
+            ("LIVE · echt geld: " if live else "")
+            + f"De actieve strategie wordt vervangen door de standaardstrategie "
+            f"'{DEFAULT_STRATEGY.name}' van Crypie, op {', '.join(settings.markets)}. De huidige "
+            "blijft bewaard als vorige strategie. Doorgaan?"
+        ),
+    }
+    if ctx["previous"] is not None:
+        ctx["previous_confirm"] = (
+            ("LIVE · echt geld: " if live else "")
+            + f"Vorige strategie '{ctx['previous'].name}' terugzetten en meteen actief maken "
+            f"op {', '.join(settings.markets)}? De huidige wordt dan de vorige."
+        )
+    if state.get("proposal"):
+        proposal = Strategy.model_validate(state["proposal"])
+        ctx["proposal"] = proposal
+        ctx["proposal_json"] = proposal.model_dump_json(indent=2)
+        ctx["proposal_diff"] = strategy_diff(current, proposal)
+        ctx["description_outdated"] = description_outdated(ctx["proposal_diff"])
+        problems = use_problems(proposal)
+        if proposal.market not in settings.markets:
+            problems.append(f"{proposal.market} staat niet in je markten (MARKETS)")
+        ctx["problems"] = problems
+        ctx["save_confirm"] = save_confirm(
+            proposal.name,
+            settings.markets,
+            state.get("backtest"),
+            live,
+            tested=bool(state.get("backtest")),
+        )
+    if state.get("conflict"):
+        yours = Strategy.model_validate(state["conflict"])
+        ctx["conflict"] = {
+            "strategy": yours,
+            "json": yours.model_dump_json(indent=2),
+            "diff": strategy_diff(current, yours),
+            "confirm": ("LIVE · echt geld: " if live else "")
+            + f"Toch overschrijven? De strategie '{current.name}' die nu actief is, wordt "
+            f"vervangen door jouw versie '{yours.name}'.",
+        }
+    return ctx
+
+
+async def _try_backtest(
+    request: Request, client: BitvavoClient, strategy: Strategy, limit: int, state: dict
+) -> None:
+    """Run the backtest into ``state``; a failure is said on the page, not lost with the
+    strategy (a proposal from Claude cost money)."""
+    try:
+        state["backtest"] = await _run_backtest(request, client, strategy, limit, 1000)
+    except BitvavoError as exc:
+        state["backtest_error"] = "De backtest kon niet draaien: " + errors.bitvavo_text(exc)
+    except (ValueError, ArithmeticError) as exc:
+        state["backtest_error"] = f"De backtest kon niet draaien: {exc}"
+
+
+def _strategy_input(strategy_json: str, settings: Settings) -> Strategy:
+    """The editor's strategy, or StrategyInputError with Dutch errors next to the editor."""
+    if len(strategy_json) > STRATEGY_JSON_MAX:
+        limit = f"{STRATEGY_JSON_MAX:,}".replace(",", ".")
+        raise StrategyInputError(
+            [
+                {
+                    "where": "Strategie",
+                    "path": "",
+                    "message": f"de JSON is te lang (maximaal {limit} tekens)",
+                }
+            ]
+        )
+    candidate = parse_strategy_json(strategy_json)
+    if candidate.market not in settings.markets:
+        raise StrategyInputError(
+            [
+                {
+                    "where": "Backtest-markt",
+                    "path": "market",
+                    "message": f"{candidate.market} staat niet in je markten (MARKETS: "
+                    f"{', '.join(settings.markets)}). Dit veld bepaalt alleen op welke markt de "
+                    "backtest draait; de strategie geldt voor al je markten",
+                }
+            ]
+        )
+    return candidate
+
+
 @app.get("/strategy", response_class=HTMLResponse)
 async def strategy_page(
     request: Request,
+    result: str | None = Query(None, max_length=64),
     assistant: StrategyAssistant = Depends(get_assistant),
     session: Session = Depends(get_session),
 ):
-    strategy, load_warning = load_strategy_checked(session)
-    return templates.TemplateResponse(
-        request,
-        "strategy.html",
-        {
-            "settings": request.app.state.settings,
-            "strategy_json": strategy.model_dump_json(indent=2),
-            "strategy": strategy,
-            "load_warning": load_warning,
-            "assistant_available": assistant.available,
-            "proposal": None,
-            "proposal_diff": None,
-            "explanation": None,
-            "backtest": None,
-            "error": None,
-            "message": None,
-        },
-    )
+    state = None
+    if result:
+        state = RESULTS.get(result) if RESULT_TOKEN.match(result) else None
+        state = state or {"missing": True}
+    ctx = _strategy_context(request, session, assistant, state)
+    return templates.TemplateResponse(request, "strategy.html", ctx)
+
+
+# Where each outcome lands on the page.
+STRATEGY_ANCHORS = {"invalid": "editor", "claude": "claude", "conflict": "conflict"}
 
 
 @app.post("/strategy", response_class=HTMLResponse)
@@ -1061,85 +1228,133 @@ async def strategy_action(
     strategy_json: str = Form(""),
     description: str = Form(""),
     limit: int = Form(500, ge=50, le=MAX_CANDLES),
+    market: str = Form("", max_length=16),
+    base_version: str = Form("", max_length=64),
     client: BitvavoClient = Depends(get_client),
     assistant: StrategyAssistant = Depends(get_assistant),
     session: Session = Depends(get_session),
 ):
+    """Test, propose, save, reset or put back the previous strategy.
+
+    Browsers always get a redirect (Post/Redirect/Get): a success to the page with a message, a
+    test or proposal to ``/strategy?result=<id>``, so a reload never runs a test or a paid
+    Claude call again. Other clients get the page itself, with 400 for refused input.
+    """
     settings: Settings = request.app.state.settings
-    current, load_warning = load_strategy_checked(session)
-    ctx: dict = {
-        "settings": settings,
-        "strategy_json": strategy_json[:STRATEGY_JSON_MAX],
-        "strategy": current,
-        "load_warning": load_warning,
-        "assistant_available": assistant.available,
-        "proposal": None,
-        "proposal_diff": None,
-        "explanation": None,
-        "backtest": None,
-        "error": None,
-        "message": None,
-    }
+    html = errors.wants_html(request)
+    state: dict = {"limit": limit, "market": market if market in settings.markets else ""}
+    done: str | None = None  # the message after a change that went through
     status = 200
     try:
         if action == "propose":
+            state.update(kind="claude", description=description[:DESCRIPTION_MAX])
             if not assistant.available:
-                raise RuntimeError("ANTHROPIC_API_KEY is niet ingesteld")
+                raise RuntimeError("Voorstellen via Claude staan uit: er is geen Claude-sleutel.")
             # Same bounds as POST /api/strategy/propose.
-            ProposalIn(description=description)
-            proposal = await assistant.propose(
-                session, description, ctx["strategy"], settings.markets
+            try:
+                ProposalIn(description=description)
+            except ValidationError as exc:
+                raise RuntimeError(
+                    f"schrijf je wens in minstens 5 en hoogstens {DESCRIPTION_MAX} tekens."
+                ) from exc
+            current = load_strategy(session)
+            proposal = await assistant.propose(session, description, current, settings.markets)
+            state.update(
+                kind="propose",
+                proposal=proposal.strategy.model_dump(mode="json"),
+                strategy_json=proposal.strategy.model_dump_json(indent=2),
+                explanation=proposal.explanation,
             )
-            ctx["strategy_json"] = proposal.strategy.model_dump_json(indent=2)
-            ctx["proposal"] = proposal.strategy
-            ctx["proposal_diff"] = strategy_diff(current, proposal.strategy)
-            ctx["explanation"] = proposal.explanation
-            ctx["description"] = description
-            ctx["backtest"] = await _run_backtest(request, client, proposal.strategy, limit, 1000)
-            ctx["message"] = (
-                "Claude heeft een voorstel gemaakt. "
-                "Bekijk het hieronder en sla het op als je het goed vindt."
-            )
-            problems = use_problems(proposal.strategy)
-            if problems:
-                ctx["error"] = (
-                    "Dit voorstel kan zo niet worden opgeslagen: " + "; ".join(problems) + "."
-                )
+            await _try_backtest(request, client, proposal.strategy, limit, state)
         elif action == "reset":
             save_strategy(session, DEFAULT_STRATEGY)
-            ctx["strategy"] = DEFAULT_STRATEGY
-            ctx["load_warning"] = None
-            ctx["strategy_json"] = DEFAULT_STRATEGY.model_dump_json(indent=2)
-            ctx["message"] = f"Standaardstrategie '{DEFAULT_STRATEGY.name}' hersteld en actief."
-        else:
-            if len(strategy_json) > STRATEGY_JSON_MAX:
+            done = (
+                f"Standaardstrategie '{DEFAULT_STRATEGY.name}' hersteld en actief op "
+                f"{', '.join(settings.markets)}. De vorige strategie is bewaard."
+            )
+        elif action == "restore_previous":
+            previous = load_previous(session)
+            if previous is None:
+                raise ValueError("Er is geen vorige strategie bewaard.")
+            if base_version and base_version != strategy_version(session):
                 raise ValueError(
-                    f"De strategie-JSON is te lang (maximaal {STRATEGY_JSON_MAX} tekens)."
+                    "De strategie is intussen gewijzigd; terugzetten zou die wijziging ongedaan "
+                    "maken. Bekijk de pagina opnieuw en kies dan."
                 )
-            candidate = Strategy.model_validate_json(strategy_json)
-            if candidate.market not in settings.markets:
-                raise ValueError(f"{candidate.market} staat niet in MARKETS")
+            strategy = previous[0]
+            if strategy.market not in settings.markets:
+                raise ValueError(f"{strategy.market} staat niet meer in je markten (MARKETS).")
+            check_for_use(strategy)
+            save_strategy(session, strategy)
+            done = (
+                f"Vorige strategie '{strategy.name}' teruggezet en actief op "
+                f"{', '.join(settings.markets)}. De strategie die er stond, is nu de vorige."
+            )
+        elif action in ("backtest", "save"):
+            state.update(kind="invalid", strategy_json=strategy_json[:STRATEGY_JSON_MAX])
+            candidate = _strategy_input(strategy_json, settings)
             if action == "backtest":
-                ctx["proposal"] = candidate
-                ctx["proposal_diff"] = strategy_diff(current, candidate)
-                ctx["backtest"] = await _run_backtest(request, client, candidate, limit, 1000)
-            elif action == "save":
-                check_for_use(candidate)
-                save_strategy(session, candidate)
-                ctx["strategy"] = candidate
-                ctx["load_warning"] = None
-                ctx["message"] = f"Strategie '{candidate.name}' opgeslagen en actief."
+                if state["market"]:
+                    candidate = candidate.model_copy(update={"market": state["market"]})
+                state.update(
+                    kind="backtest",
+                    proposal=candidate.model_dump(mode="json"),
+                    strategy_json=candidate.model_dump_json(indent=2),
+                )
+                await _try_backtest(request, client, candidate, limit, state)
             else:
-                raise ValueError(f"Onbekende actie {action!r}")
-    except ValidationError as exc:
-        what = "Ongeldige omschrijving" if action == "propose" else "Ongeldige strategie"
-        ctx["error"] = f"{what}: " + "; ".join(
-            f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()
+                try:
+                    check_for_use(candidate)
+                except ValueError as exc:
+                    raise StrategyInputError(
+                        [{"where": "Strategie", "path": "", "message": str(exc)}]
+                    ) from exc
+                if base_version and base_version != strategy_version(session):
+                    # Changed since this page was loaded (another tab, an applied proposal):
+                    # show what saving would undo instead of overwriting it silently.
+                    state.update(kind="conflict", conflict=candidate.model_dump(mode="json"))
+                    status = 409
+                else:
+                    save_strategy(session, candidate)
+                    done = (
+                        f"Strategie '{candidate.name}' opgeslagen en actief op "
+                        f"{', '.join(settings.markets)}. De vorige strategie is bewaard."
+                    )
+        else:
+            raise ValueError(f"Onbekende actie {action!r}")
+    except StrategyInputError as exc:
+        state.update(
+            kind="invalid",
+            error_title="Ongeldige strategie, niet opgeslagen:"
+            if action == "save"
+            else "Ongeldige strategie, niet getest:",
+            errors=exc.errors,
+            json_context=exc.context,
         )
         status = 400
-    except (ValueError, RuntimeError, ArithmeticError, BitvavoError) as exc:
-        ctx["error"] = str(exc)
+    except (BudgetExceeded, RuntimeError, ValueError) as exc:
+        # Claude could not make a proposal (no key, budget, an unusable answer), or a reset,
+        # a restore or an unknown action was refused.
         status = 400
+        if action == "propose":
+            state.update(kind="claude", claude_error=f"Geen voorstel gemaakt: {exc}")
+        elif html:
+            return flash.redirect_with_flash("/strategy#actief", "error", str(exc))
+        else:
+            state = {"message_error": str(exc)}
+    if done is not None:
+        if html:
+            return flash.redirect_with_flash("/strategy#actief", "ok", done)
+        state = {"message": done}
+    elif html:
+        token = RESULTS.put(state)
+        anchor = STRATEGY_ANCHORS.get(state.get("kind") or "", "resultaat")
+        if state.get("kind") in ("backtest", "propose") and status == 400:
+            anchor = "editor"
+        return RedirectResponse(f"/strategy?result={token}#{anchor}", status_code=303)
+    ctx = _strategy_context(request, session, assistant, state)
+    if state.get("message_error"):
+        ctx["error_title"] = state["message_error"]
     return templates.TemplateResponse(request, "strategy.html", ctx, status_code=status)
 
 

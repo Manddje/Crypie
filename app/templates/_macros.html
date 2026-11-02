@@ -178,14 +178,15 @@
 {%- endmacro %}
 
 {# Field-level differences between the active strategy and a proposal (strategy_diff()).
-   level is the heading level of the title in the page outline. #}
-{% macro strategy_diff(diff, title="Verschil met de actieve strategie", level=3) -%}
+   level is the heading level of the title in the page outline; old and new name the columns
+   ('Nu' / 'Voorstel', or 'Nu' / 'Jouw versie'). #}
+{% macro strategy_diff(diff, title="Verschil met de actieve strategie", level=3, old="Nu", new="Voorstel") -%}
 {% if diff is not none %}
 <h{{ level }} class="fs-body mt-4">{{ title }}</h{{ level }}>
 {% if diff %}
 <div class="table-wrap strategy-diff mt-2" data-region="{{ title }}">
 <table class="small">
-  <tr><th scope="col">Onderdeel</th><th scope="col">Nu</th><th scope="col">Voorstel</th></tr>
+  <tr><th scope="col">Onderdeel</th><th scope="col">{{ old }}</th><th scope="col">{{ new }}</th></tr>
   {% for d in diff %}
   <tr><td class="nowrap"><strong>{{ d.label }}</strong></td><td class="muted">{{ d.old }}</td><td>{{ d.new }}</td></tr>
   {% endfor %}
