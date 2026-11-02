@@ -166,10 +166,17 @@ def test_feed_addresses_must_be_public_http_hostnames(url):
 def test_valid_feeds_still_accepted():
     values = cfg.parse_values(
         {
-            "news_rss_feeds": "https://www.coindesk.com/arc/outboundfeeds/rss/\nhttp://example.org/feed"
+            "news_rss_feeds": "https://www.coindesk.com/arc/outboundfeeds/rss/\n"
+            "https://example.org/feed"
         }
     )
     assert len(values["news_rss_feeds"]) == 2
+
+
+def test_plain_http_feeds_are_refused():
+    with pytest.raises(cfg.SettingsError) as exc:
+        cfg.parse_values({"news_rss_feeds": "http://example.org/feed"})
+    assert "gebruik https://" in exc.value.errors["news_rss_feeds"]
 
 
 # -- F66: list bounds ---------------------------------------------------------------------
@@ -251,10 +258,15 @@ def test_description_is_bounded():
 def test_protective_exit_is_required_for_use():
     assert use_problems(DEFAULT_STRATEGY) == []
     no_stop = strategy(stop_loss_pct=None, trailing_stop_pct=None, trailing_start_pct=None)
-    assert any("stop-loss of trailing stop" in p for p in use_problems(no_stop))
+    assert any("geen stop vanaf de instap" in p for p in use_problems(no_stop))
     with pytest.raises(ValueError, match="Strategie niet toegepast"):
         check_for_use(no_stop)
-    assert use_problems(strategy(stop_loss_pct=None)) == []  # trailing stop alone is enough
+    # A trailing stop that only starts after a rise leaves a new position without a stop.
+    assert any("geen stop vanaf de instap" in p for p in use_problems(strategy(stop_loss_pct=None)))
+    late = strategy(stop_loss_pct=None, trailing_start_pct=400)
+    assert any("geen stop vanaf de instap" in p for p in use_problems(late))
+    # A trailing stop from the entry is enough, and so is a stop-loss alone.
+    assert use_problems(strategy(stop_loss_pct=None, trailing_start_pct=None)) == []
     assert use_problems(strategy(trailing_stop_pct=None)) == []
 
 
@@ -434,7 +446,7 @@ def _no_stop_json() -> dict:
 
 async def test_api_and_form_refuse_a_strategy_without_stop(api):
     r = await api.put("/api/strategy", json=_no_stop_json())
-    assert r.status_code == 400 and "stop-loss of trailing stop" in r.json()["detail"]
+    assert r.status_code == 400 and "geen stop vanaf de instap" in r.json()["detail"]
     trivial = DEFAULT_STRATEGY.model_dump() | {"buy": [{"left": "close", "op": ">", "right": 0}]}
     r = await api.put("/api/strategy", json=trivial)
     assert r.status_code == 400 and "altijd waar" in r.json()["detail"]
@@ -442,7 +454,7 @@ async def test_api_and_form_refuse_a_strategy_without_stop(api):
     r = await api.post(
         "/strategy", data={"action": "save", "strategy_json": json.dumps(_no_stop_json())}
     )
-    assert r.status_code == 400 and "stop-loss of trailing stop" in r.text
+    assert r.status_code == 400 and "geen stop vanaf de instap" in r.text
     assert (await api.get("/api/strategy")).json()["name"] == DEFAULT_STRATEGY.name
 
     # The form checks MARKETS like the API.
@@ -494,9 +506,9 @@ def _add_evaluation(proposal: dict | str | None) -> int:
 async def test_applying_an_evaluation_proposal(api):
     no_stop = _add_evaluation(_no_stop_json())
     r = await api.post(f"/api/evaluations/{no_stop}/apply")
-    assert r.status_code == 400 and "stop-loss of trailing stop" in r.json()["detail"]
+    assert r.status_code == 400 and "geen stop vanaf de instap" in r.json()["detail"]
     r = await api.post("/trading/action", data={"action": f"apply:{no_stop}"})
-    assert r.status_code == 400 and "stop-loss of trailing stop" in r.text
+    assert r.status_code == 400 and "geen stop vanaf de instap" in r.text
 
     other_market = _add_evaluation(DEFAULT_STRATEGY.model_dump() | {"market": "XRP-EUR"})
     r = await api.post("/trading/action", data={"action": f"apply:{other_market}"})

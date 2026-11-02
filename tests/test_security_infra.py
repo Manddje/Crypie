@@ -67,6 +67,8 @@ def _client_seen(trusted: str, peer: str, xff: str | None) -> tuple[str, str]:
         ("10.0.1.5", "6.6.6.6, 203.0.113.7", "203.0.113.7", "https"),
         ("172.18.0.2", "198.51.100.9", "198.51.100.9", "https"),
         ("192.168.5.4", "1.1.1.1, 198.51.100.9, 10.0.0.3", "198.51.100.9", "https"),
+        # Traefik on an IPv6-enabled Docker network (ULA address).
+        ("fd12:3456::2", "198.51.100.9", "198.51.100.9", "https"),
         # A peer that is not a trusted proxy cannot set its IP or the scheme.
         ("203.0.113.50", "1.2.3.4", "203.0.113.50", "http"),
     ],

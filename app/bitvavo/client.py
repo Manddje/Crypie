@@ -73,7 +73,7 @@ class InvalidMarketError(BitvavoError, ValueError):
 
 def check_market(market: str) -> str:
     """Return ``market`` when it is in Bitvavo notation (BTC-EUR); raise otherwise."""
-    if not isinstance(market, str) or not MARKET_RE.match(market):
+    if not isinstance(market, str) or not MARKET_RE.fullmatch(market):
         raise InvalidMarketError(market)
     return market
 
@@ -240,6 +240,10 @@ class BitvavoClient:
             if err.rate_limited:
                 self._back_off(err, resp.headers)
             raise err
+        if not isinstance(payload, dict | list):
+            # Every endpoint answers with a JSON object or list. Anything else is treated
+            # like a 5xx: ambiguous, so an order behind it is looked up, never assumed.
+            raise BitvavoError(502, {"error": f"unexpected response: {str(payload)[:80]!r}"})
         self._backoff_s = 0.0
         return payload
 

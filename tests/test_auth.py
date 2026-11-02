@@ -295,10 +295,14 @@ async def test_login_with_code_recovery_and_account_actions(client):
     assert (await client.post("/login/mfa", data={"code": codes[0]})).status_code == 401
     assert (await client.post("/login/mfa", data={"code": codes[1]})).status_code == 303
 
-    # Account actions need the password again.
+    # Account actions need the password again; new recovery codes also a current code.
     r = await client.post("/account", data={"action": "recovery", "password": "fout"})
     assert r.status_code == 401
     r = await client.post("/account", data={"action": "recovery", "password": PASSWORD})
+    assert r.status_code == 401 and "code klopt niet" in r.text
+    r = await client.post(
+        "/account", data={"action": "recovery", "password": PASSWORD, "code": codes[2]}
+    )
     assert r.status_code == 200 and len(_recovery_codes(r.text)) == 8
     assert "8 van 8" in (await client.get("/account")).text  # this browser stays logged in
 

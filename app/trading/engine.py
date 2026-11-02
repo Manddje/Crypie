@@ -17,7 +17,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import urlparse
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
@@ -33,7 +32,7 @@ from app.news.service import load_market_mood, market_sentiment, outlet_of
 from app.strategy.describe import ConditionCheck, explain_signal, levels_summary, signal_reason_nl
 from app.strategy.engine import backtest, compute_series, signal_at
 from app.strategy.model import LOOKBACK_OPS, Strategy
-from app.strategy.store import load_strategy
+from app.strategy.store import load_strategy, load_strategy_checked
 from app.trading import risk
 from app.trading.events import MarketEvent, active_event, recent_shock, upcoming_events
 from app.trading.journal import JournalFilter, journal_entries, notes_for_claude
@@ -67,6 +66,10 @@ ORDER_BACKOFF_MIN = 60
 # An "opening"/"closing" claim without a live order behind it is released after this long.
 CLAIM_STALE = timedelta(minutes=10)
 ENGINE_STATE_KEY = "engine_state"
+# A mechanical exit that keeps failing (no coins on the account, a refused sell) is journaled
+# at most once per position per this period; the retries in between are only logged.
+EXIT_FAILURE_JOURNAL = timedelta(minutes=60)
+STRATEGY_INVALID_BLOCK = "opgeslagen strategie ongeldig"
 
 
 class ManualOrderError(ValueError):
@@ -173,17 +176,6 @@ def performance_summary(session: Session, mode: str, days: int = 30) -> dict[str
 
 # -- news confirmation -------------------------------------------------------------------
 
-# Aggregators name themselves, not the outlet; for those the article's host is the outlet.
-_AGGREGATOR_NAMES = {"google news", "gdelt", "cryptopanic", "cryptocurrency.cv", ""}
-
-
-def _outlet(item: NewsItem) -> str:
-    name = (item.source_name or "").strip().lower()
-    if name not in _AGGREGATOR_NAMES:
-        return name
-    host = (urlparse(item.url or "").hostname or "").lower()
-    return host.removeprefix("www.") or name
-
 
 def _event_key(item: NewsItem) -> str:
     if item.event_key:
@@ -210,6 +202,7 @@ def news_sources(
             NewsItem.assessed.is_(True),
             NewsItem.relevant.is_(True),
             NewsItem.published_at >= now - timedelta(hours=hours),
+            NewsItem.published_at <= now,
         )
     ).all()
     events: dict[str, list[NewsItem]] = {}
@@ -229,9 +222,9 @@ def news_sources(
             continue
         if not positive and sentiment > NEWS_EXIT_MAX_SCORE:
             continue
-        # Distinct by publisher name and by site (the news page's rule) alike: two names on
-        # one site, or one feed's name on two hosts, are still one outlet.
-        best = max(best, min(len({_outlet(m) for m in members}), len(set(map(outlet_of, members)))))
+        # The same outlet identity as the sentiment and /news: an RSS feed is one outlet
+        # wherever its links point, one publisher through two aggregators is one outlet.
+        best = max(best, len({outlet_of(m) for m in members}))
     return best
 
 
@@ -342,6 +335,7 @@ class TradingEngine:
         self.backtest_fee_pct = backtest_fee_pct
         self.fee_pct = fee_pct  # per side; what a round trip must beat to break even is 2x
         self.trend_context = True  # pass the long-term trend (PlanB-style) to Claude
+        self.market_mood_enabled = True  # FEAR_GREED_ENABLED: pass the stored index to Claude
         # Live only: EUR the bot manages (0 = the whole account), see portfolio().
         self.live_capital_eur = 0.0
         # Risk-off: no new buys around calendar events and after a news shock.
@@ -365,7 +359,16 @@ class TradingEngine:
         self.broker_for_mode: Callable[[str], Broker | None] | None = None
         self.unprotected: list[dict[str, Any]] = []
         self.last_exit_run: datetime | None = None
+        # Failed mechanical exits per position id: when last journaled and why (persisted).
+        self.exit_failures: dict[int, dict[str, Any]] = {}
+        # True while the stored strategy does not validate: exits use the default strategy,
+        # but no new positions are opened with a strategy the owner never chose.
+        self.strategy_invalid = False
         self._locks: dict[str, asyncio.Lock] = {}
+        # Held from the limit checks of a buy until it is booked, across markets: the global
+        # limits (trades per day, exposure, daily loss) are read before either buy commits.
+        # Always taken inside a market lock, never the other way round.
+        self._buy_lock = asyncio.Lock()
         self._evaluation_lock = asyncio.Lock()
         self.market_timeout_s = MARKET_RUN_TIMEOUT_S
         self.data_timeout_s = DATA_TIMEOUT_S
@@ -407,6 +410,10 @@ class TradingEngine:
             },
             "watch_cooldown": {m: _iso(t) for m, t in self.watch_cooldown.items()},
             "order_backoff": {m: _iso(t) for m, t in self.order_backoff.items()},
+            "exit_failures": {
+                str(pid): {"at": _iso(f["at"]), "reason": f.get("reason")}
+                for pid, f in self.exit_failures.items()
+            },
         }
         try:
             row = session.get(Setting, ENGINE_STATE_KEY)
@@ -442,10 +449,16 @@ class TradingEngine:
                 for m, v in (state.get("order_backoff") or {}).items()
                 if (t := _from_iso(v)) is not None and t > now
             }
+            failures = {}
+            for pid, f in (state.get("exit_failures") or {}).items():
+                at = _from_iso(f.get("at")) if isinstance(f, dict) else None
+                if at is not None and str(pid).isdigit():
+                    failures[int(pid)] = {"at": at, "reason": str(f.get("reason") or "")[:200]}
         except Exception:  # noqa: BLE001
             log.exception("ignoring unreadable engine state")
             return
         self.watch, self.watch_cooldown, self.order_backoff = watch, cooldown, backoff
+        self.exit_failures = failures
 
     # -- portfolio helpers --
 
@@ -492,8 +505,15 @@ class TradingEngine:
                 f"{market}: afgebroken, geen resultaat binnen de tijdslimiet"
             ) from exc
 
+    def _trading_strategy(self, session: Session) -> Strategy:
+        """The strategy for a cycle; flags a stored strategy that does not validate, so the
+        cycle opens no positions with the default strategy in its place."""
+        strategy, warning = load_strategy_checked(session)
+        self.strategy_invalid = warning is not None
+        return strategy
+
     async def run_cycle(self, session: Session) -> list[CycleResult]:
-        strategy = load_strategy(session)
+        strategy = self._trading_strategy(session)
         prices = await self.client.ticker_prices(self.markets)
         results: list[CycleResult] = []
         for market in list(self.markets):
@@ -523,7 +543,7 @@ class TradingEngine:
         """Re-check only the armed markets; called every WATCH_INTERVAL_MIN by the scheduler."""
         if not self.watch:
             return []
-        strategy = load_strategy(session)
+        strategy = self._trading_strategy(session)
         markets = [m for m in self.watch if m in self.markets]
         for stale in set(self.watch) - set(markets):
             self.watch.pop(stale, None)
@@ -821,6 +841,18 @@ class TradingEngine:
             session.add(decision)
             session.commit()
             return CycleResult(market, price, signal, "hold", "rules", False, decision.reasoning)
+        if self.strategy_invalid and position is None and (needs_claude or signal == "buy"):
+            # 2b'. The stored strategy does not validate: the default stands in for exits only.
+            # No new position on a strategy the owner never chose; Claude is not asked.
+            self.watch.pop(market, None)
+            decision.reasoning = (
+                "De opgeslagen strategie is ongeldig; de bot opent geen nieuwe posities tot er "
+                "een geldige strategie is opgeslagen. Verkopen en stop-loss blijven werken."
+            )
+            decision.blocked_by = STRATEGY_INVALID_BLOCK
+            session.add(decision)
+            session.commit()
+            return CycleResult(market, price, signal, "hold", "rules", False, decision.reasoning)
         if needs_claude:
             # 2c. An order in this market is still unsettled, or one was refused recently:
             # do not ask Claude the same question again.
@@ -915,34 +947,41 @@ class TradingEngine:
                         "toegestaan"
                     )
                 elif (ro := self.risk_off(session, market, datetime.now(UTC))) is not None:
-                    blocked = f"risk-off: {ro['reason_nl']}"
+                    # Only the kind in blocked_by: a shock's reason carries a news summary,
+                    # and blocked_by reaches Claude's prompts. The details go in the reasoning.
+                    blocked = f"risk-off: {ro['kind']}"
+                    decision.reasoning = f"{decision.reasoning} (risk-off: {ro['reason_nl']})"
+                elif self.strategy_invalid:
+                    blocked = STRATEGY_INVALID_BLOCK
                 else:
-                    total, exposure = await self.portfolio(session, prices, broker)
-                    allowed, blocked = risk.check_buy(
-                        session,
-                        self.limits,
-                        mode,
-                        market,
-                        amount_quote,
-                        total,
-                        exposure,
-                        unrealized=risk.unrealized_pnl(session, mode, prices),
-                    )
-                    if blocked is None:
-                        order, opened, blocked = await self._buy(
+                    async with self._buy_lock:
+                        total, exposure = await self.portfolio(session, prices, broker)
+                        allowed, blocked = risk.check_buy(
                             session,
-                            broker,
-                            strategy,
+                            self.limits,
+                            mode,
                             market,
-                            allowed,
-                            price,
-                            reason=f"{source}: {reasoning[:120]}",
+                            amount_quote,
+                            total,
+                            exposure,
+                            unrealized=risk.unrealized_pnl(session, mode, prices),
                         )
-                        if order is not None:
-                            order_id = order.id
-                        if opened is not None:
-                            decision.amount_quote = opened.entry_quote
-                            executed = True
+                        if blocked is None:
+                            order, opened, blocked = await self._buy(
+                                session,
+                                broker,
+                                strategy,
+                                market,
+                                allowed,
+                                price,
+                                reason=f"{source}: {reasoning[:120]}",
+                            )
+                            session.commit()  # booked before the next buy checks the limits
+                            if order is not None:
+                                order_id = order.id
+                            if opened is not None:
+                                decision.amount_quote = opened.entry_quote
+                                executed = True
             elif action == "sell":
                 if position is None:
                     blocked = "geen open positie om te verkopen"
@@ -1012,7 +1051,8 @@ class TradingEngine:
             "support_levels": levels_summary(strategy, indicators),
             "recent_candles": trajectory or {},
             "news": sentiment.as_dict(),
-            "market_mood": load_market_mood(session),  # Fear & Greed index, market-wide
+            # Fear & Greed index, market-wide; nothing once the feed is switched off.
+            "market_mood": load_market_mood(session) if self.market_mood_enabled else None,
             "long_term_trend": load_trend(session, market) if self.trend_context else None,
             "market_events": self.events_context(session, market, datetime.now(UTC)),
             "position": None
@@ -1158,15 +1198,31 @@ class TradingEngine:
             )
         decision.source, decision.action = "mechanical", "sell"
         decision.reasoning = f"{reason} geraakt op {price:.2f}"
-        market, signal = position.market, decision.signal
+        market, signal, pid = position.market, decision.signal, position.id
+        uncertain = False
         try:
             order, blocked, note = await self._sell(session, broker, position, price, reason)
         except OrderUncertain as exc:
-            order, blocked, note = exc.order, str(exc), None
+            order, blocked, note, uncertain = exc.order, str(exc), None, True
         except (ValueError, BitvavoError) as exc:
             session.rollback()
             order, blocked, note = None, f"verkoop mislukt: {exc}", None
             log.error("%s for %s %s failed: %s", reason, position.mode, market, exc)
+        if blocked is not None and not uncertain:
+            # The sell did not happen (no coins on the account, a refusal) and the next run
+            # tries again: journal that once per period, not on every exit-loop run.
+            now = datetime.now(UTC)
+            last = self.exit_failures.get(pid)
+            self.exit_failures[pid] = {
+                "at": last["at"] if last and now - last["at"] < EXIT_FAILURE_JOURNAL else now,
+                "reason": blocked[:200],
+            }
+            if last is not None and now - last["at"] < EXIT_FAILURE_JOURNAL:
+                log.warning("%s for position %s still fails: %s", reason, pid, blocked)
+                session.rollback()
+                return CycleResult(market, price, signal, "sell", "mechanical", False, blocked)
+        else:
+            self.exit_failures.pop(pid, None)
         if note:
             decision.reasoning += f" ({note})"
         decision.executed = blocked is None
@@ -1210,6 +1266,11 @@ class TradingEngine:
             raise  # the claim stays until reconcile() knows what happened
         except Exception:
             session.rollback()
+            if self._order_in_flight(session, claim.id):
+                # The order was written (and maybe sent) before the error: keep the claim,
+                # reconcile() settles the order and books or releases it.
+                log.error("buy in %s failed after the order was sent; left to reconcile", market)
+                raise
             session.delete(claim)
             session.commit()
             raise
@@ -1294,6 +1355,13 @@ class TradingEngine:
             raise  # stays "closing" until reconcile() knows what happened
         except Exception:
             session.rollback()
+            if self._order_in_flight(session, position.id):
+                # Sent but not settled: reopening would leave a sale reconcile() never books.
+                log.error(
+                    "sell of position %s failed after the order was sent; left to reconcile",
+                    position.id,
+                )
+                raise
             position.status, position.closed_at = "open", None
             session.commit()
             raise
@@ -1307,6 +1375,23 @@ class TradingEngine:
             )
             return order, None, note
         return order, None, None
+
+    @staticmethod
+    def _order_in_flight(session: Session, position_id: int | None) -> bool:
+        """True when an order for this position is pending or unknown (sent, outcome open)."""
+        if position_id is None:
+            return False
+        return (
+            session.scalar(
+                select(Order.id)
+                .where(
+                    Order.position_id == position_id,
+                    Order.status.in_(risk.UNSETTLED_ORDER_STATUSES),
+                )
+                .limit(1)
+            )
+            is not None
+        )
 
     @staticmethod
     def _book_sell(
@@ -1410,30 +1495,47 @@ class TradingEngine:
         """
         positions = list(session.scalars(select(Position).where(Position.status == "open")))
         self.last_exit_run = datetime.now(UTC)
+        stuck = self._stuck_claims(session)
+        open_ids = {p.id for p in positions}
+        failures_before = {pid: f["at"] for pid, f in self.exit_failures.items()}
+        for pid in set(self.exit_failures) - open_ids:
+            self.exit_failures.pop(pid, None)
         if not positions:
-            self.unprotected = []
+            self.unprotected = stuck
+            if failures_before:
+                self.save_state(session)
             return []
         strategy = load_strategy(session)
         prices = await self.client.ticker_prices(sorted({p.market for p in positions}))
         results: list[CycleResult] = []
         unprotected: list[dict[str, Any]] = []
+
+        def unprotect(p: Position, reason: str) -> None:
+            unprotected.append(
+                {
+                    "id": p.id,
+                    "mode": p.mode,
+                    "market": p.market,
+                    "amount": p.amount,
+                    "stop_price": p.stop_price,
+                    "price": prices.get(p.market),
+                    "reason": reason,
+                }
+            )
+
         for p in positions:
             pid, mode, market = p.id, p.mode, p.market
             if self.broker_for(mode) is None:
-                unprotected.append(
-                    {
-                        "id": pid,
-                        "mode": mode,
-                        "market": market,
-                        "amount": p.amount,
-                        "stop_price": p.stop_price,
-                        "price": prices.get(market),
-                    }
+                unprotect(
+                    p,
+                    "de modus kan nu niet handelen (live zonder Bitvavo-sleutel of "
+                    "LIVE_TRADING_ACK)",
                 )
                 continue
             price = prices.get(market)
             if not price:
                 log.warning("exit check: no price for %s, position %s not checked", market, pid)
+                unprotect(p, "geen koers voor deze markt (van de beurs gehaald of hernoemd?)")
                 continue
             lock = self.market_lock(market)
             try:
@@ -1449,20 +1551,58 @@ class TradingEngine:
                 result = await self._mechanical_exit(session, broker, strategy, p, price)
                 if result is not None:
                     results.append(result)
+                    failure = self.exit_failures.get(pid)
+                    if not result.executed and failure is not None:
+                        unprotect(p, f"verkoop bij de stop lukt niet: {failure['reason']}")
             except Exception:  # noqa: BLE001 - one position must not stop the others
                 session.rollback()
                 log.exception("exit check failed for position %s (%s)", pid, market)
             finally:
                 lock.release()
+        unprotected += stuck
+        if {pid: f["at"] for pid, f in self.exit_failures.items()} != failures_before:
+            self.save_state(session)  # so a restart does not journal the same failure again
         if unprotected:
             log.error(
-                "%d open position(s) are NOT protected by stop-loss/take-profit, their mode "
-                "cannot trade now: %s",
+                "%d position(s) are NOT protected by stop-loss/take-profit: %s",
                 len(unprotected),
-                ", ".join(f"{u['mode']} {u['market']} #{u['id']}" for u in unprotected),
+                ", ".join(
+                    f"{u['mode']} {u['market']} #{u['id']} ({u['reason']})" for u in unprotected
+                ),
             )
         self.unprotected = unprotected
         return results
+
+    def _stuck_claims(self, session: Session) -> list[dict[str, Any]]:
+        """Positions stuck in "opening"/"closing" past CLAIM_STALE, because an order behind
+        them stays unsettled: no stop check runs on them and their market is blocked."""
+        cutoff = datetime.now(UTC) - CLAIM_STALE
+        out = []
+        rows = session.scalars(
+            select(Position).where(Position.status.in_(("opening", "closing")))
+        ).all()
+        for p in rows:
+            since = p.opened_at if p.status == "opening" else (p.closed_at or p.opened_at)
+            if since is not None and since.tzinfo is None:
+                since = since.replace(tzinfo=UTC)
+            if since is None or since > cutoff:
+                continue
+            out.append(
+                {
+                    "id": p.id,
+                    "mode": p.mode,
+                    "market": p.market,
+                    "amount": p.amount,
+                    "stop_price": p.stop_price,
+                    "price": None,
+                    "reason": (
+                        ("aankoop" if p.status == "opening" else "verkoop")
+                        + " met onbekende uitkomst sinds "
+                        + f"{since:%Y-%m-%d %H:%M} UTC; controleer de order op Bitvavo"
+                    ),
+                }
+            )
+        return out
 
     # -- reconciliation --
 
@@ -1604,7 +1744,9 @@ class TradingEngine:
             raise ManualOrderError("het bedrag is geen geldig getal")
         if amount < EXCHANGE_MIN_ORDER_EUR:
             raise ManualOrderError(f"minimaal € {EXCHANGE_MIN_ORDER_EUR:.2f} per order")
-        if amount > self.limits.max_trade_eur:
+        # The per-order maximum limits new exposure; a sell only reduces it and is bounded by
+        # the position, so one sell can always close a position in full.
+        if side == "buy" and amount > self.limits.max_trade_eur:
             raise ManualOrderError(
                 f"maximaal € {self.limits.max_trade_eur:.2f} per order (maximum per order)"
             )
@@ -1626,28 +1768,29 @@ class TradingEngine:
                     )
                 prices = await self.client.ticker_prices(sorted({*self.markets, market}))
                 price = prices.get(market) or await self.client.ticker_price(market)
-                total, exposure = await self.portfolio(session, prices, broker)
-                allowed, blocked = risk.check_buy(
-                    session,
-                    self.limits,
-                    mode,
-                    market,
-                    amount,
-                    total,
-                    exposure,
-                    unrealized=risk.unrealized_pnl(session, mode, prices),
-                )
-                if blocked:
-                    raise ManualOrderError(blocked)
-                if allowed + 0.005 < amount:
-                    raise ManualOrderError(
-                        f"de limieten staan nu maximaal € {allowed:.2f} toe in {market}"
-                    )
                 strategy = load_strategy(session)
-                order, _, blocked = await self._buy(
-                    session, broker, strategy, market, amount, price, label
-                )
-                session.commit()
+                async with self._buy_lock:  # inside the market lock, like _run_market
+                    total, exposure = await self.portfolio(session, prices, broker)
+                    allowed, blocked = risk.check_buy(
+                        session,
+                        self.limits,
+                        mode,
+                        market,
+                        amount,
+                        total,
+                        exposure,
+                        unrealized=risk.unrealized_pnl(session, mode, prices),
+                    )
+                    if blocked:
+                        raise ManualOrderError(blocked)
+                    if allowed + 0.005 < amount:
+                        raise ManualOrderError(
+                            f"de limieten staan nu maximaal € {allowed:.2f} toe in {market}"
+                        )
+                    order, _, blocked = await self._buy(
+                        session, broker, strategy, market, amount, price, label
+                    )
+                    session.commit()
                 if blocked:
                     raise ManualOrderError(blocked)
                 return order

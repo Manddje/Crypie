@@ -690,6 +690,8 @@ async def test_exit_loop_reports_positions_it_cannot_protect(session, caplog):
             "amount": 5.0,
             "stop_price": 9.0,
             "price": 8.0,
+            "reason": "de modus kan nu niet handelen (live zonder Bitvavo-sleutel of "
+            "LIVE_TRADING_ACK)",
         }
     ]
     assert "NOT protected" in caplog.text

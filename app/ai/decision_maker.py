@@ -155,11 +155,15 @@ def split_decision_context(context: dict[str, Any]) -> tuple[dict[str, Any], dic
         ctx["market_events"] = {**events, "risk_off": ro}
 
     strategy = ctx.get("strategy")
-    if isinstance(strategy, dict) and "description" in strategy:
+    if isinstance(strategy, dict) and ("description" in strategy or "name" in strategy):
         strategy = dict(strategy)
-        description = clip(strategy.pop("description"), DESCRIPTION_MAX)
+        description = clip(strategy.pop("description", None), DESCRIPTION_MAX)
         if description:
             untrusted["strategy_description"] = description
+        # The name is free text as well (an applied evaluator proposal may have written it).
+        name = clip(strategy.pop("name", None), 80)
+        if name:
+            untrusted["strategy_name"] = name
         ctx["strategy"] = strategy
 
     perf = ctx.get("recent_performance")

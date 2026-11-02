@@ -94,6 +94,8 @@ def item(session, title, sentiment=-0.9, impact=3, coins="BTC", url=None, key=No
     it = NewsItem(
         source="rss",
         source_name="Src",
+        # One feed per site: the article's own host stands in for its feed here.
+        feed_host=(url or f"https://{title}.test/x").split("/")[2],
         url=url or f"https://{title}.test/x",
         title=title,
         published_at=datetime.now(UTC) - timedelta(hours=ago_h),

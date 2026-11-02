@@ -21,6 +21,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import feedparser
+import httpcore
 import httpx
 
 log = logging.getLogger(__name__)
@@ -34,7 +35,8 @@ MAX_REDIRECTS = 3
 MAX_ITEMS_PER_RESPONSE = 200
 MAX_COINS = 10  # 10 x (ticker + comma) fits source_coins VARCHAR(128)
 MAX_VOTES_JSON = 2000
-URL_MAX = 1024
+URL_MAX = 1024  # a stored feed address
+REQUEST_URL_MAX = 8192  # a request URL, query included (a long GDELT query is fine)
 
 
 @dataclass
@@ -47,6 +49,7 @@ class RawItem:
     summary: str | None = None
     coins: list[str] = field(default_factory=list)
     votes: dict[str, Any] | None = None
+    feed_host: str | None = None  # RSS: host of the configured feed URL
 
 
 # -- validation helpers -------------------------------------------------------------------
@@ -145,7 +148,7 @@ class UnsafeURLError(ValueError):
 _BLOCKED_SUFFIXES = (".localhost", ".local", ".internal", ".lan", ".home.arpa", ".intranet")
 
 
-def validate_feed_url(url: Any) -> str:
+def validate_feed_url(url: Any, max_length: int = URL_MAX) -> str:
     """Check a news/feed URL before it is stored or fetched; returns the stripped URL.
 
     Only http(s) with a dotted host name; no user:password@, no IP literal (also not in decimal
@@ -155,8 +158,8 @@ def validate_feed_url(url: Any) -> str:
     if not isinstance(url, str) or not url.strip():
         raise UnsafeURLError("lege URL")
     u = url.strip()
-    if len(u) > URL_MAX:
-        raise UnsafeURLError(f"URL is langer dan {URL_MAX} tekens")
+    if len(u) > max_length:
+        raise UnsafeURLError(f"URL is langer dan {max_length} tekens")
     if any(ord(ch) < 33 or ch == "\x7f" for ch in u):
         raise UnsafeURLError("URL bevat spaties of stuurtekens")
     try:
@@ -216,7 +219,7 @@ async def resolve_host(host: str, port: int) -> list[str]:
 async def check_public_url(url: str) -> None:
     """Raise UnsafeURLError unless ``url`` passes :func:`validate_feed_url` and its host name
     resolves only to public addresses."""
-    validate_feed_url(url)
+    validate_feed_url(url, REQUEST_URL_MAX)
     parts = urlsplit(url)
     host = parts.hostname or ""
     port = parts.port or (443 if parts.scheme.lower() == "https" else 80)
@@ -229,6 +232,71 @@ async def check_public_url(url: str) -> None:
     bad = [a for a in addresses if not is_public_ip(a)]
     if bad:
         raise UnsafeURLError(f"{host} wijst naar een niet-publiek adres ({bad[0]})")
+
+
+class VettedNetworkBackend(httpcore.AsyncNetworkBackend):
+    """Connects only to addresses it resolved and checked itself.
+
+    :func:`check_public_url` resolves the host before a request, but the connection would
+    resolve it again: a rebinding DNS answer (public first, then 169.254.169.254 or a Docker
+    address) would pass the check and reach the internal address. Here the connection goes to
+    the vetted IP; TLS (SNI, certificate) and the Host header keep the original name.
+    """
+
+    def __init__(self, inner: httpcore.AsyncNetworkBackend | None = None):
+        self._inner = inner or httpcore.AnyIOBackend()
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Any = None,
+    ) -> httpcore.AsyncNetworkStream:
+        try:
+            addresses = await resolve_host(host, port)
+        except OSError as exc:
+            raise httpcore.ConnectError(f"{host} is niet te resolven ({exc})") from exc
+        bad = [a for a in addresses if not is_public_ip(a)]
+        if not addresses or bad:
+            shown = bad[0] if bad else "geen adres"
+            raise httpcore.ConnectError(f"{host} wijst naar een niet-publiek adres ({shown})")
+        last: Exception | None = None
+        for address in dict.fromkeys(addresses):
+            try:
+                return await self._inner.connect_tcp(
+                    address.split("%", 1)[0],
+                    port,
+                    timeout=timeout,
+                    local_address=local_address,
+                    socket_options=socket_options,
+                )
+            except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
+                last = exc
+        assert last is not None
+        raise last
+
+    async def connect_unix_socket(
+        self, path: str, timeout: float | None = None, socket_options: Any = None
+    ) -> httpcore.AsyncNetworkStream:
+        raise httpcore.ConnectError("unix sockets zijn niet toegestaan")
+
+    async def sleep(self, seconds: float) -> None:
+        await self._inner.sleep(seconds)
+
+
+def vetted_transport() -> httpx.AsyncHTTPTransport:
+    """httpx's transport, with a connection pool that connects through VettedNetworkBackend."""
+    transport = httpx.AsyncHTTPTransport()
+    transport._pool = httpcore.AsyncConnectionPool(  # noqa: SLF001 - no public hook in httpx
+        ssl_context=httpx.create_ssl_context(),
+        max_connections=100,
+        max_keepalive_connections=20,
+        keepalive_expiry=5.0,
+        network_backend=VettedNetworkBackend(),
+    )
+    return transport
 
 
 class ResponseTooLarge(httpx.HTTPError):
@@ -259,6 +327,10 @@ def parse_rss(content: bytes, feed_url: str, now: datetime | None = None) -> lis
     parsed = feedparser.parse(content)
     feed_title = _str(parsed.feed.get("title")) or feed_url
     feed_title = (_clean(feed_title, 128) or feed_url[:128]).strip()
+    try:
+        feed_host = (urlsplit(feed_url).hostname or "").rstrip(".").lower()[:255] or None
+    except ValueError:
+        feed_host = None
     now = now or datetime.now(UTC)
     items: list[RawItem] = []
     for entry in parsed.entries[:MAX_ITEMS_PER_RESPONSE]:
@@ -280,6 +352,7 @@ def parse_rss(content: bytes, feed_url: str, now: datetime | None = None) -> lis
                     title=title,
                     published_at=published,
                     summary=_clean(entry.get("summary")),
+                    feed_host=feed_host,
                 )
             )
         except Exception as exc:  # noqa: BLE001  # one bad entry must not drop the feed
@@ -488,9 +561,13 @@ class NewsFetcher:
         self.google_news_enabled = google_news_enabled
         self.fear_greed_enabled = fear_greed_enabled
         self.fear_greed: dict[str, Any] | None = None
+        self._plain_http_warned: set[str] = set()
         # Redirects are followed by hand in _get, so every hop is checked.
         self._http = httpx.AsyncClient(
-            timeout=timeout, follow_redirects=False, headers={"User-Agent": USER_AGENT}
+            timeout=timeout,
+            follow_redirects=False,
+            headers={"User-Agent": USER_AGENT},
+            transport=vetted_transport(),
         )
 
     async def aclose(self) -> None:
@@ -540,6 +617,14 @@ class NewsFetcher:
         return await asyncio.to_thread(json.loads, resp.content)
 
     async def _one_feed(self, url: str) -> list[RawItem]:
+        if url[:7].lower() == "http://" and url not in self._plain_http_warned:
+            # Stored before https was required: still read, but say so once.
+            self._plain_http_warned.add(url)
+            log.warning(
+                "RSS feed %s uses plain http: its content can be changed on the way; "
+                "switch it to https in the settings",
+                redact(url),
+            )
         try:
             resp = await self._get(url)
             resp.raise_for_status()

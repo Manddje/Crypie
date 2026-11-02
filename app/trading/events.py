@@ -174,6 +174,7 @@ def recent_shock(session, coin: str, hours: int, now: datetime | None = None):
         NewsItem.assessed.is_(True),
         NewsItem.relevant.is_(True),
         NewsItem.published_at >= now - timedelta(hours=hours),
+        NewsItem.published_at <= now,  # a future date must not keep a pause going for months
     )
     rows = session.scalars(
         select(NewsItem)

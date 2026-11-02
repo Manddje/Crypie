@@ -18,6 +18,7 @@
   {% endif %}
   {{ ui.unprotected_notice(unprotected_positions) }}
   {{ ui.session_secret_notice(session_secret_weak) }}
+  {% for reminder in live_reminders %}{{ ui.notice("warn", reminder) }}{% endfor %}
   {% if config_warning %}{{ ui.notice("warn", config_warning) }}{% endif %}
   {% if strategy_warning %}{{ ui.notice("warn", strategy_warning) }}{% endif %}
   {% if error %}{{ ui.notice("error", "Bitvavo is op dit moment niet bereikbaar. Koersen en saldo kunnen verouderd of leeg zijn. (" ~ error ~ ")") }}{% endif %}

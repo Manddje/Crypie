@@ -397,6 +397,7 @@ textarea.code { font-family: var(--mono); font-size: 13px; min-height: 24rem; }
   line-height: 1.5;
 }
 .notice .icon { flex: none; width: 20px; height: 20px; margin-top: 1px; }
+.page > .notice { margin-bottom: 16px; }
 .notice .body { flex: 1; }
 .notice .body form, .notice .body .btn { margin-top: 10px; }
 .notice-info { background: var(--accent-tint); color: var(--text); }

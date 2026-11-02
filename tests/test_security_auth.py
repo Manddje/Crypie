@@ -199,7 +199,15 @@ async def test_password_change_and_logout_everywhere_end_other_sessions(web):
     await other.aclose()
 
     other = _other_browser(web)
-    r = await web.post("/account", data={"action": "recovery", "password": "nieuw-wachtwoord"})
+    _forget_last_code()
+    r = await web.post(
+        "/account",
+        data={
+            "action": "recovery",
+            "password": "nieuw-wachtwoord",
+            "code": _current_code(secret),
+        },
+    )
     assert r.status_code == 200
     assert (await web.get("/account")).status_code == 200
     assert (await other.get("/account")).status_code == 303

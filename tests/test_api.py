@@ -5,6 +5,7 @@ import pytest
 import respx
 from httpx import ASGITransport, AsyncClient, Response
 
+from app.db import Order, SessionLocal
 from app.main import app
 
 BASE = "https://api.bitvavo.com/v2"
@@ -342,9 +343,12 @@ async def test_reset_paper_portfolio(api):
     respx.get(f"{BASE}/ticker/price").mock(
         return_value=Response(200, json=[{"market": "BTC-EUR", "price": "100"}])
     )
+    with SessionLocal() as db:  # orders of earlier tests count for the trades-per-day limit
+        db.query(Order).delete()
+        db.commit()
     before = (await api.get("/api/balance")).json()["balances"]["EUR"]
     r = await api.post("/api/orders", json={"market": "BTC-EUR", "side": "buy", "amount_quote": 50})
-    assert r.status_code == 201
+    assert r.status_code == 201, r.text
     assert (await api.get("/api/balance")).json()["balances"]["EUR"] == before - 50
 
     r = await api.post("/settings", data={"action": "reset_paper"}, follow_redirects=False)

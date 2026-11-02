@@ -204,8 +204,15 @@ def action_pill(action: str | None) -> str:
     return {"buy": "pill-green", "sell": "pill-red", "hold": ""}.get(action or "", "")
 
 
+def login_disabled(request: object) -> bool:
+    """True when the app runs without its login (AUTH_ENABLED=false): every page warns."""
+    state = getattr(getattr(request, "app", None), "state", None)
+    return state is not None and "auth" in state._state and state.auth is None
+
+
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 templates.env.globals["asset_version"] = ASSET_VERSION
+templates.env.globals["login_disabled"] = login_disabled
 templates.env.filters.update(
     {
         "nl": nl,

@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -58,6 +59,7 @@ def _row_for(r: RawItem, now: datetime) -> dict[str, Any] | None:
         "published_at": published_at(r.published_at, now),
         "source_coins": ",".join(clean_tickers(r.coins))[:128] or None,
         "source_votes": votes,
+        "feed_host": r.feed_host[:255] if isinstance(r.feed_host, str) and r.feed_host else None,
     }
 
 
@@ -72,7 +74,8 @@ def store_items(
     if not raw:
         return 0
     now = now or datetime.now(UTC)
-    cutoff = now - timedelta(hours=max_age_hours)
+    # Never older than the retention: such items would be pruned and fetched again each run.
+    cutoff = now - timedelta(hours=min(max_age_hours, NEWS_RETENTION_DAYS * 24))
     fresh: dict[str, dict[str, Any]] = {}
     for r in raw:
         try:
@@ -201,11 +204,12 @@ def pending_items(session: Session, limit: int, since: datetime | None = None) -
 
 
 def recent_items(session: Session, hours: int = 24, limit: int = 100) -> list[NewsItem]:
-    cutoff = datetime.now(UTC) - timedelta(hours=hours)
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(hours=hours)
     return list(
         session.scalars(
             select(NewsItem)
-            .where(NewsItem.published_at >= cutoff)
+            .where(NewsItem.published_at >= cutoff, NewsItem.published_at <= now)
             .order_by(NewsItem.published_at.desc())
             .limit(limit)
         )
@@ -218,17 +222,41 @@ def event_key_for(item: NewsItem) -> str:
 
 
 _SECOND_LEVEL = {"co", "com", "org", "net", "ac", "gov", "edu", "ne", "or"}
+_NOT_ALNUM = re.compile(r"[^a-z0-9]+")
+
+
+def outlet_name(name: str | None) -> str:
+    """A publisher name as an outlet key: lower-case letters and digits ("GlobeNewswire",
+    "The Block" -> "globenewswire", "theblock")."""
+    return _NOT_ALNUM.sub("", (name or "").lower()) or "?"
+
+
+def outlet_host(host: str | None) -> str:
+    """A host as an outlet key: the main label of its registrable domain, so subdomains and
+    country domains of one publisher meet its name ("globenewswire.com", "bbc.co.uk" ->
+    "globenewswire", "bbc")."""
+    labels = [x for x in (host or "").lower().rstrip(".").split(".") if x]
+    if len(labels) < 2:
+        return outlet_name(labels[0] if labels else "")
+    second_level = len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in _SECOND_LEVEL
+    return outlet_name(labels[-3] if second_level else labels[-2])
 
 
 def outlet_of(item: NewsItem) -> str:
-    """Who published an article: the site's domain, or the publisher name for Google News
-    (whose links all point at news.google.com). Subdomains of one site count as one outlet."""
-    host = (urlsplit(item.url or "").hostname or "").lower().removeprefix("www.")
+    """Who published an article, as one key for every source, so "two independent outlets"
+    means the same everywhere (sentiment, /news, the shock pause, news entries and exits).
+
+    RSS: the feed itself (its site; its title for older rows), never the hosts its items link
+    to (one hostile feed can link anywhere). Google News: the publisher's name (its links all
+    point at news.google.com). Otherwise the article's site. Names and sites share one key
+    space, so one publisher reached through two aggregators counts once."""
+    if item.source == "rss":
+        # Rows stored before feed_host existed: the feed's own title, constant per feed.
+        return outlet_host(item.feed_host) if item.feed_host else outlet_name(item.source_name)
+    host = (urlsplit(item.url or "").hostname or "").lower()
     if item.source == "googlenews" or not host or host.endswith("news.google.com"):
-        return "name:" + (item.source_name or "").strip().lower()
-    labels = host.split(".")
-    keep = 3 if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in _SECOND_LEVEL else 2
-    return ".".join(labels[-keep:])
+        return outlet_name(item.source_name)
+    return outlet_host(host)
 
 
 # One outlet alone cannot make a news fact "groot" (impact 3), nor make a market-wide ("ALL")
@@ -238,8 +266,9 @@ UNCONFIRMED_MAX_IMPACT = 2
 
 
 def _lead(members: list[NewsItem]) -> NewsItem:
-    """The article shown for a news fact: the first one published (not the most dramatic)."""
-    return min(members, key=lambda m: (_published(m), m.id or 0))
+    """The article shown for a news fact: the first one we saw (not the most dramatic, and
+    not the one that backdates itself: a publisher sets its own date, we set fetched_at)."""
+    return min(members, key=lambda m: (_fetched(m), _published(m), m.id or 0))
 
 
 def _outlet_mean_sentiment(members: list[NewsItem]) -> float | None:
@@ -419,10 +448,15 @@ def recent_event_keys(
     session: Session, hours: int = 48, limit: int = 40, now: datetime | None = None
 ) -> list[str]:
     """Most-used event keys of the last ``hours``, so Claude reuses them for new items."""
-    cutoff = (now or datetime.now(UTC)) - timedelta(hours=hours)
+    now = now or datetime.now(UTC)
+    cutoff = now - timedelta(hours=hours)
     rows = session.execute(
         select(NewsItem.event_key, func.count(NewsItem.id))
-        .where(NewsItem.event_key.is_not(None), NewsItem.published_at >= cutoff)
+        .where(
+            NewsItem.event_key.is_not(None),
+            NewsItem.published_at >= cutoff,
+            NewsItem.published_at <= now,
+        )
         .group_by(NewsItem.event_key)
         .order_by(func.count(NewsItem.id).desc())
         .limit(limit)
@@ -558,6 +592,11 @@ def _published(item: NewsItem) -> datetime:
     return item.published_at if item.published_at.tzinfo else item.published_at.replace(tzinfo=UTC)
 
 
+def _fetched(item: NewsItem) -> datetime:
+    """When we first stored the article (its publication date for rows without one)."""
+    return aware(item.fetched_at) if item.fetched_at is not None else _published(item)
+
+
 # After this many failed Claude assessments an item is set aside instead of retried forever.
 MAX_ASSESS_ATTEMPTS = 3
 FAILED_SUMMARY_NL = "Beoordeling door Claude mislukt; bericht overgeslagen."
@@ -661,6 +700,15 @@ class NewsService:
                     session.rollback()
                     errors.append(str(exc))
                     log.warning("News assessment stopped: %s", exc)
+                    break
+                except anthropic.APITimeoutError as exc:
+                    # Before the connection branch (it is a subclass): a batch that times out
+                    # may be one an article forces into a runaway answer. Count it, so it is
+                    # split up and set aside after a few tries instead of paid for every run.
+                    session.rollback()
+                    errors.append(f"Claude-beoordeling mislukt: {describe_error(exc)}")
+                    log.warning("News assessment timed out: %s", describe_error(exc))
+                    self._count_failure(session, batch, now)
                     break
                 except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:
                     # The API is down or slow: not the articles' fault, try again next run.

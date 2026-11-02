@@ -4,6 +4,9 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  # Weekly, so pip-audit also reports a new CVE in locked packages that did not change.
+  schedule:
+    - cron: "17 5 * * 1"
 
 # Read-only token for every job; nothing here needs to write to the repository.
 permissions:

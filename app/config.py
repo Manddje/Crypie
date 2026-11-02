@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from functools import lru_cache
@@ -11,6 +12,11 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from app.trading.events import default_calendar_lines
+
+log = logging.getLogger(__name__)
+
+AUTH_SESSION_HOURS_MAX = 168  # a week
+NEWS_MAX_AGE_HOURS_MAX = 720  # the portal's maximum, below the 30-day news retention
 
 
 class Settings(BaseSettings):
@@ -87,6 +93,9 @@ class Settings(BaseSettings):
     shock_pause_hours: int = 6  # after highest-impact, strongly negative news; 0 = off
     event_calendar: Annotated[list[str], NoDecode] = default_calendar_lines()
     live_trading_ack: bool = False  # must be true to start in live mode
+    # Your statement that the live key can only trade (no withdraw) and has an IP whitelist in
+    # Bitvavo. Not checked and not required: without it the dashboard reminds you in live mode.
+    bitvavo_key_restricted: bool = False
     # Exit loop: stop-loss, trailing stop and take-profit of every open position, this often.
     exit_check_interval_min: int = 2
     # Live: EUR the bot may manage. 0 = the whole Bitvavo account (exposure and the daily loss
@@ -135,6 +144,38 @@ class Settings(BaseSettings):
     def _clamp_exit_interval(cls, value: int) -> int:
         # Exits must never be switched off by a bad value; clamp instead of failing startup.
         return min(max(int(value), 1), 60)
+
+    @field_validator("auth_session_hours", mode="after")
+    @classmethod
+    def _clamp_session_hours(cls, value: int) -> int:
+        # A typo must neither make sessions live for years nor make login impossible; clamp
+        # with a warning instead of failing startup.
+        clamped = min(max(int(value), 1), AUTH_SESSION_HOURS_MAX)
+        if clamped != value:
+            log.warning("AUTH_SESSION_HOURS=%r is out of range; using %d", value, clamped)
+        return clamped
+
+    @field_validator("news_max_age_hours", mode="after")
+    @classmethod
+    def _clamp_news_age(cls, value: int) -> int:
+        # Older articles than the news retention would be pruned and fetched again each run.
+        clamped = min(max(int(value), 1), NEWS_MAX_AGE_HOURS_MAX)
+        if clamped != value:
+            log.warning("NEWS_MAX_AGE_HOURS=%r is out of range; using %d", value, clamped)
+        return clamped
+
+    @field_validator(
+        "max_trade_eur_ceiling", "max_exposure_pct_ceiling", "max_trades_per_day_ceiling"
+    )
+    @classmethod
+    def _positive_ceiling(cls, value: float, info) -> float:
+        # A ceiling of 0 or below would clamp every limit to nothing (and below min_trade_eur);
+        # fall back to the built-in ceiling with a warning instead of failing startup.
+        if value > 0:
+            return value
+        default = cls.model_fields[info.field_name].default
+        log.warning("%s=%r must be above 0; using %r", info.field_name.upper(), value, default)
+        return default
 
     @field_validator("live_capital_eur", mode="after")
     @classmethod

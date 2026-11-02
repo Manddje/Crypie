@@ -122,6 +122,9 @@ class NewsItem(Base):
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     source_coins: Mapped[str | None] = mapped_column(String(128), nullable=True)  # "BTC,ETH"
     source_votes: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON (CryptoPanic)
+    # RSS only: the site of the feed the item came from. A feed chooses its own links, so the
+    # feed (not the link host) is the outlet when independent sources are counted.
+    feed_host: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)
 
     # Assessment (filled by Claude)
     assessed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
@@ -302,6 +305,9 @@ class AuthUser(Base):
     enrol_token_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Wrong second-factor codes for this account counted just before the last successful
+    # login; shown on /account so a leaked password plus code guessing does not go unnoticed.
+    mfa_failures_before_login: Mapped[int] = mapped_column(Integer, default=0)
 
     @property
     def mfa_enrolled(self) -> bool:

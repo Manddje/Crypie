@@ -310,7 +310,8 @@ SPECS: tuple[Spec, ...] = (
         "max_trades_per_day",
         "limits",
         "Maximum aantal trades per dag",
-        "Uitgevoerde koop- en verkooporders van de bot, handmatige orders tellen niet mee.",
+        "Uitgevoerde koop- en verkooporders vandaag, ook handmatige orders en verkopen door "
+        "stop-loss of take-profit. Daarna koopt de bot niet meer; verkopen blijft altijd mogelijk.",
         kind="int",
         min=0,
         max=200,
@@ -501,13 +502,20 @@ SPEC_BY_KEY: dict[str, Spec] = {s.key: s for s in SPECS}
 EDITABLE_KEYS = tuple(SPEC_BY_KEY)
 
 # Changing (or resetting) these asks for the current password again: they decide whether real
-# money is traded, how much, in which markets, and which outside text reaches Claude.
+# money is traded, how much, in which markets, how well open positions are protected (risk-off
+# window, shock pause, exit checks), and which outside text reaches Claude.
 SENSITIVE_KEYS: frozenset[str] = frozenset(
     {
         "trading_mode",
+        "trading_enabled",
         "markets",
+        "exit_check_interval_min",
         "claude_unavailable_mode",
         "risk_off_enabled",
+        "risk_off_before_min",
+        "risk_off_after_min",
+        "event_calendar",
+        "shock_pause_hours",
         "news_rss_feeds",
         "claude_monthly_budget_usd",
     }
@@ -590,6 +598,16 @@ def apply_ceilings(settings: Settings) -> Settings:
                 "%s=%r is above %s=%r; using the ceiling", key, value, ceiling_key.upper(), ceiling
             )
             update[key] = type(value)(ceiling)
+    max_trade = update.get("max_trade_eur")
+    if max_trade is not None and settings.min_trade_eur > max_trade:
+        # A low ceiling must not leave an unsatisfiable minimum behind (and make every portal
+        # save fail on min_trade_eur): the minimum follows the clamped maximum.
+        log.warning(
+            "min_trade_eur=%r is above the clamped max_trade_eur=%r; using the maximum",
+            settings.min_trade_eur,
+            max_trade,
+        )
+        update["min_trade_eur"] = float(max_trade)
     return settings.model_copy(update=update) if update else settings
 
 
@@ -680,7 +698,7 @@ def _parse_markets(raw: Any) -> list[str]:
         m = str(part).strip().upper()
         if not m:
             continue
-        if not MARKET_RE.match(m):
+        if not MARKET_RE.fullmatch(m):
             raise ValueError(f"{m} is geen euromarkt in Bitvavo-notatie (bijvoorbeeld BTC-EUR)")
         if m not in markets:
             markets.append(m)
@@ -692,20 +710,24 @@ def _parse_markets(raw: Any) -> list[str]:
 
 
 def _feed_problem(url: str) -> str | None:
-    """Why this feed address is refused, or None. Only http(s) to a named public host."""
+    """Why this feed address is refused, or None. Only https to a named public host: anyone on
+    the network path can rewrite a plain-http feed, and its text reaches the sentiment and
+    Claude."""
     shown = url[:60]
     if len(url) > MAX_URL_LENGTH:
         return f"'{shown}…' is te lang (maximaal {MAX_URL_LENGTH} tekens)"
-    if not re.match(r"^https?://\S+$", url, re.IGNORECASE):
-        return f"'{shown}' is geen geldig adres (begin met http:// of https://)"
+    if re.match(r"^http://\S+$", url, re.IGNORECASE):
+        return f"'{shown}': gebruik https:// (een http-feed kan onderweg worden aangepast)"
+    if not re.match(r"^https://\S+$", url, re.IGNORECASE):
+        return f"'{shown}' is geen geldig adres (begin met https://)"
     try:
         parts = urlsplit(url)
         host = parts.hostname
         _ = parts.port  # raises ValueError on a malformed port
     except ValueError:
         return f"'{shown}' is geen geldig adres"
-    if parts.scheme.lower() not in ("http", "https") or not host:
-        return f"'{shown}' is geen geldig adres (begin met http:// of https://)"
+    if parts.scheme.lower() != "https" or not host:
+        return f"'{shown}' is geen geldig adres (begin met https://)"
     if parts.username is not None or parts.password is not None:
         return f"'{shown}': een adres met inloggegevens is niet toegestaan"
     host = host.rstrip(".").lower()

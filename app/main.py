@@ -23,6 +23,7 @@ from app.ai.decision_maker import DecisionMaker
 from app.ai.evaluator import Evaluator
 from app.ai.news_analyst import NewsAnalyst
 from app.ai.strategy_assistant import StrategyAssistant
+from app.api_docs import redoc_page, swagger_page
 from app.auth.routes import (
     StepUpError,
     require_current_password,
@@ -43,6 +44,7 @@ from app.news.service import (
     NEWS_RETENTION_DAYS,
     NewsService,
     annotate_groups,
+    clamp_future_items,
     clear_market_mood,
     count_status,
     group_items,
@@ -113,13 +115,16 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
-def live_blocker(settings: Settings, client: BitvavoClient) -> str | None:
+def live_blocker(
+    settings: Settings, client: BitvavoClient, *, for_exits: bool = False
+) -> str | None:
     """Why live trading is not allowed right now, or None when it is.
 
-    Both conditions live in the environment on purpose: switching to live in the portal is
-    never enough on its own.
+    All conditions live in the environment on purpose: switching to live in the portal is
+    never enough on its own. ``for_exits`` skips the login condition: it guards opening
+    trades, while protective sells of open live positions must keep running without a login.
     """
-    if not settings.auth_enabled:
+    if not for_exits and not settings.auth_enabled:
         return "AUTH_ENABLED staat op false; live handelen vereist een login"
     if not client.authenticated:
         return "er is geen Bitvavo-sleutel (BITVAVO_API_KEY en BITVAVO_API_SECRET) ingesteld"
@@ -145,7 +150,7 @@ def exit_broker(app: FastAPI, mode: str) -> Broker | None:
     """
     state = app.state
     if mode == "live":
-        if live_blocker(state.env, state.client):
+        if live_blocker(state.env, state.client, for_exits=True):
             return None
         return LiveBroker(state.client)
     if mode == "paper":
@@ -209,6 +214,7 @@ def apply_settings(app: FastAPI, new: Settings) -> None:
     engine.fee_pct = new.trading_fee_pct
     engine.watch_max_min = new.watch_max_min
     engine.trend_context = new.trend_context_enabled
+    engine.market_mood_enabled = new.fear_greed_enabled
     engine.live_capital_eur = new.live_capital_eur
     _apply_risk_off(engine, new)
     if new.watch_interval_min <= 0:
@@ -254,6 +260,15 @@ async def lifespan(app: FastAPI):
         requeued = requeue_items_without_event_key(session)
         if requeued:
             log.info("news: %d items re-queued for an event key", requeued)
+        try:
+            # Stored articles dated in the future (from before the ingestion clamp) would keep
+            # a shock pause or sentiment alive; the news job may not run (news switched off).
+            clamped = clamp_future_items(session)
+            if clamped:
+                log.info("news: %d future-dated items clamped", clamped)
+        except Exception:  # noqa: BLE001 - never block startup on housekeeping
+            session.rollback()
+            log.exception("clamping future-dated news at startup failed")
     client = BitvavoClient(env.bitvavo_api_key, env.bitvavo_api_secret, env.bitvavo_rest_url)
     app.state.client = client
     if client.authenticated:
@@ -326,6 +341,7 @@ async def lifespan(app: FastAPI):
     )
     engine: TradingEngine = app.state.engine
     engine.trend_context = settings.trend_context_enabled
+    engine.market_mood_enabled = settings.fear_greed_enabled
     engine.live_capital_eur = settings.live_capital_eur
     engine.broker_for_mode = lambda mode: exit_broker(app, mode)
     _apply_risk_off(engine, settings)
@@ -557,10 +573,14 @@ app = FastAPI(
     title="Crypie",
     version="0.1.0",
     lifespan=lifespan,
-    docs_url="/docs" if _docs else None,
-    redoc_url="/redoc" if _docs else None,
+    # /docs and /redoc are served below with pinned, SRI-checked scripts (app/api_docs.py).
+    docs_url=None,
+    redoc_url=None,
     openapi_url="/openapi.json" if _docs else None,
 )
+if _docs:
+    app.get("/docs", include_in_schema=False)(lambda: swagger_page(app.title, app.openapi_url))
+    app.get("/redoc", include_in_schema=False)(lambda: redoc_page(app.title, app.openapi_url))
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.middleware("http")(require_login)
 # Added last = runs first: headers on every response, then the body limit, then the origin
@@ -1286,6 +1306,40 @@ def _proposal(ev: Evaluation) -> Strategy | None:
         return None
 
 
+# A proposal whose hard buy conditions fire on more candles than this (live, per its stored
+# backtest) is not applied with one click: it buys on Claude's judgement almost every cycle.
+PROPOSAL_MAX_LIVE_BUY_PCT = 50.0
+
+
+def _fmt_pct(value: float | None) -> str:
+    return "geen stop" if value is None else f"{value:g}%"
+
+
+def _proposal_guard_problems(current: Strategy, proposal: Strategy, ev: Evaluation) -> list[str]:
+    """What an evaluator proposal (which news can influence) may not do on its own: widen or
+    drop the stop from entry, or buy on nearly every candle. The owner can still save such a
+    strategy deliberately on the strategy page."""
+    problems: list[str] = []
+    before, after = current.entry_stop_pct(), proposal.entry_stop_pct()
+    if before is not None and (after is None or after > before + 1e-9):
+        problems.append(
+            f"het voorstel maakt de stop ruimer ({_fmt_pct(before)} -> {_fmt_pct(after)}); pas "
+            "dat zelf aan op de strategiepagina als je dat wilt"
+        )
+    try:
+        backtest_ = json.loads(ev.proposal_backtest) if ev.proposal_backtest else None
+        live_pct = backtest_["proposed"]["live_buy_signal_pct"]
+    except (ValueError, KeyError, TypeError):
+        live_pct = None
+    if isinstance(live_pct, int | float) and live_pct > PROPOSAL_MAX_LIVE_BUY_PCT:
+        problems.append(
+            f"het voorstel geeft live op {live_pct:g}% van de candles een koopsignaal (meer dan "
+            f"{PROPOSAL_MAX_LIVE_BUY_PCT:g}%); pas dat zelf aan op de strategiepagina als je "
+            "dat wilt"
+        )
+    return problems
+
+
 def _apply_proposal(request: Request, session: Session, evaluation_id: int) -> Strategy:
     """Make an evaluation's proposal the active strategy, with the same checks as a save via
     the API or the strategy page. Raises ProposalError."""
@@ -1303,6 +1357,10 @@ def _apply_proposal(request: Request, session: Session, evaluation_id: int) -> S
         check_for_use(strategy)
     except ValueError as exc:
         raise ProposalError(400, str(exc)) from exc
+    guard = _proposal_guard_problems(load_strategy(session), strategy, ev)
+    if guard:
+        message = "; ".join(guard)
+        raise ProposalError(400, message[0].upper() + message[1:] + ".")
     save_strategy(session, strategy)
     ev.applied = True
     session.commit()
@@ -1341,6 +1399,7 @@ def _trading_context(
             row["problems"] = use_problems(proposal)
             if proposal.market not in settings.markets:
                 row["problems"].append(f"{proposal.market} staat niet in MARKETS")
+            row["problems"] += _proposal_guard_problems(strategy, proposal, e)
         else:
             row["problems"] = []
         evaluation_rows.append(row)
@@ -1646,7 +1705,13 @@ async def _save_settings(
         blocker = live_blocker(app_.state.env, app_.state.client)
         if blocker:
             raise SettingsError({"trading_mode": f"live handelen kan nog niet: {blocker}"})
-    if cfg.sensitive_changes(app_.state.settings, candidate):
+    if "trading_fee_pct" not in values:
+        # Keep the account's real Bitvavo fee found at startup; a save of another setting
+        # must not swap it back for TRADING_FEE_PCT.
+        candidate = candidate.model_copy(
+            update={"trading_fee_pct": app_.state.settings.trading_fee_pct}
+        )
+    if _sensitive_changes(session, app_.state, candidate):
         await require_current_password(request, session, password)
     cfg.save_overrides(session, values, app_.state.env)
     _log_setting_changes(app_.state.settings, candidate)
@@ -1654,6 +1719,24 @@ async def _save_settings(
     _drop_disabled_mood(session, candidate)
     app_.state.config_warning = None
     return candidate
+
+
+def _sensitive_changes(session: Session, state, candidate: Settings) -> list[str]:
+    """Sensitive settings that ``candidate`` really changes.
+
+    A key counts only when it differs from the running settings *and* from the stored ones,
+    so a runtime-only override (the real Bitvavo fee found at startup, or the paper fallback
+    of trading_mode) does not make every save look sensitive.
+    """
+    runtime: Settings = state.settings
+    stored = cfg.effective_settings(session, state.env).model_copy(
+        update={"trading_mode": runtime.trading_mode}
+    )
+    return [
+        k
+        for k in cfg.sensitive_changes(runtime, candidate)
+        if k in cfg.sensitive_changes(stored, candidate)
+    ]
 
 
 def _drop_disabled_mood(session: Session, settings: Settings) -> None:
@@ -1684,6 +1767,9 @@ async def _reset_settings(
     old: Settings = request.app.state.settings
     removed = cfg.reset_overrides(session, keys)
     new = cfg.effective_settings(session, request.app.state.env)
+    if keys is not None and "trading_fee_pct" not in keys:
+        # Keep the account's real Bitvavo fee found at startup (see _save_settings).
+        new = new.model_copy(update={"trading_fee_pct": old.trading_fee_pct})
     if new.trading_mode == "live" and live_blocker(request.app.state.env, request.app.state.client):
         # The environment itself says live but live is not possible: stay in paper mode.
         new = new.model_copy(update={"trading_mode": "paper"})
@@ -1900,6 +1986,25 @@ def _portfolio(balances: dict[str, float], prices_: dict[str, float]) -> dict | 
     }
 
 
+def _live_reminders(env: Settings, settings: Settings) -> list[str]:
+    """Advice for live mode that is not enforced (enforcing it would stop live trading on the
+    next deploy): own capital for the bot, and a restricted Bitvavo key."""
+    out = []
+    if settings.live_capital_eur <= 0:
+        out.append(
+            "LIVE_CAPITAL_EUR staat op 0: de limieten rekenen met je hele Bitvavo-account, ook "
+            "met coins die je buiten de bot houdt. Stel het bedrag in dat de bot mag beheren, "
+            "of gebruik een apart subaccount."
+        )
+    if not env.bitvavo_key_restricted:
+        out.append(
+            "Controleer de Bitvavo-sleutel: alleen de rechten 'bekijken' en 'handelen' (nooit "
+            "'opnemen') en een IP-whitelist op het serveradres. Zet daarna "
+            "BITVAVO_KEY_RESTRICTED=true in de serveromgeving; dan verdwijnt deze melding."
+        )
+    return out
+
+
 async def _dashboard_context(
     request: Request,
     client: BitvavoClient,
@@ -1938,6 +2043,9 @@ async def _dashboard_context(
         "config_warning": request.app.state.config_warning,
         "unprotected_positions": engine.unprotected,
         "session_secret_weak": getattr(request.app.state, "session_secret_weak", False),
+        "live_reminders": (
+            _live_reminders(request.app.state.env, settings) if mode == "live" else []
+        ),
         "chart_periods": list(PERIODS),
         "order_needs_password": mode == "live" and step_up_enabled(request),
     }

@@ -7,7 +7,7 @@ from app.ai.budget import BudgetExceeded, BudgetGuard
 from app.ai.decision_maker import DecisionMaker, TradeDecision
 from app.ai.evaluator import EvaluationResult, Evaluator
 from app.bitvavo.broker import PaperBroker
-from app.db import Base, Decision, NewsItem, Position, make_engine
+from app.db import Base, Decision, NewsItem, Order, Position, make_engine
 from app.strategy.model import Strategy
 from app.strategy.store import save_strategy
 from app.trading import risk
@@ -149,19 +149,33 @@ def test_check_buy_pause_daily_limits_and_cooldown(session):
     risk.set_paused(session, False)
 
     now = datetime.now(UTC)
-    for _ in range(3):
+    # Every filled order of today counts (bot, exit loop or manual), plus unsettled ones.
+    for status, amount in (("filled", 1.0), ("rejected", None), ("filled", 0.0), ("unknown", None)):
         session.add(
-            Decision(
+            Order(
                 mode="paper",
                 market="BTC-EUR",
-                price=1,
-                signal="buy",
-                source="claude",
-                action="buy",
-                executed=True,
+                side="buy",
+                order_type="market",
+                status=status,
+                amount=amount,
                 created_at=now,
             )
         )
+    session.commit()
+    assert risk.trades_today(session, "paper") == 2
+    assert risk.check_buy(session, LIMITS, "paper", "BTC-EUR", 50, 1000, 0)[1] is None
+    session.add(
+        Order(
+            mode="paper",
+            market="ETH-EUR",
+            side="sell",
+            order_type="market",
+            status="filled",
+            amount=1.0,
+            created_at=now,
+        )
+    )
     session.commit()
     assert "trades per dag" in risk.check_buy(session, LIMITS, "paper", "BTC-EUR", 50, 1000, 0)[1]
     assert risk.check_buy(session, LIMITS, "live", "BTC-EUR", 50, 1000, 0)[1] is None

@@ -21,8 +21,9 @@ def load_strategy_checked(session: Session) -> tuple[Strategy, str | None]:
 
     Never raises on bad stored data: a strategy that no longer validates (hand-edited JSON,
     an older version, a NaN threshold stored as null) would otherwise break every trading
-    cycle, the stop-loss checks included. The default strategy is used instead and the
-    strategy page says so until a valid strategy is saved or the default is restored.
+    cycle, the stop-loss checks included. The default strategy is used instead for exits (the
+    trading cycle opens no new positions meanwhile) and the strategy page says so until a
+    valid strategy is saved or the default is restored.
     """
     row = session.get(Setting, STRATEGY_KEY)
     if row is None:
@@ -38,9 +39,10 @@ def load_strategy_checked(session: Session) -> tuple[Strategy, str | None]:
     except (ValueError, ValidationError) as exc:
         log.error("stored strategy is invalid, using the default strategy instead: %s", exc)
         return DEFAULT_STRATEGY, (
-            "De opgeslagen strategie is ongeldig en wordt niet gebruikt; de bot handelt nu met "
-            f"de standaardstrategie '{DEFAULT_STRATEGY.name}'. Sla een geldige strategie op of "
-            f"herstel de standaardstrategie. Fout: {str(exc)[:300]}"
+            "De opgeslagen strategie is ongeldig en wordt niet gebruikt. De bot opent geen "
+            "nieuwe posities; stop-loss, trailing stop en take-profit van open posities volgen "
+            f"zolang de standaardstrategie '{DEFAULT_STRATEGY.name}'. Sla een geldige strategie "
+            f"op of herstel de standaardstrategie. Fout: {str(exc)[:300]}"
         )
 
 

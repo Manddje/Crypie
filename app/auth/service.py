@@ -137,7 +137,11 @@ class LoginThrottle:
         db.commit()
 
     def _make_room(self, db: Session, now: float) -> None:
-        """Never grow without bound: drop stale entries, then the oldest ones."""
+        """Never grow without bound: drop stale entries, then the oldest per-address ones.
+
+        Per-account rows (``mfa:``) are never evicted early: otherwise anyone could reset the
+        account-wide second-factor counter by filling the table from many addresses.
+        """
         count = db.scalar(select(func.count()).select_from(AuthThrottle)) or 0
         if count < self.max_entries:
             return
@@ -146,7 +150,10 @@ class LoginThrottle:
         excess = count - self.max_entries + 1
         if excess > 0:
             oldest = db.scalars(
-                select(AuthThrottle.key).order_by(AuthThrottle.last_failure).limit(excess)
+                select(AuthThrottle.key)
+                .where(AuthThrottle.key.not_like("mfa:%"))
+                .order_by(AuthThrottle.last_failure)
+                .limit(excess)
             ).all()
             db.execute(delete(AuthThrottle).where(AuthThrottle.key.in_(oldest)))
 
@@ -338,6 +345,12 @@ class AuthService:
         if all(c in "0123456789 " for c in cleaned):
             return "totp" if self.check_totp(session, cleaned) else None
         return "recovery" if self.use_recovery_code(session, cleaned) else None
+
+    def note_login_failures(self, session: Session, failures: int) -> None:
+        """Remember how many wrong codes for the account preceded this successful login."""
+        user = self.user(session)
+        user.mfa_failures_before_login = max(int(failures), 0)
+        session.commit()
 
     def recovery_codes_left(self, session: Session) -> int:
         try:

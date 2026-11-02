@@ -6,10 +6,10 @@ import math
 from dataclasses import astuple, dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.db import ACTIVE_POSITION_STATUSES, Decision, Order, Position, Setting
+from app.db import ACTIVE_POSITION_STATUSES, Order, Position, Setting
 
 PAUSE_KEY = "trading_paused"
 # Orders whose outcome is not known yet: no new order in that market until reconciled.
@@ -45,13 +45,18 @@ def _day_start(now: datetime) -> datetime:
 
 
 def trades_today(session: Session, mode: str, now: datetime | None = None) -> int:
+    """Orders of today that (may have) traded: every buy and sell that filled, from the bot,
+    the exit loop or by hand, plus those whose outcome is not known yet (fail closed)."""
     now = now or datetime.now(UTC)
     return int(
         session.scalar(
-            select(func.count(Decision.id)).where(
-                Decision.mode == mode,
-                Decision.executed.is_(True),
-                Decision.created_at >= _day_start(now),
+            select(func.count(Order.id)).where(
+                Order.mode == mode,
+                Order.created_at >= _day_start(now),
+                or_(
+                    Order.status.in_(UNSETTLED_ORDER_STATUSES),
+                    and_(Order.status != "rejected", Order.amount > 0),
+                ),
             )
         )
         or 0
@@ -141,8 +146,9 @@ def check_buy(
 ) -> tuple[float, str | None]:
     """Return (allowed_amount_quote, block_reason). Amount may be reduced to fit limits.
 
-    ``unrealized`` is the paper result of the open positions at the current price; it counts
-    towards the daily loss limit together with today's realized result.
+    ``unrealized`` is the paper result of the open positions at the current price; a loss in
+    it counts towards the daily loss limit together with today's realized result. A paper
+    gain does not: it may stem from days ago and must not hide today's realized losses.
     """
     now = now or datetime.now(UTC)
     if is_paused(session):
@@ -154,7 +160,7 @@ def check_buy(
     if trades_today(session, mode, now) >= limits.max_trades_per_day:
         return 0.0, f"maximum van {limits.max_trades_per_day} trades per dag bereikt"
     if portfolio_value > 0:
-        day_result = realized_pnl_today(session, mode, now) + unrealized
+        day_result = realized_pnl_today(session, mode, now) + min(unrealized, 0.0)
         loss_pct = -day_result / portfolio_value * 100
         if loss_pct >= limits.daily_loss_limit_pct:
             return 0.0, (

@@ -97,11 +97,16 @@ def clean_coins(raw: list[str] | None, tracked: list[str] | None = None) -> list
     return seen[:MAX_COINS]
 
 
+# The news job runs on its own, outside the stop-check path: give a full batch (up to
+# max_tokens_for(50) output tokens) time to finish on a slower model instead of timing out.
+NEWS_TIMEOUT_S = 180.0
+
+
 class NewsAnalyst:
     PURPOSE = "news"
 
     def __init__(self, api_key: str, model: str, budget: BudgetGuard):
-        self._client = make_client(api_key)
+        self._client = make_client(api_key, timeout=NEWS_TIMEOUT_S)
         self.model = model
         self.budget = budget
 

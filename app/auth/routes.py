@@ -422,6 +422,12 @@ async def mfa_submit(
         )
     if kind == "recovery":
         log.warning("recovery code used for %s from %s", user.username, _client_key(request))
+    failures = auth.throttle.failures(db, _account_key(user))
+    if failures:
+        log.warning(
+            "%d wrong second-factor code(s) before this login of %s", failures, user.username
+        )
+    auth.note_login_failures(db, failures)
     auth.throttle.reset(db, _client_key(request))
     auth.throttle.reset(db, _account_key(user))
     response = RedirectResponse(_safe_next(next), status_code=303)
@@ -635,15 +641,9 @@ async def account_action(
         log.warning("wrong password on /account from %s", key)
         return _account_page(request, auth, db, status=401, error="Het wachtwoord klopt niet.")
     auth.throttle.reset(db, key)
-    if action == "recovery":
-        codes = auth.issue_recovery_codes(db)
-        log.info("new recovery codes issued for %s", user.username)
-        response = _page(
-            request, "auth/recovery_codes.html", codes=codes, next="/account", fresh=False
-        )
-        _reissue_session(response, request, auth, user, session)
-        return response
-    if action == "reenrol":
+    if action in ("recovery", "reenrol"):
+        # New recovery codes are a lasting second factor, like a new authenticator: both
+        # need a current code too, so a stolen cookie plus the password is not enough.
         wait = _second_factor_wait(request, auth, db, user)
         if wait:
             return _account_page(request, auth, db, status=429, error=_wait_message(wait))
@@ -661,6 +661,15 @@ async def account_action(
         auth.throttle.reset(db, _account_key(user))
         if kind == "recovery":
             log.warning("recovery code used for %s from %s", user.username, key)
+    if action == "recovery":
+        codes = auth.issue_recovery_codes(db)
+        log.info("new recovery codes issued for %s", user.username)
+        response = _page(
+            request, "auth/recovery_codes.html", codes=codes, next="/account", fresh=False
+        )
+        _reissue_session(response, request, auth, user, session)
+        return response
+    if action == "reenrol":
         response = RedirectResponse("/account/mfa", status_code=303)
         _set_cookie(response, request, REAUTH_COOKIE, auth.reauth_token(user), REAUTH_SECONDS)
         return response

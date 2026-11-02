@@ -59,11 +59,13 @@ def test_store_items_dedupes_and_drops_old(session):
 
 
 def _item(session, title, sentiment, impact, coins, hours_ago, horizon="days", relevant=True):
+    host = f"{normalize_key(title) or 'x'}.test"
     it = NewsItem(
         source="rss",
         source_name="Src",
-        # One outlet per title (the host), and a unique URL per article.
-        url=f"https://{normalize_key(title) or 'x'}.test/{next(_ids)}",
+        # One outlet (feed) per title, and a unique URL per article.
+        feed_host=host,
+        url=f"https://{host}/{next(_ids)}",
         title=title,
         published_at=NOW - timedelta(hours=hours_ago),
         assessed=True,

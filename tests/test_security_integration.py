@@ -97,7 +97,7 @@ async def test_dashboard_shows_unprotected_positions_and_weak_secret(api):
     app.state.session_secret_weak = True
     try:
         page = (await api.get("/")).text
-        assert "1 open positie wordt NIET bewaakt" in page and "positie #7" in page
+        assert "1 positie wordt NIET bewaakt" in page and "positie #7" in page
         assert "SESSION_SECRET ontbreekt of is korter dan 32 tekens" in page
         trading = (await api.get("/trading")).text
         assert "NIET bewaakt" in trading and "positie #7" in trading
@@ -255,7 +255,7 @@ def test_check_buy_fails_closed_on_nan(session):
 
 def _item(name, url, key="etf"):
     return NewsItem(
-        source="rss",
+        source="gdelt",  # an aggregator: the article's site is the outlet
         source_name=name,
         url=url,
         title="Spot ETF approved",

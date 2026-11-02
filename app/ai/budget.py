@@ -6,6 +6,7 @@ back to the most expensive known tier so an estimate never undershoots.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import threading
@@ -275,8 +276,11 @@ async def metered_call(
     try:
         try:
             response = await call()
-        except Exception as exc:
-            if not _not_billed(exc):
+        except BaseException as exc:
+            # CancelledError too (a deadline around the call): Anthropic may still bill it.
+            if isinstance(exc, asyncio.CancelledError) or (
+                isinstance(exc, Exception) and not _not_billed(exc)
+            ):
                 try:
                     record_usage(
                         session,

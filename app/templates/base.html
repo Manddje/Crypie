@@ -52,6 +52,11 @@
   </header>
 
   <main class="page">
+    {% if login_disabled(request) %}
+    <div class="notice notice-warn" role="alert">
+      <div class="body">De login staat uit (AUTH_ENABLED=false). Iedereen die dit adres kan bereiken, kan instellingen wijzigen en in oefenmodus handelen; live handelen kan niet. Zet AUTH_ENABLED weer op true in de serveromgeving en herstart de app.</div>
+    </div>
+    {% endif %}
     {% block content %}{% endblock %}
   </main>
 

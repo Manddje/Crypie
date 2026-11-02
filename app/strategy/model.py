@@ -222,13 +222,20 @@ class Strategy(BaseModel):
     take_profit_pct: float | None = Field(default=None, gt=0, le=500)
     position_size_pct: float = Field(default=100, gt=0, le=100)
 
-    def initial_stop(self, entry_price: float) -> float | None:
-        """Stop price right after entry: the stop-loss, or the trailing distance when that is
-        the only stop and trailing starts right away."""
+    def entry_stop_pct(self) -> float | None:
+        """Distance (%) of the stop below the entry price right after a buy, or None when a
+        new position starts without a stop: the tighter of the stop-loss and a trailing stop
+        that starts right away."""
         pcts = [self.stop_loss_pct] if self.stop_loss_pct else []
         if self.trailing_stop_pct and not self.trailing_start_pct:
             pcts.append(self.trailing_stop_pct)
-        return entry_price * (1 - min(pcts) / 100) if pcts else None
+        return min(pcts) if pcts else None
+
+    def initial_stop(self, entry_price: float) -> float | None:
+        """Stop price right after entry: the stop-loss, or the trailing distance when that is
+        the only stop and trailing starts right away."""
+        pct = self.entry_stop_pct()
+        return entry_price * (1 - pct / 100) if pct is not None else None
 
     def trailing_stop(self, high_price: float, entry_price: float) -> float | None:
         """Where the trailing stop sits for this peak, or None while trailing is not active."""
@@ -380,17 +387,19 @@ def trivial_condition(strategy: Strategy, cond: Condition) -> bool:
 def use_problems(strategy: Strategy) -> list[str]:
     """Why this strategy may not become the active one (Dutch), or an empty list.
 
-    - It must keep a protective exit: a stop-loss or a trailing stop, so a position never
-      stays open without a stop price.
+    - It must keep a protective exit from the moment of entry: a stop-loss, or a trailing
+      stop without trailing_start_pct, so a position never stays open without a stop price
+      (a trailing stop that only starts after a rise leaves a falling position unprotected).
     - Its hard buy conditions must filter something. A condition like ``close > 0`` is
       always true: the backtest (which counts the soft filters as hard) can look harmless
       while live the buy signal fires every cycle.
     """
     problems: list[str] = []
-    if not strategy.stop_loss_pct and not strategy.trailing_stop_pct:
+    if strategy.entry_stop_pct() is None:
         problems.append(
-            "de strategie heeft geen stop-loss of trailing stop; zonder bescherming blijft een "
-            "positie open hoe ver de koers ook daalt (stel stop_loss_pct of trailing_stop_pct in)"
+            "de strategie heeft geen stop vanaf de instap; zonder bescherming blijft een "
+            "positie open hoe ver de koers ook daalt (stel stop_loss_pct in, of een trailing "
+            "stop zonder trailing_start_pct)"
         )
     hard = [c for c in strategy.buy if not c.soft] or list(strategy.buy)
     for cond in hard:

@@ -9,6 +9,7 @@
 <div class="stack">
   {% if error %}{{ ui.notice("error", error) }}{% endif %}
   {% if message %}{{ ui.notice("ok", message) }}{% endif %}
+  {% if user.mfa_failures_before_login %}{{ ui.notice("warn", "Voor je laatste login is " ~ user.mfa_failures_before_login ~ " keer een verkeerde code voor je account ingevuld. Was jij dat niet, dan kent iemand anders waarschijnlijk je wachtwoord: wijzig het hieronder.") }}{% endif %}
   <div class="grid-2">
     <section class="card">
       <div class="card-header"><h2>Tweestapsverificatie</h2>{{ ui.pill("Actief", "pill-green") if user.mfa_enrolled else ui.pill("Niet ingesteld", "pill-orange") }}</div>
@@ -21,11 +22,14 @@
     </section>
     <section class="card">
       <div class="card-header"><h2>Herstelcodes</h2></div>
-      <p class="card-desc">Vul ter bevestiging je wachtwoord in. Je oude herstelcodes werken daarna niet meer en andere browsers worden uitgelogd.</p>
+      <p class="card-desc">Vul ter bevestiging je wachtwoord in plus een code uit je authenticator-app of een herstelcode. Je oude herstelcodes werken daarna niet meer en andere browsers worden uitgelogd.</p>
       <form method="post" action="/account" class="auth-form">
         <input type="hidden" name="action" value="recovery">
         <label>Wachtwoord
           <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <label>Huidige code of herstelcode
+          <input class="code-input" type="text" name="code" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" maxlength="32" placeholder="123 456" required>
         </label>
         <div class="actions"><button class="btn" type="submit">Nieuwe herstelcodes</button></div>
       </form>

@@ -71,6 +71,7 @@ def _news(session, title, sentiment, impact, coins, hours_ago, now, outlet="x.co
     it = NewsItem(
         source="rss",
         source_name=outlet,
+        feed_host=outlet,
         url=f"https://{outlet}/{title}",
         title=title,
         published_at=now - timedelta(hours=hours_ago),

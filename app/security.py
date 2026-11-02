@@ -3,11 +3,14 @@ requests, a request body size limit, and security headers."""
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+log = logging.getLogger(__name__)
 
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -22,13 +25,13 @@ CONTENT_SECURITY_POLICY = (
     "img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; "
     "base-uri 'none'; form-action 'self'; object-src 'none'"
 )
-# FastAPI's /docs and /redoc pages (off unless API_DOCS_ENABLED=true) load their scripts from
-# jsDelivr and start them with an inline script.
+# The /docs and /redoc pages (off unless API_DOCS_ENABLED=true, see app/api_docs.py) load
+# version-pinned scripts with SRI hashes from jsDelivr; no inline script.
 DOCS_CONTENT_SECURITY_POLICY = (
-    "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
-    "img-src 'self' data: https://fastapi.tiangolo.com https://cdn.redoc.ly; "
-    "font-src 'self' https://fonts.gstatic.com; connect-src 'self'; worker-src 'self' blob:; "
+    "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: https://cdn.redoc.ly; "
+    "font-src 'self'; connect-src 'self'; worker-src 'self' blob:; "
     "frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
 )
 DOCS_PATHS = ("/docs", "/redoc")
@@ -171,11 +174,30 @@ class SecurityHeaders:
 
     def __init__(self, app: ASGIApp):
         self.app = app
+        self.untrusted_proxy_warned = False
+
+    def _check_proxy(self, scope: Scope) -> None:
+        """Warn once when a proxy says https but uvicorn did not trust it (FORWARDED_ALLOW_IPS):
+        cookies then go out without Secure and every visitor shares the proxy's throttle."""
+        if self.untrusted_proxy_warned or scope.get("scheme") != "http":
+            return
+        proto = Headers(scope=scope).get("x-forwarded-proto", "")
+        if proto.split(",")[-1].strip().lower() != "https":
+            return
+        self.untrusted_proxy_warned = True
+        peer = (scope.get("client") or ("unknown",))[0]
+        log.warning(
+            "a proxy at %s forwards https requests but is not in FORWARDED_ALLOW_IPS: the app "
+            "sees plain http, so session cookies go out without Secure, there is no HSTS and "
+            "every visitor shares one login throttle; add its address to FORWARDED_ALLOW_IPS",
+            peer,
+        )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        self._check_proxy(scope)
         path = scope.get("path", "")
         https = scope.get("scheme") == "https"
 

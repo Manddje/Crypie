@@ -78,10 +78,10 @@
 {# Open positions whose mode cannot trade now: no stop-loss or take-profit runs for them. #}
 {% macro unprotected_notice(positions) -%}
 {% if positions %}
-{% call notice("error", positions|length ~ (" open positie wordt" if positions|length == 1 else " open posities worden") ~ " NIET bewaakt door stop-loss, trailing stop of take-profit, omdat hun modus nu niet kan handelen (live zonder Bitvavo-sleutel of LIVE_TRADING_ACK). Zet live handelen weer aan of verkoop ze zelf op Bitvavo.") %}
+{% call notice("error", positions|length ~ (" positie wordt" if positions|length == 1 else " posities worden") ~ " NIET bewaakt door stop-loss, trailing stop of take-profit. De reden staat per positie hieronder. Los die op, of verkoop zelf op Bitvavo.") %}
   <ul class="small">
     {% for u in positions %}
-    <li>{{ u.market }} ({{ "live" if u.mode == "live" else "oefenmodus" }}, positie #{{ u.id }}): {{ u.amount|compact }} stuks{% if u.stop_price %}, stop-loss op {{ u.stop_price|compact }}{% endif %}{% if u.price %}, koers nu {{ u.price|compact }}{% endif %}</li>
+    <li>{{ u.market }} ({{ "live" if u.mode == "live" else "oefenmodus" }}, positie #{{ u.id }}): {{ u.amount|compact }} stuks{% if u.stop_price %}, stop-loss op {{ u.stop_price|compact }}{% endif %}{% if u.price %}, koers nu {{ u.price|compact }}{% endif %}. Reden: {{ u.reason or "de modus kan nu niet handelen (live zonder Bitvavo-sleutel of LIVE_TRADING_ACK)" }}.</li>
     {% endfor %}
   </ul>
 {% endcall %}
