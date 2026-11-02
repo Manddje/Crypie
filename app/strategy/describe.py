@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from app.strategy.engine import Series, _value, lookback_value
@@ -33,17 +34,38 @@ def series_nl(name: str | float) -> str:
     return SERIES_NL.get(name, name)
 
 
+def significant_decimals(value: float, digits: int = 4, minimum: int = 0, maximum: int = 12) -> int:
+    """Decimals needed to show ``digits`` significant digits of ``value``: 2 for 45.000,12
+    (with ``minimum=2``), 4 for 0,5234, 9 for 0,000004150. Zero gets ``minimum``."""
+    a = abs(value)
+    if a == 0 or not math.isfinite(a):
+        return minimum
+    return max(minimum, min(maximum, digits - 1 - math.floor(math.log10(a))))
+
+
 def format_value(value: float, threshold: bool = False) -> str:
     """Compact Dutch number: 69.498 for prices, 52,2 for oscillators, 0,0012 for small values.
 
-    A ``threshold`` written by the user (``35``) keeps its own precision.
+    Values under 1 keep 4 significant digits (trailing zeros dropped, at least 4 decimals), so
+    a cheap coin reads 0,00000415 instead of 0,0000. A ``threshold`` written by the user
+    (``35``) keeps its own precision.
     """
+    if not math.isfinite(value):
+        return "–"
     a = abs(value)
     if threshold and value == int(value):
         decimals = 0
     else:
         decimals = 0 if a >= 1000 else 1 if a >= 10 else 2 if a >= 1 else 4
+    small = a < 1 and decimals == 4 and a != 0
+    if small:
+        decimals = max(4, significant_decimals(value, digits=4))
+    if round(value, decimals) == 0:
+        value = 0.0  # never '-0,0'
     text = f"{value:,.{decimals}f}"
+    if small and decimals > 4:
+        whole, _, frac = text.partition(".")
+        text = f"{whole}.{frac[:4] + frac[4:].rstrip('0')}"
     return text.replace(",", "\0").replace(".", ",").replace("\0", ".")
 
 
