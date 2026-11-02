@@ -35,6 +35,7 @@ from app.strategy.model import LOOKBACK_OPS, Strategy
 from app.strategy.store import load_strategy, load_strategy_checked
 from app.trading import risk
 from app.trading.events import MarketEvent, active_event, recent_shock, upcoming_events
+from app.trading.health import describe_problem
 from app.trading.journal import JournalFilter, journal_entries, notes_for_claude
 from app.trading.plan import load_plan
 from app.trading.risk import RiskLimits
@@ -70,6 +71,18 @@ ENGINE_STATE_KEY = "engine_state"
 # at most once per position per this period; the retries in between are only logged.
 EXIT_FAILURE_JOURNAL = timedelta(minutes=60)
 STRATEGY_INVALID_BLOCK = "opgeslagen strategie ongeldig"
+_EXIT_NL = {
+    "stop_loss": "stop-loss",
+    "trailing_stop": "trailing stop",
+    "take_profit": "take-profit",
+}
+# The exit check's last success is written to the database at most this often (it runs every
+# few minutes); a change between failing and working is written straight away.
+EXIT_OK_SAVE_EVERY = timedelta(minutes=10)
+# An order whose outcome is still unknown after this long is reported to the owner.
+ORDER_UNKNOWN_NOTIFY_AFTER = timedelta(minutes=5)
+# Notifications about the same thing at most this often (see app/notify.py).
+NOTIFY_REPEAT = timedelta(minutes=60)
 
 
 class ManualOrderError(ValueError):
@@ -359,6 +372,25 @@ class TradingEngine:
         self.broker_for_mode: Callable[[str], Broker | None] | None = None
         self.unprotected: list[dict[str, Any]] = []
         self.last_exit_run: datetime | None = None
+        # Health of the exit loop: the last run that really checked every open position (or
+        # had none to check), and since when / why it fails (None while it works).
+        self.last_exit_ok: datetime | None = None
+        self.exit_failing_since: datetime | None = None
+        self.exit_error: str | None = None
+        self._exit_ok_saved: datetime | None = None
+        # Health of the trading cycle: why the last one failed as a whole (Bitvavo unreachable,
+        # every market failed) and since when; None after a cycle that worked.
+        self.cycle_error: str | None = None
+        self.cycle_error_at: datetime | None = None
+        self.cycle_failing_since: datetime | None = None
+        self.started_at = datetime.now(UTC)
+        # Last known prices and portfolio figures, for the pages' risk meters (no extra
+        # Bitvavo calls on a page view).
+        self.last_prices: dict[str, float] = {}
+        self.last_prices_at: datetime | None = None
+        self.last_portfolio: dict[str, Any] | None = None
+        # Optional channel to the owner's phone (app/notify.py); None = no notifications.
+        self.notifier: Any = None
         # Failed mechanical exits per position id: when last journaled and why (persisted).
         self.exit_failures: dict[int, dict[str, Any]] = {}
         # True while the stored strategy does not validate: exits use the default strategy,
@@ -398,8 +430,11 @@ class TradingEngine:
     # -- state that survives a restart --
 
     def save_state(self, session: Session) -> None:
-        """Persist the dip watch, its cooldown and the order backoff (best-effort)."""
+        """Persist the dip watch, its cooldown, the order backoff, the failing exits and when
+        the last cycle and exit check ran (best-effort)."""
         state = {
+            "last_run": _iso(self.last_run) if self.last_run else None,
+            "last_exit_ok": _iso(self.last_exit_ok) if self.last_exit_ok else None,
             "watch": {
                 m: {
                     **{k: v for k, v in w.items() if k not in ("since", "last_check")},
@@ -454,11 +489,40 @@ class TradingEngine:
                 at = _from_iso(f.get("at")) if isinstance(f, dict) else None
                 if at is not None and str(pid).isdigit():
                     failures[int(pid)] = {"at": at, "reason": str(f.get("reason") or "")[:200]}
+            # A moment in the future (a clock that went back) is not believed.
+            last_run = _from_iso(state["last_run"]) if state.get("last_run") else None
+            last_exit_ok = _from_iso(state["last_exit_ok"]) if state.get("last_exit_ok") else None
+            last_run = last_run if last_run is not None and last_run <= now else None
+            last_exit_ok = (
+                last_exit_ok if last_exit_ok is not None and last_exit_ok <= now else None
+            )
         except Exception:  # noqa: BLE001
             log.exception("ignoring unreadable engine state")
             return
         self.watch, self.watch_cooldown, self.order_backoff = watch, cooldown, backoff
         self.exit_failures = failures
+        self.last_run = self.last_run or last_run
+        self.last_exit_ok = self.last_exit_ok or last_exit_ok
+        self._exit_ok_saved = self.last_exit_ok
+
+    # -- notifications --
+
+    def notify(
+        self,
+        event: str,
+        text: str,
+        *,
+        key: str | None = None,
+        every: timedelta | None = NOTIFY_REPEAT,
+    ) -> None:
+        """Tell the owner outside the app (app/notify.py), rate-limited per ``key``. Never
+        raises and never waits: a broken channel must not stop trading or the exits."""
+        if self.notifier is None:
+            return
+        try:
+            self.notifier.send(event, text, key=key, every=every)
+        except Exception:  # noqa: BLE001
+            log.exception("notification %s could not be queued", event)
 
     # -- portfolio helpers --
 
@@ -472,8 +536,24 @@ class TradingEngine:
         """
         broker = broker or self.broker
         if broker.mode == "live" and self.live_capital_eur > 0:
+            total, exposure = self.live_capital_eur, risk.position_exposure(session, "live", prices)
+        else:
+            balances = await broker.balances(session)
+            total, exposure = self.portfolio_from(session, broker.mode, balances, prices)
+        self.last_portfolio = {
+            "mode": broker.mode,
+            "total": total,
+            "exposure": exposure,
+            "at": datetime.now(UTC),
+        }
+        return total, exposure
+
+    def portfolio_from(
+        self, session: Session, mode: str, balances: dict[str, float], prices: dict[str, float]
+    ) -> tuple[float, float]:
+        """(total_value_eur, exposure_eur) from balances already fetched; see portfolio()."""
+        if mode == "live" and self.live_capital_eur > 0:
             return self.live_capital_eur, risk.position_exposure(session, "live", prices)
-        balances = await broker.balances(session)
         total = balances.get("EUR", 0.0)
         exposure = 0.0
         for symbol, amount in balances.items():
@@ -484,6 +564,40 @@ class TradingEngine:
                 total += amount * price
                 exposure += amount * price
         return total, exposure
+
+    def remember_prices(self, prices: dict[str, float]) -> None:
+        if prices:
+            self.last_prices = {**self.last_prices, **prices}
+            self.last_prices_at = datetime.now(UTC)
+
+    async def refresh_risk(
+        self, session: Session, prices: dict[str, float], broker: Broker | None = None
+    ) -> None:
+        """Update the portfolio figures behind the risk meters and report a daily loss limit
+        that is reached (once per day). Best-effort: never fails the caller."""
+        broker = broker or self.broker
+        try:
+            total, exposure = await self.portfolio(session, prices, broker)
+            mode = broker.mode
+            day = risk.realized_pnl_today(session, mode) + min(
+                risk.unrealized_pnl(session, mode, prices), 0.0
+            )
+        except Exception as exc:  # noqa: BLE001
+            session.rollback()
+            log.warning("refreshing the risk figures failed: %s", exc)
+            return
+        limit = self.limits.daily_loss_limit_pct
+        if total > 0 and -day / total * 100 >= limit:
+            today = datetime.now(UTC).strftime("%Y-%m-%d")
+            where = "live" if mode == "live" else "oefenmodus"
+            pct = f"{limit:g}".replace(".", ",")
+            self.notify(
+                "daily_loss_limit",
+                f"De dagverlieslimiet van {pct}% is bereikt ({where}). De bot koopt niets "
+                "meer tot 00:00 UTC; stop-loss, trailing stop en take-profit blijven werken.",
+                key=f"daily_loss_limit:{mode}:{today}",
+                every=timedelta(hours=24),
+            )
 
     # -- one cycle --
 
@@ -512,9 +626,21 @@ class TradingEngine:
         self.strategy_invalid = warning is not None
         return strategy
 
+    def _cycle_failed(self, reason: str) -> None:
+        now = datetime.now(UTC)
+        self.cycle_error = reason[:300]
+        self.cycle_error_at = now
+        self.cycle_failing_since = self.cycle_failing_since or now
+
     async def run_cycle(self, session: Session) -> list[CycleResult]:
         strategy = self._trading_strategy(session)
-        prices = await self.client.ticker_prices(self.markets)
+        try:
+            prices = await self.client.ticker_prices(self.markets)
+        except Exception as exc:
+            # Nothing ran: say so on the pages (the caller logs or shows the error itself).
+            self._cycle_failed(describe_problem(exc))
+            raise
+        self.remember_prices(prices)
         results: list[CycleResult] = []
         for market in list(self.markets):
             try:
@@ -534,6 +660,13 @@ class TradingEngine:
             log.exception("updating decision outcomes failed")
         self.last_run = datetime.now(UTC)
         self.last_results = [r.as_dict() for r in results]
+        failed = [r for r in results if r.signal == "error"]
+        if results and len(failed) == len(results):
+            first = failed[0]
+            self._cycle_failed(f"geen enkele markt lukte ({first.market}: {first.reason or '?'})")
+        else:
+            self.cycle_error = self.cycle_error_at = self.cycle_failing_since = None
+        await self.refresh_risk(session, prices)
         self.save_state(session)
         return results
 
@@ -550,6 +683,7 @@ class TradingEngine:
         if not markets:
             return []
         prices = await self.client.ticker_prices(markets)
+        self.remember_prices(prices)
         results = []
         for market in markets:
             try:
@@ -1087,6 +1221,7 @@ class TradingEngine:
                 d: TradeDecision = await asyncio.wait_for(
                     self.decision_maker.decide(session, context), self.decision_timeout_s
                 )
+                self.last_error = None  # Claude answers again: an old failure is history
                 return (
                     d.action,
                     d.confidence,
@@ -1097,6 +1232,20 @@ class TradingEngine:
                 )
             except BudgetExceeded as exc:
                 self.last_error = str(exc)
+                month = datetime.now(UTC).strftime("%Y-%m")
+                self.notify(
+                    "claude_budget",
+                    "Het Claude-budget is op, dus de bot kan Claude niet meer vragen. Bij een "
+                    "signaal "
+                    + (
+                        "volgt hij nu alleen de regels."
+                        if self.claude_unavailable_mode == "indicators"
+                        else "wacht hij nu af en koopt hij niets."
+                    )
+                    + " Verhoog het budget of wacht tot volgende maand.",
+                    key=f"claude_budget:{month}",
+                    every=timedelta(hours=24),
+                )
             except TimeoutError:
                 self.last_error = (
                     f"Claude-beslissing duurde langer dan {self.decision_timeout_s:.0f} s"
@@ -1213,6 +1362,14 @@ class TradingEngine:
             # tries again: journal that once per period, not on every exit-loop run.
             now = datetime.now(UTC)
             last = self.exit_failures.get(pid)
+            where = "live" if position.mode == "live" else "oefenmodus"
+            self.notify(
+                "exit_sell_failed",
+                f"De verkoop bij de {_EXIT_NL.get(reason, reason)} van {market} ({where}, "
+                f"positie #{pid}) lukt niet: {blocked[:160]}. De bot probeert het elke "
+                "controle opnieuw; verkoop zo nodig zelf op Bitvavo.",
+                key=f"exit_sell_failed:{pid}",
+            )
             self.exit_failures[pid] = {
                 "at": last["at"] if last and now - last["at"] < EXIT_FAILURE_JOURNAL else now,
                 "reason": blocked[:200],
@@ -1280,7 +1437,32 @@ class TradingEngine:
             raise
         if not self._book_buy(session, claim, order, strategy, price):
             return order, None, f"kooporder niet gevuld (status {order.status})"
+        self._notify_live_order(order, reason)
         return order, claim, None
+
+    def _notify_live_order(self, order: Order, reason: str | None) -> None:
+        """A live order that (partly) filled: one notification per order, without amounts."""
+        if order.mode != "live" or not (order.amount or 0) > 0:
+            return
+        side = "Gekocht" if order.side == "buy" else "Verkocht"
+        why = str(reason or "").split(":", 1)[0].strip()
+        why_nl = {
+            "claude": "beslissing van Claude",
+            "rules": "regels",
+            "manual": "handmatige order",
+            "signal": "verkoopsignaal",
+            "news_exit": "zwaar negatief nieuws",
+            "reconcile": "na controle bij Bitvavo",
+            **_EXIT_NL,
+        }.get(why)
+        self.notify(
+            "live_order",
+            f"{side}: {order.market} (live, echt geld)"
+            + (f", reden: {why_nl}" if why_nl else "")
+            + f". Order #{order.id}; de bedragen staan in Crypie.",
+            key=f"live_order:{order.id}",
+            every=None,
+        )
 
     @staticmethod
     def _book_buy(
@@ -1372,6 +1554,7 @@ class TradingEngine:
         sold, closed = self._book_sell(session, position, order, price, reason, qty, full_exit)
         if sold <= 0:
             return order, f"verkooporder niet gevuld (status {order.status})", None
+        self._notify_live_order(order, reason)
         if not closed:
             note = (
                 f"gedeeltelijk gevuld: {sold:.8f} verkocht, {position.amount:.8f} blijft open "
@@ -1506,11 +1689,16 @@ class TradingEngine:
             self.exit_failures.pop(pid, None)
         if not positions:
             self.unprotected = stuck
-            if failures_before:
-                self.save_state(session)
+            self._exits_ok(session, force_save=bool(failures_before))
+            self._notify_unprotected(stuck)
             return []
         strategy = load_strategy(session)
-        prices = await self.client.ticker_prices(sorted({p.market for p in positions}))
+        try:
+            prices = await self.client.ticker_prices(sorted({p.market for p in positions}))
+        except Exception as exc:  # noqa: BLE001 - reported below, retried next run
+            self._exits_failed(session, positions, stuck, exc)
+            return []
+        self.remember_prices(prices)
         results: list[CycleResult] = []
         unprotected: list[dict[str, Any]] = []
 
@@ -1564,8 +1752,6 @@ class TradingEngine:
             finally:
                 lock.release()
         unprotected += stuck
-        if {pid: f["at"] for pid, f in self.exit_failures.items()} != failures_before:
-            self.save_state(session)  # so a restart does not journal the same failure again
         if unprotected:
             log.error(
                 "%d position(s) are NOT protected by stop-loss/take-profit: %s",
@@ -1575,7 +1761,106 @@ class TradingEngine:
                 ),
             )
         self.unprotected = unprotected
+        # Saved when a failure changed, so a restart does not journal the same failure again.
+        changed = {pid: f["at"] for pid, f in self.exit_failures.items()} != failures_before
+        self._exits_ok(session, force_save=changed)
+        self._notify_unprotected(unprotected)
+        if any(r.executed for r in results):
+            await self.refresh_risk(session, {**self.last_prices, **prices})
         return results
+
+    def _exits_ok(self, session: Session, force_save: bool = False) -> None:
+        """The exit check ran through: remember when (persisted at most every few minutes)."""
+        now = datetime.now(UTC)
+        recovered = self.exit_failing_since is not None
+        if recovered:
+            log.info("exit check works again (failing since %s)", self.exit_failing_since)
+        self.last_exit_ok = now
+        self.exit_failing_since = self.exit_error = None
+        stale = self._exit_ok_saved is None or now - self._exit_ok_saved >= EXIT_OK_SAVE_EVERY
+        if force_save or recovered or stale:
+            self.save_state(session)
+            self._exit_ok_saved = now
+
+    def _exits_failed(
+        self,
+        session: Session,
+        positions: list[Position],
+        stuck: list[dict[str, Any]],
+        exc: Exception,
+    ) -> None:
+        """The exit check could not check the stops (no prices from Bitvavo): every open
+        position counts as unprotected until it works again, with the reason and since when."""
+        now = datetime.now(UTC)
+        first = self.exit_failing_since is None
+        self.exit_failing_since = self.exit_failing_since or now
+        self.exit_error = describe_problem(exc)
+        since = self.exit_failing_since
+        why = (
+            f"de koers is niet op te halen sinds {since:%H:%M} UTC; stop-loss, trailing stop en "
+            "take-profit worden niet gecontroleerd"
+        )
+        self.unprotected = [
+            {
+                "id": p.id,
+                "mode": p.mode,
+                "market": p.market,
+                "amount": p.amount,
+                "stop_price": p.stop_price,
+                "price": self.last_prices.get(p.market),
+                "reason": why,
+                "since": since,
+            }
+            for p in positions
+        ] + stuck
+        log.error(
+            "exit check failed, %d open position(s) NOT protected since %s: %s",
+            len(positions),
+            f"{since:%H:%M} UTC",
+            exc,
+        )
+        if first:
+            self.save_state(session)  # the last success stays what it was
+        minutes = getattr(self.notifier, "exit_fail_min", 10)
+        if now - since >= timedelta(minutes=minutes):
+            n = len(positions)
+            self.notify(
+                "exit_check_failing",
+                f"De bewaking van stop-loss en take-profit lukt al sinds {since:%H:%M} UTC niet: "
+                f"de koersen zijn niet op te halen bij Bitvavo. {n} open "
+                + ("positie wordt" if n == 1 else "posities worden")
+                + " nu niet bewaakt. Controleer Bitvavo en verkoop zo nodig zelf.",
+                key="exit_check_failing",
+            )
+
+    def _notify_unprotected(self, unprotected: list[dict[str, Any]]) -> None:
+        if not unprotected:
+            return
+        ids = ",".join(str(u["id"]) for u in sorted(unprotected, key=lambda u: u["id"]))
+        n = len(unprotected)
+        lines = "; ".join(
+            f"{u['market']} ({'live' if u['mode'] == 'live' else 'oefenmodus'}, "
+            f"#{u['id']}): {u['reason']}"
+            for u in unprotected[:5]
+        )
+        self.notify(
+            "unprotected",
+            f"{n} " + ("positie wordt" if n == 1 else "posities worden") + " NIET bewaakt door "
+            f"stop-loss of take-profit. {lines}. Los het op of verkoop zelf op Bitvavo.",
+            key=f"unprotected:{ids}",
+        )
+
+    async def exit_check(self, session: Session) -> list[CycleResult]:
+        """One run of the exit loop: settle unknown orders, then check every open position.
+
+        A failing settlement does not skip the stop checks; it is logged and reported.
+        """
+        try:
+            await self.reconcile(session)
+        except Exception:  # noqa: BLE001
+            session.rollback()
+            log.exception("order reconciliation failed; checking the stops anyway")
+        return await self.run_exits(session)
 
     def _stuck_claims(self, session: Session) -> list[dict[str, Any]]:
         """Positions stuck in "opening"/"closing" past CLAIM_STALE, because an order behind
@@ -1649,12 +1934,39 @@ class TradingEngine:
                 except Exception:  # noqa: BLE001
                     session.rollback()
                     log.exception("settling order %s failed", order.id)
+        self._notify_unsettled(session)
         self._release_stale_claims(session)
         return settled
+
+    def _notify_unsettled(self, session: Session) -> None:
+        """Orders that stay without a known outcome for a while: tell the owner once each."""
+        if self.notifier is None or not getattr(self.notifier, "enabled", True):
+            return
+        cutoff = datetime.now(UTC) - ORDER_UNKNOWN_NOTIFY_AFTER
+        rows = session.scalars(
+            select(Order).where(Order.status.in_(risk.UNSETTLED_ORDER_STATUSES)).order_by(Order.id)
+        ).all()
+        for order in rows:
+            created = order.created_at
+            if created is not None and created.tzinfo is None:
+                created = created.replace(tzinfo=UTC)
+            if created is None or created > cutoff:
+                continue
+            side = "kooporder" if order.side == "buy" else "verkooporder"
+            where = "live" if order.mode == "live" else "oefenmodus"
+            self.notify(
+                "order_unknown",
+                f"Van een {side} in {order.market} ({where}, order #{order.id}, geplaatst om "
+                f"{created:%H:%M} UTC) is de uitkomst nog niet bekend. De bot koopt in die markt "
+                "niets tot dat duidelijk is. Controleer de order op Bitvavo.",
+                key=f"order_unknown:{order.id}",
+                every=timedelta(hours=24),
+            )
 
     def _book_settled(self, session: Session, order: Order, strategy: Strategy | None) -> None:
         position = session.get(Position, order.position_id) if order.position_id else None
         strategy = strategy or load_strategy(session)
+        self._notify_live_order(order, order.reason or "reconcile")  # a late (partial) fill
         if order.side == "buy":
             if position is not None and position.status == "opening":
                 self._book_buy(session, position, order, strategy, order.price or 0.0)
@@ -1771,6 +2083,7 @@ class TradingEngine:
                         f"er staat al een open positie in {market}; verkoop die eerst"
                     )
                 prices = await self.client.ticker_prices(sorted({*self.markets, market}))
+                self.remember_prices(prices)
                 price = prices.get(market) or await self.client.ticker_price(market)
                 strategy = load_strategy(session)
                 async with self._buy_lock:  # inside the market lock, like _run_market

@@ -74,8 +74,16 @@ def _verify(password: str, stored: str | None) -> bool:
     return verify_password(password, stored or _dummy_hash())
 
 
+class LoginDisabled(Exception):
+    """A login page was opened while the login is off (AUTH_ENABLED=false); the app turns
+    this into a redirect to the overview with a short message (see app/errors.py)."""
+
+
 def get_auth(request: Request) -> AuthService:
-    return request.app.state.auth
+    auth = getattr(request.app.state, "auth", None)
+    if auth is None:
+        raise LoginDisabled
+    return auth
 
 
 def _secure(request: Request) -> bool:

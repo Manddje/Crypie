@@ -78,6 +78,11 @@ services:
       SETUP_TOKEN: ${SETUP_TOKEN:-}
       TRUSTED_ORIGINS: ${TRUSTED_ORIGINS:-}
       API_DOCS_ENABLED: ${API_DOCS_ENABLED:-false}
+      # Notifications to your phone (ntfy topic or webhook, https only); off when empty.
+      NOTIFY_URL: ${NOTIFY_URL:-}
+      NOTIFY_TOKEN: ${NOTIFY_TOKEN:-}
+      NOTIFY_FORMAT: ${NOTIFY_FORMAT:-auto}
+      NOTIFY_EXIT_FAIL_MIN: ${NOTIFY_EXIT_FAIL_MIN:-10}
       # Proxies allowed to set X-Forwarded-For/-Proto (read by uvicorn). Default: loopback and the
       # private ranges in which Coolify's Traefik reaches the container. Never use "*".
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7}

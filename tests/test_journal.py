@@ -8,6 +8,8 @@ from httpx import ASGITransport, AsyncClient
 from app.ai.decision_maker import TradeDecision
 from app.ai.evaluator import EvaluationResult
 from app.db import Decision, Order, Position
+from app.flash import flashes_from_response
+from app.main import PLAN_SAVED
 from app.trading.journal import (
     JournalFilter,
     journal_entries,
@@ -299,9 +301,12 @@ async def test_plan_page_and_api(api):
     assert "Tradingplan" in r.text and "Harde limieten" in r.text and "rsi14 lager dan 35" in r.text
 
     r = await api.post("/plan", data={"goal": "Rustig opbouwen", "rules": "Geen weekend"})
-    assert r.status_code == 303 and r.headers["location"] == "/plan?saved=1"
-    r = await api.get("/plan?saved=1")
-    assert "Rustig opbouwen" in r.text and "Tradingplan opgeslagen" in r.text
+    # A one-time message instead of ?saved=1, so a reload shows no stale confirmation.
+    assert r.status_code == 303 and r.headers["location"] == "/plan"
+    assert flashes_from_response(r) == [{"kind": "ok", "text": PLAN_SAVED}]
+    r = await api.get("/plan")
+    assert "Rustig opbouwen" in r.text
+    assert flashes_from_response(r) == []  # shown once: the cookie is cleared
 
     r = await api.get("/api/plan")
     assert r.json()["goal"] == "Rustig opbouwen" and r.json()["avoid"] == ""
