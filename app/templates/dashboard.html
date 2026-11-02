@@ -144,6 +144,7 @@
     <section class="card" aria-labelledby="koersen-title">
       {{ ui.card_header("Koersen", 2, meta=(("laatst bekend: " if price_problem else "Bitvavo, ") ~ prices_at|dt) if prices_at else none, id="koersen-title") }}
       {% if prices %}
+      {% call ui.table_wrap("Koersen") %}
       <table>
         <tr><th scope="col">Markt</th><th class="num" scope="col">Koers</th><th class="num" scope="col">Nieuws (48 uur)</th></tr>
         {% for market in settings.markets %}
@@ -156,6 +157,7 @@
         </tr>
         {% endfor %}
       </table>
+      {% endcall %}
       {% else %}
       {{ ui.empty("Geen koersen beschikbaar", "Bitvavo gaf geen antwoord en er is nog geen koers bekend. Probeer het over een minuut opnieuw.", symbol="chart") }}
       {% endif %}
@@ -164,6 +166,7 @@
     <section class="card" aria-labelledby="saldo-title">
       {{ ui.card_header("Saldo", 2, meta=modes_nl[mode].label ~ " · " ~ modes_nl[mode].money, id="saldo-title") }}
       {% if balances %}
+      {% call ui.table_wrap("Saldo") %}
       <table>
         <tr><th scope="col">Munt</th><th class="num" scope="col">Hoeveelheid</th><th class="num" scope="col">Waarde</th></tr>
         {% for symbol, amt in balances.items() %}
@@ -174,13 +177,15 @@
         </tr>
         {% endfor %}
       </table>
+      {% endcall %}
       {% else %}
       {{ ui.empty("Geen saldo beschikbaar", "Het saldo kon niet worden opgehaald bij Bitvavo." if live else "Het oefensaldo kon niet worden geladen.", symbol="wallet") }}
       {% endif %}
     </section>
   </div>
 
-  {# -- Charts (chart.js; without JavaScript the tables above carry the figures) -- #}
+  {# -- Charts: chart.js shows the controls, legends and chart areas; without JavaScript the
+     tables above carry the figures -- #}
   <section class="card chart-card" id="price-chart-card" data-markets='{{ settings.markets|tojson }}' aria-labelledby="price-chart-title">
     {{ ui.card_header("Koers en acties", 2, id="price-chart-title") }}
     <div class="chart-controls" hidden>
@@ -192,14 +197,14 @@
       </div>
     </div>
     <p class="card-desc">De koers van Bitvavo met daarop wat de bot deed: elke koop en verkoop, de momenten waarop Claude om advies is gevraagd, en de keren dat een regel een order tegenhield. <span class="dash-hint-hover">Beweeg over de grafiek voor details,</span><span class="dash-hint-touch">Houd je vinger op de grafiek voor details,</span> of open de tabel onder de grafiek.</p>
-    <div class="chart-legend">
+    <div class="chart-legend" hidden>
       <span class="key"><span class="swatch up" aria-hidden="true"></span>Koop</span>
       <span class="key"><span class="swatch down" aria-hidden="true"></span>Verkoop, stop-loss of take-profit</span>
       <span class="key"><span class="swatch circle" aria-hidden="true"></span>Claude-advies zonder order</span>
       <span class="key"><span class="swatch square" aria-hidden="true"></span>Geblokkeerd door een regel</span>
       <label class="key toggle" hidden><input type="checkbox" id="price-chart-advice" checked> Claude-adviezen tonen</label>
     </div>
-    <div class="chart-wrap" id="price-chart-wrap">
+    <div class="chart-wrap" id="price-chart-wrap" hidden>
       <div class="chart tall" id="price-chart" role="img" aria-label="Koersgrafiek" aria-describedby="price-chart-status"></div>
       <div class="chart-tooltip" id="price-chart-tooltip" hidden></div>
     </div>
@@ -216,12 +221,12 @@
       <span class="card-meta" id="portfolio-chart-range">laatste 7 dagen</span>
     </div>
     <p class="card-desc">Euro plus crypto tegen de koers van dat moment, teruggerekend uit het huidige saldo en de orders.{% if not live %} De stippellijn is het startbedrag van {{ settings.paper_start_eur|eur(0) }}.{% endif %}</p>
-    <div class="chart-legend">
+    <div class="chart-legend" hidden>
       <span class="key"><span class="swatch up" aria-hidden="true"></span>Koop (met de munt erbij)</span>
       <span class="key"><span class="swatch down" aria-hidden="true"></span>Verkoop</span>
-      <span class="key"><span class="swatch circle" aria-hidden="true"></span>Meerdere orders in dezelfde periode</span>
+      <span class="key"><span class="swatch circle" aria-hidden="true"></span>Meerdere orders in dezelfde periode (3×)</span>
     </div>
-    <div class="chart-wrap" id="portfolio-chart-wrap">
+    <div class="chart-wrap" id="portfolio-chart-wrap" hidden>
       <div class="chart short" id="portfolio-chart" role="img" aria-label="Waarde van de portefeuille" aria-describedby="portfolio-chart-status"></div>
       <div class="chart-tooltip" id="portfolio-chart-tooltip" hidden></div>
     </div>

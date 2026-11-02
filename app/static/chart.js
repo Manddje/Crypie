@@ -36,9 +36,13 @@
     return;
   }
 
-  // The controls only do something with JavaScript: the page shows them from here on.
-  var controls = priceCard.querySelector(".chart-controls");
-  if (controls) controls.hidden = false;
+  // The controls, legends and chart areas only mean something with a chart: the page shows
+  // them from here on.
+  [priceCard, portfolioCard].forEach(function (card) {
+    Array.prototype.forEach.call(card.querySelectorAll(".chart-controls, .chart-legend, .chart-wrap"), function (node) {
+      node.hidden = false;
+    });
+  });
   if (adviceToggle && adviceToggle.closest("label")) adviceToggle.closest("label").hidden = false;
   if (priceDetails) priceDetails.hidden = false;
 
@@ -578,7 +582,7 @@
     });
   }
 
-  // One marker per period: several orders in the same candle become '3 orders' (the
+  // One marker per period: several orders in the same candle become '3×' (the
   // tooltip lists them).
   function portfolioMarkers(t, times) {
     var groups = {}, order = [];
@@ -592,7 +596,7 @@
       if (acts.length === 1) return markerFor(acts[0], t, true);
       var kinds = {};
       acts.forEach(function (a) { kinds[a.kind] = true; });
-      var text = acts.length + " orders";
+      var text = acts.length + "×"; // short: neighbouring markers must not overlap
       if (kinds.buy && !kinds.sell) return { time: time, position: "belowBar", shape: "arrowUp", color: t.green, text: text, size: 1.4 };
       if (kinds.sell && !kinds.buy) return { time: time, position: "aboveBar", shape: "arrowDown", color: t.red, text: text, size: 1.4 };
       return { time: time, position: "aboveBar", shape: "circle", color: t.accent, text: text, size: 1.2 };

@@ -1197,9 +1197,9 @@ footer.site {
 /* -- Tables shown as cards on a phone (table-stack): the second line of a cell ('€ 59,79',
  * '-0,6%') goes under the value instead of next to it. -- */
 @media (max-width: 640px) {
-  .dash .table-stack td:not(:first-child) { flex-wrap: wrap; }
+  .dash .table-stack td:not(:first-child) { flex-wrap: wrap; row-gap: 0; }
   .dash .table-stack td:not(:first-child) > :not(.sub) { margin-left: auto; }
-  .dash .table-stack td:not(:first-child) .sub { flex-basis: 100%; text-align: right; margin-top: 0; }
+  .dash .table-stack td:not(:first-child) .sub { flex-basis: 100%; max-width: none; text-align: right; margin-top: 0; }
 }
 
 /* -- Strategy card: name, one line, the features -- */
@@ -1216,6 +1216,8 @@ footer.site {
 .dash-order .seg-radio span { justify-content: center; width: 100%; min-height: 38px; font-size: var(--fs-body); }
 .dash-order .seg-radio input:checked[value="buy"] + span { background: var(--green-tint); color: var(--green); }
 .dash-order .seg-radio input:checked[value="sell"] + span { background: var(--red-tint); color: var(--red); }
+.dash-amount { min-width: 0; }
+.dash-amount .unit-input input { width: 100%; min-width: 0; }
 .dash-amount-check { display: block; min-height: 1.4em; color: var(--text-2); font-size: var(--fs-detail); font-variant-numeric: tabular-nums; }
 .dash-amount-check.is-error { color: var(--red); font-weight: 500; }
 .dash-sell-all { font-size: var(--fs-help); color: var(--text); min-height: 24px; }
