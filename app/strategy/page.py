@@ -317,16 +317,36 @@ def _json_context(text: str, line: int, column: int) -> list[dict[str, Any]]:
     return out
 
 
+def _trailing_comma(text: str, exc: json.JSONDecodeError) -> int | None:
+    """The offset of a comma right before a closing ``}`` or ``]`` that ``exc`` complains about,
+    or None. Python 3.13+ reports such a comma itself ("Illegal trailing comma"); 3.12 reports
+    the ``}`` or ``]`` after it as a missing property name or value, on the next line."""
+    if exc.msg.startswith("Illegal trailing comma"):
+        return exc.pos
+    if not exc.msg.startswith(("Expecting property name", "Expecting value")):
+        return None
+    if exc.pos >= len(text) or text[exc.pos] not in "}]":
+        return None
+    before = text[: exc.pos].rstrip()
+    return len(before) - 1 if before.endswith(",") else None
+
+
 def parse_strategy_json(text: str) -> Strategy:
     """The strategy in ``text``; raises StrategyInputError with Dutch errors."""
     try:
         json.loads(text, parse_constant=_reject_constant)
     except json.JSONDecodeError as exc:
-        reason = next((nl for en, nl in JSON_MESSAGES_NL if exc.msg.startswith(en)), exc.msg)
-        where = f"Regel {exc.lineno}, kolom {exc.colno}"
+        lineno, colno, msg = exc.lineno, exc.colno, exc.msg
+        if (comma := _trailing_comma(text, exc)) is not None:
+            # The same place and wording on every supported Python: the comma itself.
+            lineno = text.count("\n", 0, comma) + 1
+            colno = comma - text.rfind("\n", 0, comma)
+            msg = "Illegal trailing comma"
+        reason = next((nl for en, nl in JSON_MESSAGES_NL if msg.startswith(en)), msg)
+        where = f"Regel {lineno}, kolom {colno}"
         raise StrategyInputError(
             [{"where": where, "path": "", "message": f"de JSON klopt niet: {reason}"}],
-            _json_context(text, exc.lineno, exc.colno),
+            _json_context(text, lineno, colno),
         ) from exc
     except ValueError as exc:  # NaN, Infinity
         raise StrategyInputError(
