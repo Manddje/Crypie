@@ -829,3 +829,147 @@ async def test_new_position_records_its_high_and_initial_stop(session):
     await engine.run_cycle(session)
     pos = open_position(session, "paper", "BTC-EUR")
     assert pos.high_price == 12.0 and pos.stop_price == pytest.approx(12.0 * 0.96)
+
+
+# -- follow-up after "wait for the turn", and consulting Claude by hand ---------------------
+
+
+def dip_turn_strategy() -> Strategy:
+    """Buy the turn while still in the dip: close below 10 and rising vs. the candle before."""
+    return Strategy.model_validate(
+        {
+            "name": "Dip en draai",
+            "market": "BTC-EUR",
+            "interval": "1h",
+            "indicators": [{"type": "sma", "id": "sma2", "period": 2}],
+            "buy": [
+                {"left": "close", "op": "<", "right": 10},
+                {"left": "close", "op": "rising", "right": 1},
+            ],
+            "sell": [{"left": "close", "op": ">", "right": 20}],
+            "stop_loss_pct": 10,
+        }
+    )
+
+
+DIP_TURN = [12, 11, 10.5, 9.9, 9.8, 9.95]  # below 10 and rising: a buy signal
+HOLD = TradeDecision(
+    action="hold",
+    confidence=0.6,
+    amount_quote=0,
+    reasoning_nl="Draai nog zwak.",
+    revisit_next_cycle=True,
+)
+
+
+async def _held_to_wait_for_the_turn(session, decider):
+    engine = make_engine_(
+        session, {"BTC-EUR": candles(DIP_TURN)}, {"BTC-EUR": 9.95}, decider, dip_turn_strategy()
+    )
+    (result,) = await engine.run_cycle(session)
+    assert result.signal == "buy" and result.action == "hold" and result.source == "claude"
+    assert (
+        decider.contexts[0]["follow_up"] is None and decider.contexts[0]["owner_request"] is False
+    )
+    assert list(engine.revisit) == ["BTC-EUR"] and engine.revisit["BTC-EUR"]["price"] == 9.95
+    (status,) = engine.revisit_status()
+    assert status["market"] == "BTC-EUR" and status["max_price"] == pytest.approx(10.149)
+    return engine
+
+
+async def test_claude_waiting_for_the_turn_gets_the_market_again_once_it_turns(session):
+    decider = FakeDecider(HOLD)
+    engine = await _held_to_wait_for_the_turn(session, decider)
+    # Next cycle: the dip is over (close 10.05 is not below 10) but the turn holds and the
+    # price is within 2% of the hold: a buy signal for Claude after all.
+    engine.client.series["BTC-EUR"] = candles(DIP_TURN + [10.05])
+    engine.client.prices["BTC-EUR"] = 10.05
+    decider.decision = TradeDecision(
+        action="buy", confidence=0.8, amount_quote=50, reasoning_nl="Draai bevestigd."
+    )
+    (result,) = await engine.run_cycle(session)
+    assert result.signal == "buy" and result.action == "buy" and result.executed
+    follow_up = decider.contexts[1]["follow_up"]
+    assert follow_up["price_then"] == 9.95 and "koers stijgt" in follow_up["turn_now"]
+    assert decider.contexts[1]["signal"] == "buy"
+    assert engine.revisit == {}
+    d = session.query(Decision).order_by(Decision.id.desc()).first()
+    assert (
+        d.reasoning.startswith("Vervolg: Claude wachtte om") and "Draai bevestigd." in d.reasoning
+    )
+    assert open_position(session, "paper", "BTC-EUR") is not None
+
+
+async def test_follow_up_waits_for_the_turn_and_does_not_chase_a_price_that_ran_away(
+    session,
+):
+    decider = FakeDecider(HOLD)
+    engine = await _held_to_wait_for_the_turn(session, decider)
+    # Turned, but the price is more than 2% above the hold: no chasing, Claude is not asked.
+    engine.client.series["BTC-EUR"] = candles(DIP_TURN + [10.3])
+    engine.client.prices["BTC-EUR"] = 10.3
+    (result,) = await engine.run_cycle(session)
+    assert result.signal == "hold" and result.source == "rules"
+    assert len(decider.contexts) == 1 and "BTC-EUR" in engine.revisit
+    # Falling again (and no dip, so the dip watch stays out of it): the follow-up waits.
+    engine.client.series["BTC-EUR"] = candles(DIP_TURN + [10.3, 10.2])
+    engine.client.prices["BTC-EUR"] = 10.2
+    (result,) = await engine.run_cycle(session)
+    assert result.signal == "hold" and result.source == "rules"
+    assert len(decider.contexts) == 1 and "BTC-EUR" in engine.revisit and engine.watch == {}
+    # After REVISIT_MAX_MIN the follow-up expires, even when the turn is there now.
+    engine.revisit["BTC-EUR"]["since"] = datetime.now(UTC) - timedelta(minutes=181)
+    engine.client.series["BTC-EUR"] = candles(DIP_TURN + [10.3, 10.0, 10.05])
+    engine.client.prices["BTC-EUR"] = 10.05
+    (result,) = await engine.run_cycle(session)
+    assert result.source == "rules" and engine.revisit == {} and len(decider.contexts) == 1
+
+
+async def test_follow_up_is_not_armed_without_the_flag_and_survives_a_restart(session):
+    plain_hold = TradeDecision(
+        action="hold", confidence=0.6, amount_quote=0, reasoning_nl="Nieuws."
+    )
+    decider = FakeDecider(plain_hold)
+    engine = make_engine_(
+        session, {"BTC-EUR": candles(DIP_TURN)}, {"BTC-EUR": 9.95}, decider, dip_turn_strategy()
+    )
+    (result,) = await engine.run_cycle(session)
+    assert result.action == "hold" and engine.revisit == {}
+    decider.decision = HOLD
+    await engine.run_cycle(session)
+    assert "BTC-EUR" in engine.revisit
+    engine.save_state(session)
+    fresh = make_engine_(session, {"BTC-EUR": candles(DIP_TURN)}, {"BTC-EUR": 9.95}, decider)
+    fresh.load_state(session)
+    assert fresh.revisit["BTC-EUR"]["price"] == 9.95
+    assert fresh.revisit["BTC-EUR"]["since"] == engine.revisit["BTC-EUR"]["since"]
+    # An expired follow-up is not restored.
+    engine.revisit["BTC-EUR"]["since"] -= timedelta(minutes=200)
+    engine.save_state(session)
+    fresh.load_state(session)
+    assert fresh.revisit == {}
+
+
+async def test_consult_asks_claude_without_a_signal_but_he_still_cannot_buy(session):
+    decider = FakeDecider(
+        TradeDecision(action="hold", confidence=0.7, amount_quote=0, reasoning_nl="Geen dip.")
+    )
+    engine = make_engine_(session, {"BTC-EUR": candles(FLAT_SERIES)}, {"BTC-EUR": 10.0}, decider)
+    result = await engine.run_consult(session, "BTC-EUR")
+    assert result.signal == "hold" and result.action == "hold" and result.source == "claude"
+    assert decider.contexts[0]["owner_request"] is True and decider.contexts[0]["signal"] == "hold"
+    (d,) = session.query(Decision).all()
+    assert d.source == "claude" and d.reasoning == "Op verzoek beoordeeld. Geen dip."
+    assert (
+        engine.last_results[-1]["market"] == "BTC-EUR"
+        and engine.last_results[-1]["source"] == "claude"
+    )
+    # The rules still hold: a buy without a signal is refused, whoever asked.
+    decider.decision = TradeDecision(
+        action="buy", confidence=1, amount_quote=50, reasoning_nl="Kopen."
+    )
+    result = await engine.run_consult(session, "BTC-EUR")
+    assert result.action == "buy" and not result.executed and "zonder buy-signaal" in result.reason
+    assert open_position(session, "paper", "BTC-EUR") is None
+    with pytest.raises(ValueError, match="staat niet bij de markten"):
+        await engine.run_consult(session, "ETH-EUR")

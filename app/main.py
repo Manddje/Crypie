@@ -1770,6 +1770,7 @@ def _trading_status(engine: TradingEngine, session: Session, settings: Settings)
         "limits": engine.limits.__dict__,
         "fee_pct": engine.fee_pct,
         "watch": engine.watch_status(),
+        "revisit": engine.revisit_status(),
         "watch_interval_min": settings.watch_interval_min,
         "watch_max_min": settings.watch_max_min,
         "last_watch_run": engine.last_watch_run,
@@ -1849,6 +1850,31 @@ async def trading_cycle(
 ):
     try:
         return [r.as_dict() for r in await engine.run_cycle(session)]
+    except BitvavoError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+class ConsultIn(BaseModel):
+    market: str = Field(min_length=5, max_length=16)
+
+
+@app.post("/api/trading/consult")
+async def trading_consult(
+    body: ConsultIn,
+    engine: TradingEngine = Depends(get_engine),
+    session: Session = Depends(get_session),
+):
+    """Ask Claude about one market now ('Claude laten beoordelen'), whatever the signal says.
+    The rules still hold: without a buy signal he cannot buy."""
+    market = body.market.strip().upper()
+    if not engine.decision_maker.available:
+        raise HTTPException(409, display.CONSULT_NO_CLAUDE)
+    try:
+        return (await engine.run_consult(session, market)).as_dict()
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except BudgetExceeded as exc:
+        raise HTTPException(429, f"Beoordeling niet gestart: {exc}") from exc
     except BitvavoError as exc:
         raise HTTPException(502, str(exc)) from exc
 
@@ -2262,6 +2288,7 @@ def _trading_context(
     return {
         "settings": settings,
         "status": status,
+        "markets": list(engine.markets),
         "other_mode": {"mode": other, "count": other_count} if other_count else None,
         # Under Agenda en risk-off: what the buys the rules blocked would have done.
         "blocked_review": blocked_buy_review(
@@ -2331,6 +2358,7 @@ async def trading_page(
 
 APPLY_ACTION_RE = re.compile(r"apply:([0-9]{1,9})")
 REVERT_ACTION_RE = re.compile(r"revert:([0-9]{1,9})")
+CONSULT_ACTION_RE = re.compile(r"consult:([A-Z0-9]{2,10}-EUR)")
 # Where /trading/action may send the browser back to (the hidden field "next").
 TRADING_ACTION_NEXT = ("/", "/trading")
 
@@ -2413,6 +2441,27 @@ async def trading_action(
                 "voorstel staat bovenaan deze pagina."
             )
         return flash.redirect_with_flash("/trading", "ok", text)
+    if action.startswith("consult:"):
+        to_consult = CONSULT_ACTION_RE.fullmatch("consult:" + action[8:].upper())
+        if to_consult is None:
+            raise HTTPException(400, "Ongeldige markt: verwacht consult:<MUNT>-EUR.")
+        market = to_consult.group(1)
+        if not engine.decision_maker.available:
+            return _action_refused(request, "/trading", 409, display.CONSULT_NO_CLAUDE)
+        try:
+            result = await engine.run_consult(session, market)
+        except ValueError as exc:
+            return _action_refused(request, "/trading", 404, f"{exc}.")
+        except BudgetExceeded as exc:
+            return _action_refused(request, "/trading", 429, f"Beoordeling niet gestart: {exc}")
+        except BitvavoError as exc:
+            if not errors.wants_html(request):
+                raise
+            return _action_refused(
+                request, "/trading", 502, f"Beoordeling niet gedaan: {errors.bitvavo_text(exc)}"
+            )
+        kind, text = display.consult_flash(result)
+        return flash.redirect_with_flash("/trading", kind, text)
     to_apply = APPLY_ACTION_RE.fullmatch(action)
     to_revert = REVERT_ACTION_RE.fullmatch(action)
     if action.startswith("apply:") and to_apply is None:

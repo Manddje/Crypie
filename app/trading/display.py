@@ -395,6 +395,31 @@ def _result_nl(r: Any) -> str:
     return f"{r.market} afwachten"
 
 
+CONSULT_NO_CLAUDE = (
+    "Claude kan niet beoordelen: de Claude-sleutel ontbreekt (ANTHROPIC_API_KEY in de "
+    "serveromgeving)."
+)
+
+
+def consult_flash(r: Any) -> tuple[str, str]:
+    """(kind, text) after 'Claude laten beoordelen': 'Claude heeft BTC-EUR beoordeeld:
+    afwachten. Zijn toelichting staat hieronder bij de markt.'"""
+    if r.source == "error" or r.signal == "error":
+        return "error", f"Beoordeling van {r.market} mislukt: {r.reason or 'onbekende fout'}."
+    if r.source != "claude":
+        # The rules decided before Claude could (risk-off, an order under way, no Claude).
+        return "warn", (
+            f"Claude is niet gevraagd voor {r.market}: {(r.reason or 'de regels besloten')}"
+        ).rstrip(".") + "."
+    what = _result_nl(r).removeprefix(f"{r.market} ")
+    text = (
+        f"Claude heeft {r.market} beoordeeld: {what}. Zijn toelichting staat hieronder bij de "
+        "markt."
+    )
+    trouble = r.action in ("buy", "sell") and not r.executed
+    return ("warn" if trouble else "ok"), text
+
+
 def cycle_flash(results: list[Any]) -> tuple[str, str]:
     """(kind, text) after 'Nu een cyclus draaien': 'Cyclus gedraaid: BTC-EUR afwachten ·
     ETH-EUR gekocht.' A failed market or an order that did not go through makes it a warning."""

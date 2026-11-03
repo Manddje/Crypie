@@ -25,7 +25,9 @@ Spelregels:
   "soft": true zijn filters, geen eisen: staat er iets in soft_filters_failed (bijvoorbeeld
   de koers onder de EMA200, dus een dip in een dalende trend), dan weeg je dat af tegen het
   nieuws. Koop in dat geval alleen bij neutraal tot positief nieuws en met een kleiner bedrag;
-  bij negatief nieuws is "hold" de keuze. De code halveert het bedrag dan sowieso.
+  bij negatief nieuws is "hold" de keuze. De code halveert het bedrag dan sowieso. Neutraal of
+  negatief lees je af aan news.label en news.score: een paar negatieve koppen bij een neutrale
+  score maken het nieuws niet negatief.
 - Kopen mag ook zonder buy-signaal als news_entry_allowed true is: het nieuws voor deze coin is
   dan sterk positief en van hoge impact. Doe dat alleen als de berichten echt koersrelevant zijn
   en de indicatoren niet tegenwerken; de code beperkt zo'n nieuwsaankoop tot een kleiner bedrag.
@@ -71,10 +73,27 @@ Spelregels:
   winst te nemen dan om te kopen. Bij EMA-steun: bounce true betekent dat de koers de EMA deze
   candle testte en erboven sloot (steun houdt); een koers duidelijk onder de EMA betekent dat de
   steun is gebroken. Het is context naast het nieuws, geen signaal op zich.
-- Koop niet in een vallend mes. recent_candles toont de laatste candles (oudste eerst):
-  dalen koers en oscillatoren (zoals RSI) nog steeds en staat de koers vlak bij het 24-uurs
-  dieptepunt, dan is "hold" de keuze en wacht je een cyclus op een draai. Alleen sterk positief
-  nieuws van hoge impact rechtvaardigt eerder instappen, en dan met een kleiner bedrag.
+- Koop niet in een vallend mes, maar wacht ook niet op een bodem die al achter je ligt.
+  recent_candles toont de laatste candles (oudste eerst): sluit de laatste candle lager dan de
+  vorige (close_falling true) en dalen de oscillatoren (zoals RSI) nog, dan is "hold" de keuze
+  en wacht je een cyclus op een draai; zet dan revisit_next_cycle op true. Dat de koers vlak bij
+  het 24-uurs dieptepunt staat is bij een dip normaal en op zich geen reden om te wachten: het
+  gaat om de richting van de laatste twee candles. Sluiten die hoger en draait de RSI omhoog,
+  dan is de draai er. Alleen sterk positief nieuws van hoge impact rechtvaardigt eerder
+  instappen, en dan met een kleiner bedrag.
+- revisit_next_cycle: alleen true bij "hold" op een koopsignaal omdat je op de bevestiging van
+  de draai wacht. De bot legt de markt je dan de volgende cyclus opnieuw voor zodra de draai
+  doorzet, ook als de dipvoorwaarde (zoals RSI onder 35) inmiddels niet meer geldt. Bij een
+  hold om het nieuws, de trend, het plan of de limieten blijft het false.
+- follow_up is gevuld als je bij je vorige beoordeling van deze markt op de draai wachtte en
+  de bevestiging er nu is: de draaivoorwaarde van de strategie geldt en de koers staat hooguit
+  iets boven die van toen (de code bewaakt dat). Het signaal telt dan als koopsignaal, ook al
+  toont signal_checks de dipvoorwaarde als niet gehaald. Beoordeel of de draai doorzet en of
+  het nieuws het toelaat; wacht niet nog eens op een lagere koers.
+- owner_request true betekent dat de eigenaar deze beoordeling zelf vroeg, buiten de gewone
+  cyclus. De spelregels gelden onverkort: zonder koopsignaal of news_entry_allowed is "buy"
+  niet toegestaan. Geef vooral een helder oordeel over de markt nu en noem wat er moet
+  gebeuren voordat een aankoop of verkoop aan de orde is.
 - trading_plan is het tradingplan van de eigenaar: doel, eigen regels, wat de bot niet doet en
   lessen uit het journaal. Volg die regels alsof ze onderdeel van deze spelregels zijn. Ze
   kunnen je terughoudender maken (kleiner bedrag of "hold"), maar nooit iets toestaan wat
@@ -97,6 +116,9 @@ class TradeDecision(BaseModel):
     confidence: float = Field(ge=0, le=1)
     amount_quote: float = Field(ge=0, description="EUR to spend (buy) or ignored for sell/hold")
     reasoning_nl: str
+    # A hold on a buy signal while waiting for the turn to confirm: the engine then offers the
+    # market again next cycle once the turn condition holds (see TradingEngine.revisit).
+    revisit_next_cycle: bool = False
 
 
 NEWS_TEXT_MAX = 240

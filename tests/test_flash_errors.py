@@ -287,3 +287,45 @@ async def test_get_logout_shows_a_logout_button(web):  # noqa: F811
     r = await web.get("/logout", headers=HTML)
     assert r.status_code == 200 and 'action="/logout"' in r.text and "Uitloggen" in r.text
     assert (await web.get("/bestaat-niet", headers=HTML)).status_code == 404
+
+
+async def test_consult_action_and_api(api, monkeypatch):
+    from app.trading.engine import CycleResult
+
+    engine = app.state.engine
+    # No Claude key in tests: refused with the reason, as a flash or as JSON.
+    r = await api.post("/trading/action", data={"action": "consult:BTC-EUR"}, headers=HTML)
+    assert r.status_code == 303 and r.headers["location"] == "/trading"
+    msg = flashes_from_response(r)[-1]
+    assert msg["kind"] == "error" and msg["text"].startswith("Claude kan niet beoordelen")
+    r = await api.post("/api/trading/consult", json={"market": "btc-eur"})
+    assert r.status_code == 409 and "ANTHROPIC_API_KEY" in r.json()["detail"]
+    r = await api.post("/trading/action", data={"action": "consult:nope"})
+    assert r.status_code == 400 and "consult:<MUNT>-EUR" in r.json()["detail"]
+
+    asked = []
+
+    async def consult(session, market):
+        asked.append(market)
+        return CycleResult(market, 1.0, "hold", "hold", "claude", False, "Geen dip.")
+
+    monkeypatch.setattr(engine.decision_maker, "_client", object())
+    monkeypatch.setattr(engine, "run_consult", consult)
+    r = await api.post("/trading/action", data={"action": "consult:btc-eur"}, headers=HTML)
+    msg = flashes_from_response(r)[-1]
+    assert msg["kind"] == "ok" and msg["text"].startswith(
+        "Claude heeft BTC-EUR beoordeeld: afwachten"
+    )
+    r = await api.post("/api/trading/consult", json={"market": "BTC-EUR"})
+    assert r.status_code == 200 and r.json()["source"] == "claude"
+    assert asked == ["BTC-EUR", "BTC-EUR"]
+
+    async def unknown(session, market):
+        raise ValueError(f"{market} staat niet bij de markten van de bot")
+
+    monkeypatch.setattr(engine, "run_consult", unknown)
+    r = await api.post("/api/trading/consult", json={"market": "XXX-EUR"})
+    assert r.status_code == 404
+    r = await api.post("/trading/action", data={"action": "consult:XXX-EUR"}, headers=HTML)
+    msg = flashes_from_response(r)[-1]
+    assert msg["kind"] == "error" and "staat niet bij de markten" in msg["text"]

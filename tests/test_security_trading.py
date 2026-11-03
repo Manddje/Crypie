@@ -1249,10 +1249,10 @@ async def test_a_database_error_in_one_market_does_not_abort_the_others(db):
     )
     original = engine._run_market
 
-    async def broken(session, broker, strategy, market, prices, watch):
+    async def broken(session, broker, strategy, market, prices, watch, consult=False):
         if market == "ETH-EUR":
             session.execute(text("SELECT * FROM no_such_table"))  # poisons a PG transaction
-        return await original(session, broker, strategy, market, prices, watch)
+        return await original(session, broker, strategy, market, prices, watch, consult)
 
     engine._run_market = broken
     eth, btc = await engine.run_cycle(db)

@@ -72,6 +72,10 @@ MARKET_RUN_TIMEOUT_S = 300.0
 EXIT_LOCK_WAIT_S = 30.0
 # After an order is refused, no new Claude consult in that market for this long.
 ORDER_BACKOFF_MIN = 60
+# Follow-up after Claude held a buy signal to wait for the turn: for how long the bot offers
+# the market again once the turn condition holds, and how far the price may have risen since.
+REVISIT_MAX_MIN = 180
+REVISIT_MAX_RISE_PCT = 2.0
 # An "opening"/"closing" claim without a live order behind it is released after this long.
 CLAIM_STALE = timedelta(minutes=10)
 ENGINE_STATE_KEY = "engine_state"
@@ -373,6 +377,10 @@ class TradingEngine:
         self.watch: dict[str, dict[str, Any]] = {}
         self.watch_cooldown: dict[str, datetime] = {}
         self.last_watch_run: datetime | None = None
+        # Follow-up: markets where Claude held a buy signal to wait for the turn (per market:
+        # since, the price and the condition values at that moment). The next cycles offer
+        # the market again as soon as the turn condition holds, see _follow_up().
+        self.revisit: dict[str, dict[str, Any]] = {}
         # After a refused order: no new Claude consult in that market until this moment.
         self.order_backoff: dict[str, datetime] = {}
         # Exit loop: a broker for positions of the other mode (set by the app), and the open
@@ -452,6 +460,7 @@ class TradingEngine:
                 for m, w in self.watch.items()
             },
             "watch_cooldown": {m: _iso(t) for m, t in self.watch_cooldown.items()},
+            "revisit": {m: {**r, "since": _iso(r["since"])} for m, r in self.revisit.items()},
             "order_backoff": {m: _iso(t) for m, t in self.order_backoff.items()},
             "exit_failures": {
                 str(pid): {"at": _iso(f["at"]), "reason": f.get("reason")}
@@ -487,6 +496,17 @@ class TradingEngine:
                 for m, v in (state.get("watch_cooldown") or {}).items()
                 if (t := _from_iso(v)) is not None and t > now
             }
+            revisit = {}
+            for market, r in (state.get("revisit") or {}).items():
+                since = _from_iso(r.get("since")) if isinstance(r, dict) else None
+                if since is None or now - since > timedelta(minutes=REVISIT_MAX_MIN):
+                    continue
+                try:
+                    price = float(r.get("price"))
+                except (TypeError, ValueError):
+                    continue
+                values = r.get("values") if isinstance(r.get("values"), dict) else {}
+                revisit[market] = {"since": since, "price": price, "values": values}
             backoff = {
                 m: t
                 for m, v in (state.get("order_backoff") or {}).items()
@@ -508,6 +528,7 @@ class TradingEngine:
             log.exception("ignoring unreadable engine state")
             return
         self.watch, self.watch_cooldown, self.order_backoff = watch, cooldown, backoff
+        self.revisit = revisit
         self.exit_failures = failures
         self.last_run = self.last_run or last_run
         self.last_exit_ok = self.last_exit_ok or last_exit_ok
@@ -616,10 +637,11 @@ class TradingEngine:
         market: str,
         prices: dict[str, float],
         watch: bool = False,
+        consult: bool = False,
     ) -> CycleResult:
         try:
             return await asyncio.wait_for(
-                self.run_market(session, strategy, market, prices, watch=watch),
+                self.run_market(session, strategy, market, prices, watch=watch, consult=consult),
                 self.market_timeout_s,
             )
         except TimeoutError as exc:
@@ -753,6 +775,74 @@ class TradingEngine:
         dip = [chk for cond, chk in pairs if cond.op not in LOOKBACK_OPS and cond in hard]
         return bool(turn) and bool(dip) and all(c.ok for c in dip), dip, turn
 
+    def _follow_up(
+        self,
+        market: str,
+        signal: str,
+        position: Position | None,
+        risk_off: dict[str, Any] | None,
+        price: float,
+        turn_checks: list[ConditionCheck],
+        now: datetime,
+    ) -> dict[str, Any] | None:
+        """The pending follow-up for this market when it fires now, else None.
+
+        Claude held a buy signal earlier to wait for the turn. Once the turn condition holds
+        (the lookback checks, e.g. RSI rising) and the price has not run away since, the market
+        goes to Claude again as a buy, even if the dip condition (RSI below 35) no longer
+        holds. Cleared by a position, a plain signal, or after REVISIT_MAX_MIN.
+        """
+        pending = self.revisit.get(market)
+        if pending is None:
+            return None
+        if (
+            position is not None
+            or signal == "buy"
+            or now - pending["since"] > timedelta(minutes=REVISIT_MAX_MIN)
+        ):
+            self.revisit.pop(market, None)
+            return None
+        if risk_off is not None or not turn_checks or not all(c.ok for c in turn_checks):
+            return None
+        if price > pending["price"] * (1 + REVISIT_MAX_RISE_PCT / 100):
+            return None
+        self.revisit.pop(market, None)
+        return {
+            **pending,
+            "price_now": price,
+            "turn": "; ".join(f"{c.text} ✓ ({c.values_nl})" for c in turn_checks),
+        }
+
+    def revisit_status(self) -> list[dict[str, Any]]:
+        """The pending follow-ups for the pages: market, since, until, the price then."""
+        return [
+            {
+                "market": m,
+                "since": r["since"],
+                "until": r["since"] + timedelta(minutes=REVISIT_MAX_MIN),
+                "price": r["price"],
+                "max_price": round(r["price"] * (1 + REVISIT_MAX_RISE_PCT / 100), 8),
+                "values": r.get("values") or {},
+            }
+            for m, r in sorted(self.revisit.items())
+        ]
+
+    async def run_consult(self, session: Session, market: str) -> CycleResult:
+        """Ask Claude about one market now, whatever the signal says ('Claude laten
+        beoordelen'). Same rules and limits as a cycle: without a buy signal he cannot buy."""
+        if market not in self.markets:
+            raise ValueError(f"{market} staat niet bij de markten van de bot")
+        strategy = self._trading_strategy(session)
+        prices = await self.client.ticker_prices([market])
+        self.remember_prices(prices)
+        result = await self._guarded_market(session, strategy, market, prices, consult=True)
+        # The market's card on Handelen shows this run as its last one.
+        self.last_results = [r for r in self.last_results if r.get("market") != market] + [
+            result.as_dict()
+        ]
+        self.save_state(session)
+        return result
+
     def risk_off(self, session: Session, market: str, now: datetime) -> dict[str, Any] | None:
         """Why no new position may be opened right now, or None: a calendar window or a shock."""
         if not self.risk_off_enabled:
@@ -834,12 +924,15 @@ class TradingEngine:
         market: str,
         prices: dict[str, float],
         watch: bool = False,
+        consult: bool = False,
     ) -> CycleResult:
+        """One market: a regular cycle, a dip-watch check (``watch``) or a consultation the
+        owner asked for (``consult``: Claude is asked whatever the signal says)."""
         async with self.market_lock(market):
             # One snapshot for the whole run: a mode switch halfway can never make this run
             # trade through the other mode's broker.
             broker = self.broker
-            return await self._run_market(session, broker, strategy, market, prices, watch)
+            return await self._run_market(session, broker, strategy, market, prices, watch, consult)
 
     async def _run_market(
         self,
@@ -849,6 +942,7 @@ class TradingEngine:
         market: str,
         prices: dict[str, float],
         watch: bool,
+        consult: bool = False,
     ) -> CycleResult:
         mode = broker.mode
         candles = await asyncio.wait_for(
@@ -904,6 +998,11 @@ class TradingEngine:
                 "values": {c.text: c.left for c in dip_checks + turn_checks},
             }
             log.info("dip watch %s armed: %s", market, self.watch[market]["dip"])
+        follow_up = None
+        if not watch:
+            follow_up = self._follow_up(market, signal, position, risk_off, price, turn_checks, now)
+            if follow_up is not None:
+                signal = "buy"
         if watch and not watch_triggered and signal != "buy":
             # A quiet watch check: no journal entry, the hourly cycle writes those.
             return CycleResult(
@@ -971,6 +1070,7 @@ class TradingEngine:
             and position is not None
             or news_exit
             or news_entry
+            or consult
         )
         if risk_off is not None and position is None and (needs_claude or signal == "buy"):
             # 2b. Risk-off: a calendar window or a news shock. No new position, whatever the
@@ -1053,7 +1153,7 @@ class TradingEngine:
             return CycleResult(market, price, signal, "hold", "rules", False, decision.reasoning)
 
         # 3. Ask Claude, or fall back.
-        action, confidence, amount_quote, reasoning, source, model = await self._decide(
+        action, confidence, amount_quote, reasoning, source, model, revisit = await self._decide(
             session,
             strategy,
             market,
@@ -1066,7 +1166,31 @@ class TradingEngine:
             checks,
             trajectory,
             mode=mode,
+            follow_up=follow_up,
+            consult=consult,
         )
+        if follow_up is not None:
+            reasoning = (
+                f"Vervolg: Claude wachtte om {follow_up['since']:%H:%M} UTC op de draai. "
+                + reasoning
+            )
+        elif consult:
+            reasoning = "Op verzoek beoordeeld. " + reasoning
+        if (
+            revisit
+            and source == "claude"
+            and action == "hold"
+            and signal == "buy"
+            and position is None
+            and follow_up is None
+        ):
+            # Claude waits for the turn to confirm: offer the market again next cycle(s).
+            self.revisit[market] = {
+                "since": now,
+                "price": price,
+                "values": {c.text: c.left for c in checks["buy"]},
+            }
+            log.info("revisit %s armed: Claude waits for the turn", market)
         decision.source, decision.model = source, model
         decision.action, decision.confidence, decision.reasoning = action, confidence, reasoning
         soft_failed = any(c.soft and not c.ok for c in checks["buy"])
@@ -1182,7 +1306,10 @@ class TradingEngine:
         checks: dict | None = None,
         trajectory: dict | None = None,
         mode: str | None = None,
-    ) -> tuple[str, float | None, float, str, str, str | None]:
+        follow_up: dict | None = None,
+        consult: bool = False,
+    ) -> tuple[str, float | None, float, str, str, str | None, bool]:
+        """(action, confidence, amount, reasoning, source, model, revisit_next_cycle)."""
         mode = mode or self.mode
         context = {
             "market": market,
@@ -1190,6 +1317,17 @@ class TradingEngine:
             "strategy": strategy.model_dump(),
             "signal": signal,
             "news_entry_allowed": news_entry,
+            "follow_up": None
+            if follow_up is None
+            else {
+                "held_at": follow_up["since"],
+                "price_then": follow_up["price"],
+                "values_then": follow_up.get("values") or {},
+                "turn_now": follow_up.get("turn"),
+                "note": "je wachtte toen op de draai; die bevestiging is er nu, het signaal "
+                "telt als koopsignaal ook al geldt de dipvoorwaarde niet meer",
+            },
+            "owner_request": consult,
             "signal_checks": {k: [c.as_dict() for c in v] for k, v in (checks or {}).items()},
             "soft_filters_failed": [
                 c.text for c in (checks or {}).get("buy", []) if c.soft and not c.ok
@@ -1242,6 +1380,7 @@ class TradingEngine:
                     d.reasoning_nl,
                     "claude",
                     self.decision_maker.model,
+                    bool(getattr(d, "revisit_next_cycle", False)),
                 )
             except BudgetExceeded as exc:
                 self.last_error = str(exc)
@@ -1269,7 +1408,7 @@ class TradingEngine:
                 log.exception("decision failed")
         else:
             self.last_error = "er is geen Claude-sleutel"
-        return self._fallback(signal, position, sentiment)
+        return (*self._fallback(signal, position, sentiment), False)
 
     def _fallback(
         self, signal: str, position, sentiment

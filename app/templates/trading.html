@@ -147,6 +147,12 @@
       <p class="small muted">Wacht op: {{ w.waiting_for }}. Zodra dat gebeurt, draait de bot meteen een cyclus{% if h.claude_available %} en beslist Claude of hij koopt{% elif settings.claude_unavailable_mode == "indicators" %} en koopt hij op het signaal van de strategie (zonder Claude){% else %}; zonder Claude koopt hij dan niet{% endif %}.</p>
     </div>
     {% endfor %}
+    {% for r in status.revisit %}
+    <div class="dip-watch">
+      <p><span class="pill pill-orange"><span class="dot" aria-hidden="true"></span>Vervolg {{ r.market }}</span> <span class="small muted">Claude wachtte om {{ r.since|dt }} op de draai (koers {{ r.price|price_eur }})</span></p>
+      <p class="small muted">Tot {{ r.until|dt }} legt de bot deze markt bij elke cyclus opnieuw aan Claude voor zodra de draai doorzet, ook als de dipvoorwaarde dan niet meer geldt, zolang de koers niet boven {{ r.max_price|price_eur }} staat.</p>
+    </div>
+    {% endfor %}
     {% if last_cycle or failed_markets %}
     <div class="grid-2">
       {#- UX-53: a market whose last cycle failed (a typo, a delisted coin, Bitvavo refusing it)
@@ -176,6 +182,11 @@
         {{ news_line(v) }}
         {% if v.explanation %}<p class="small decision-why">{{ v.explanation }}</p>{% endif %}
         {% if d.blocked_by %}<p class="small neg">Niet uitgevoerd: {{ d.blocked_by|refusal }}</p>{% endif %}
+        {% if d.market in markets %}
+        <form method="post" action="/trading/action" class="inline mt-2" data-confirm-if-live="LIVE · echt geld: Claude nu over {{ d.market }} laten beoordelen? Bij een koopsignaal kan de bot daarbij direct kopen of verkopen met echt geld op Bitvavo.">
+          <button class="btn btn-tint btn-sm" type="submit" name="action" value="consult:{{ d.market }}" data-busy="Claude beoordeelt…"{% if not h.claude_available %} disabled title="{{ 'Claude kan niet beoordelen: de Claude-sleutel ontbreekt.' }}"{% endif %}>Claude laten beoordelen</button>
+        </form>
+        {% endif %}
       </article>
       {% endfor %}
     </div>

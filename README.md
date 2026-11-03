@@ -448,7 +448,22 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    de draai begonnen is. Claude krijgt daarnaast `recent_candles` (laatste 6 candles van koers en indicatoren,
    24-uurs verandering en afstand tot het dieptepunt) met de instructie niet in een nog dalende koers te kopen.
    Claude krijgt in `recent_candles.price_context` ook de korting t.o.v. het 7- en 30-daags hoog en de
-   afstand tot het 30-daags gemiddelde, met de kanttekening dat lager niet de bodem is.
+   afstand tot het 30-daags gemiddelde, met de kanttekening dat lager niet de bodem is. Vallend mes
+   betekent voor Claude: de laatste candle sluit lager dan de vorige én de oscillatoren dalen nog; een
+   koers vlak bij het 24-uurs dieptepunt is bij een dip normaal en op zich geen reden om te wachten.
+   **Vervolg na "wacht op de draai"**: zegt Claude `hold` op een koopsignaal omdat hij de bevestiging van
+   de draai wil zien (`revisit_next_cycle: true` in zijn antwoord), dan onthoudt de bot dat. Bij de
+   volgende cycli (tot 180 minuten) legt hij de markt opnieuw aan Claude voor zodra de `rising`/`falling`-
+   bevestiging geldt, ook als de dipvoorwaarde (RSI onder 35) inmiddels niet meer geldt, zolang de koers
+   hooguit 2% boven die van het hold-moment staat. Zo gaat een snelle V-bodem niet verloren doordat de
+   RSI al boven de drempel staat op het moment dat de draai bevestigd is. Claude ziet dit als `follow_up`;
+   /trading toont het als "Vervolg" bij de laatste cyclus. Een open positie, een gewoon signaal of risk-off
+   heft het vervolg op.
+   **Claude laten beoordelen**: op /trading staat bij elke markt een knop die Claude nu om een oordeel
+   vraagt, ook als de regels zeggen dat er geen reden is om hem te raadplegen (`action=consult:<markt>`,
+   of `POST /api/trading/consult` met `{"market": "BTC-EUR"}`). Dezelfde spelregels gelden: zonder
+   koopsignaal of bevestigd sterk positief nieuws kan hij niet kopen. Het oordeel komt als beslissing in
+   het journaal ("Op verzoek beoordeeld.") en telt mee in het Claude-budget.
    **Lange-termijntrend** (`TREND_CONTEXT_ENABLED`, standaard aan): per markt haalt de bot eens per dag week- en
    maandcandles op en berekent het 200-weeks gemiddelde en de maand-RSI (PlanB-stijl). Boven het gemiddelde met
    RSI boven 50 is de lange trend "opwaarts", eronder "neerwaarts". Claude krijgt dit als `long_term_trend`
@@ -607,8 +622,11 @@ zegt de grafiek dat, met *Markten controleren* in plaats van *Opnieuw proberen*.
    trailing stop volgt daarna de nieuwe strategie. Crypie bewaart de strategie die er stond: zolang het
    laatst toegepaste voorstel nog de actieve strategie is, kun je één keer terug met *Vorige strategie
    terugzetten* (`action=revert:<id>`). Een oud tabblad kan zo nooit een latere wijziging terugdraaien.
-3. **Laatste cyclus per markt**: per markt de samenvatting, de voorwaarden en het nieuws. Een markt
-   waarvan de cyclus mislukte, staat er als "Mislukt" met de reden en een link naar de markten.
+3. **Laatste cyclus per markt**: per markt de samenvatting, de voorwaarden en het nieuws, met de knop
+   *Claude laten beoordelen* (in live met een bevestiging) die Claude nu om een oordeel over die markt
+   vraagt. Daarboven staan een lopende dipbewaking en een "Vervolg" (Claude wachtte op de draai en krijgt
+   de markt opnieuw zodra die doorzet). Een markt waarvan de cyclus mislukte, staat er als "Mislukt" met
+   de reden en een link naar de markten.
 4. **Open posities**, met de huidige koers, het netto resultaat en de afstand tot stop-loss en
    take-profit.
 5. **Context en limieten**: drie meters (in crypto t.o.v. het maximum, het resultaat van vandaag
