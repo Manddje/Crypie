@@ -139,13 +139,38 @@ def _order_action(o: Order, interval: str) -> dict:
     }
 
 
+def _blocked_label(d: Decision) -> str:
+    """'Kopen geblokkeerd': what the rule stopped. A decision blocked before Claude was asked
+    (risk-off, an order underway, an invalid strategy) is stored as 'hold'; 'Afwachten
+    geblokkeerd' would say the opposite of what happened, so name the order it prevented."""
+    action = d.action
+    if action == "hold":
+        action = "sell" if d.signal == "sell" and d.has_position else "buy"
+    return f"{ACTIONS_NL.get(action, action).capitalize()} geblokkeerd"
+
+
+def _blocked_detail(d: Decision) -> str:
+    """The rule, and for a risk-off also which one: the journal only stores 'risk-off', the
+    reasoning carries the event or news shock and until when buying is off."""
+    detail = d.blocked_by or ""
+    reasoning = d.reasoning or ""
+    if detail.lower().startswith("risk-off"):
+        for marker in ("Risk-off: ", "(risk-off: "):
+            at = reasoning.find(marker)
+            if at >= 0:
+                rest = reasoning[at + len(marker) :]
+                end = rest.find(")") if marker.startswith("(") else rest.find(". ")
+                return "Risk-off: " + (rest if end < 0 else rest[:end]).rstrip(".")
+    return detail
+
+
 def _decision_action(d: Decision, interval: str) -> dict:
     action_nl = ACTIONS_NL.get(d.action, d.action)
     if d.blocked_by:
         kind = "blocked"
-        label = f"{action_nl.capitalize()} geblokkeerd"
+        label = _blocked_label(d)
         short = "Geblokkeerd"
-        detail = d.blocked_by
+        detail = _blocked_detail(d)
     else:
         kind = "advice"
         label = f"Claude adviseert {action_nl}"

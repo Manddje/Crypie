@@ -197,3 +197,45 @@ async def test_chart_endpoints_and_dashboard(api):
     assert "Koers en acties" in r.text and "Portefeuillewaarde" in r.text
     assert "lightweight-charts.standalone.production.js" in r.text
     assert 'data-period="90d"' in r.text
+
+
+def test_blocked_hold_names_the_prevented_order_and_the_risk_off_reason():
+    """Risk-off blocks before Claude is asked, so the journal says 'hold' with blocked_by
+    'risk-off': the chart must say which order was stopped and why, not 'Afwachten geblokkeerd'."""
+    from app.trading.history import _decision_action
+
+    common = dict(mode="paper", market="BTC-EUR", price=50000.0, created_at=T0, source="rules")
+    shock = Decision(
+        signal="buy",
+        action="hold",
+        blocked_by="risk-off",
+        reasoning=(
+            "RSI onder 30. Risk-off: nieuwsschok (Beurs X gehackt); geen nieuwe aankopen tot "
+            "01:10 UTC. Geen nieuwe positie; verkopen en stop-loss blijven mogelijk."
+        ),
+        **common,
+    )
+    a = _decision_action(shock, "1h")
+    assert a["label"] == "Kopen geblokkeerd"
+    assert (
+        a["detail"] == "Risk-off: nieuwsschok (Beurs X gehackt); geen nieuwe aankopen tot 01:10 UTC"
+    )
+    event = Decision(
+        signal="buy",
+        action="buy",
+        blocked_by="risk-off: event",
+        reasoning="Claude: koop klein. (risk-off: FOMC-rentebesluit om 19:00 UTC; geen nieuwe "
+        "aankopen van 18:00 tot 21:00 UTC)",
+        **common,
+    )
+    a = _decision_action(event, "1h")
+    assert a["label"] == "Kopen geblokkeerd"
+    assert (
+        a["detail"]
+        == "Risk-off: FOMC-rentebesluit om 19:00 UTC; geen nieuwe aankopen van 18:00 tot 21:00 UTC"
+    )
+    sell = Decision(
+        signal="sell", has_position=True, action="hold", blocked_by="order onderweg", **common
+    )
+    a = _decision_action(sell, "1h")
+    assert a["label"] == "Verkopen geblokkeerd" and a["detail"] == "order onderweg"
