@@ -511,3 +511,26 @@ def test_position_result_is_net_of_both_fees():
     assert round(v["pnl_eur"], 4) == round(22.0 * 0.9975 - 20.05, 4)
     assert round(v["stop_gap_pct"], 2) == round(2 / 11 * 100, 2)
     assert display.position_view(p, None, 0.25)["pnl_eur"] is None
+
+
+async def test_blocked_buys_are_judged_in_hindsight(api):
+    """Under Agenda en risk-off: per blockade the price then and the move after 6 and 24 hours,
+    from the journal's own prices; a blocked sell does not count as a blocked buy."""
+    blocked = [
+        _decision(signal="buy", price=69000 - 20 * i, blocked_by="risk-off", reasoning="Risk-off.")
+        for i in range(12)
+    ]
+    later = [_decision(price=68310) for _ in range(20)]
+    sell = _decision(signal="sell", has_position=True, blocked_by="order onderweg")
+    _add_decisions(*blocked, *later, sell, spread_min=30)
+    page = (await api.get("/trading")).text
+    assert 'id="blocked-review"' in page
+    assert "Risk-off" in page and "Geblokkeerde aankopen achteraf" in page
+    assert "12× in 5,5 uur" in page and "€\xa069.000,00" in page
+    assert "-1,0%" in page  # 6 h after the first blocked signal
+    assert "Na 24 uur" not in page and "Na 6 uur stond de koers in 1 van de 1 geval lager" in page
+
+
+async def test_blocked_review_is_quiet_without_blockades(api):
+    page = (await api.get("/trading")).text
+    assert "Geen tegengehouden aankopen." in page and "laatste 30 dagen" in page

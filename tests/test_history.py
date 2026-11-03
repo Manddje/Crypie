@@ -239,3 +239,84 @@ def test_blocked_hold_names_the_prevented_order_and_the_risk_off_reason():
     )
     a = _decision_action(sell, "1h")
     assert a["label"] == "Verkopen geblokkeerd" and a["detail"] == "order onderweg"
+
+
+def test_blocked_buy_review_groups_a_blockade_and_prices_it_from_the_journal():
+    from app.trading.history import blocked_buy_review
+
+    init_db()
+    with SessionLocal() as s:
+        s.query(Decision).delete()
+        s.commit()
+        common = dict(mode="paper", market="BTC-EUR", source="rules")
+        start = T0
+        rows = []
+        # Six hours of a shock pause: a buy signal every 10 minutes, blocked, as the price falls.
+        for i in range(36):
+            rows.append(
+                Decision(
+                    created_at=start + timedelta(minutes=10 * i),
+                    price=69000 - 20 * i,
+                    signal="buy",
+                    action="hold",
+                    blocked_by="risk-off",
+                    **common,
+                )
+            )
+        # Afterwards the routine cycles carry the price: 6 h later 68.310, 24 h later 70.380.
+        for h in range(6, 26):
+            rows.append(
+                Decision(
+                    created_at=start + timedelta(hours=h, minutes=5),
+                    price=68310 if h < 12 else 70380,
+                    signal="hold",
+                    action="hold",
+                    **common,
+                )
+            )
+        # A blocked sell and a blocked buy in another market two days later: separate rows.
+        rows.append(
+            Decision(
+                created_at=start + timedelta(hours=30),
+                price=70000,
+                signal="sell",
+                has_position=True,
+                action="hold",
+                blocked_by="order onderweg",
+                **common,
+            )
+        )
+        rows.append(
+            Decision(
+                created_at=start + timedelta(hours=48),
+                price=100.0,
+                signal="buy",
+                action="buy",
+                source="claude",
+                blocked_by="maximum van 5 trades per dag bereikt",
+                mode="paper",
+                market="SOL-EUR",
+            )
+        )
+        s.add_all(rows)
+        s.commit()
+        review = blocked_buy_review(
+            s,
+            "paper",
+            start - timedelta(days=1),
+            now=start + timedelta(hours=50),
+            prices_now={"BTC-EUR": 69690.0, "SOL-EUR": 101.0},
+        )
+        s.query(Decision).delete()
+        s.commit()
+    assert [b["market"] for b in review["blockades"]] == ["SOL-EUR", "BTC-EUR"]
+    btc = review["blockades"][1]
+    assert btc["count"] == 36 and btc["reason"] == "risk-off" and btc["hours"] == 5.8
+    assert btc["price"] == 69000
+    assert round(btc["moves"]["6u"], 2) == -1.0 and round(btc["moves"]["24u"], 2) == 2.0
+    assert round(btc["moves"]["now"], 2) == 1.0 and btc["pending"] is False
+    sol = review["blockades"][0]
+    assert sol["moves"]["6u"] is None and sol["pending"] is True  # 48 h ago: 6 h known? no bot
+    assert sol["moves"]["24u"] is None and round(sol["moves"]["now"], 2) == 1.0
+    assert review["summary"]["6u"] == {"known": 1, "avoided": 1, "average": btc["moves"]["6u"]}
+    assert review["summary"]["24u"]["avoided"] == 0

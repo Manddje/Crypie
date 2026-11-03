@@ -303,3 +303,121 @@ def _undo(holdings: dict[str, float], o: Order) -> None:
     for key in (base, quote):
         if abs(holdings.get(key, 0.0)) < 1e-12:
             holdings[key] = 0.0
+
+
+# -- blocked buys in hindsight ------------------------------------------------------------------
+
+# A blocked buy signal repeats every cycle while the rule holds; a longer silence starts a new
+# blockade. Longer than the slowest sensible cycle, shorter than a new dip hours later.
+BLOCKADE_GAP = timedelta(minutes=90)
+# How close a journal entry must be to 'six hours later' to serve as the price then.
+PRICE_TOLERANCE = timedelta(minutes=30)
+REVIEW_HORIZONS: tuple[tuple[str, timedelta], ...] = (
+    ("6u", timedelta(hours=6)),
+    ("24u", timedelta(hours=24)),
+)
+
+
+def _as_utc(moment: datetime) -> datetime:
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
+def is_blocked_buy(d: Decision) -> bool:
+    """A decision where a rule stopped a buy: the signal said buy (or Claude did) and
+    ``blocked_by`` says why. A blocked sell is not one."""
+    if not d.blocked_by or d.executed:
+        return False
+    if d.action == "buy":
+        return True
+    return d.action == "hold" and not (d.signal == "sell" and d.has_position)
+
+
+def _price_near(prices: list[tuple[datetime, float]], at: datetime) -> float | None:
+    """The journal's price closest to ``at`` within PRICE_TOLERANCE, or None (the bot was off)."""
+    lo, hi = 0, len(prices)
+    while lo < hi:  # first entry at or after `at`
+        mid = (lo + hi) // 2
+        if prices[mid][0] < at:
+            lo = mid + 1
+        else:
+            hi = mid
+    best = None
+    for i in (lo - 1, lo):
+        if 0 <= i < len(prices):
+            gap = abs(prices[i][0] - at)
+            if gap <= PRICE_TOLERANCE and (best is None or gap < best[0]):
+                best = (gap, prices[i][1])
+    return best[1] if best else None
+
+
+def blocked_buy_review(
+    session: Session,
+    mode: str,
+    since: datetime,
+    now: datetime | None = None,
+    prices_now: dict[str, float] | None = None,
+) -> dict:
+    """What the buys a rule blocked since ``since`` would have done: one row per blockade
+    (a run of blocked buy signals in one market), with the price at the first blocked signal
+    and how far the price was from it 6 and 24 hours later and now. The later prices come
+    from the journal itself (the bot notes the price every cycle), so a gap means the bot was
+    off at that moment. A negative move means the rule avoided a loss.
+    """
+    now = _as_utc(now or datetime.now(UTC))
+    rows = session.scalars(
+        select(Decision)
+        .where(Decision.mode == mode, Decision.created_at >= since)
+        .order_by(Decision.created_at)
+    ).all()
+    journal: dict[str, list[tuple[datetime, float]]] = {}
+    for d in rows:
+        if d.price:
+            journal.setdefault(d.market, []).append((_as_utc(d.created_at), d.price))
+    blockades: list[dict] = []
+    open_runs: dict[str, dict] = {}
+    for d in rows:
+        if not is_blocked_buy(d):
+            continue
+        at = _as_utc(d.created_at)
+        run = open_runs.get(d.market)
+        if run is None or run["reason"] != d.blocked_by or at - run["until"] > BLOCKADE_GAP:
+            run = {
+                "market": d.market,
+                "reason": d.blocked_by,
+                "reason_nl": _blocked_detail(d),
+                "since": at,
+                "until": at,
+                "count": 0,
+                "price": d.price,
+            }
+            open_runs[d.market] = run
+            blockades.append(run)
+        run["until"] = at
+        run["count"] += 1
+    for run in blockades:
+        series = journal.get(run["market"], [])
+        moves: dict[str, float | None] = {}
+        pending = False
+        for key, horizon in REVIEW_HORIZONS:
+            target = run["since"] + horizon
+            if target > now:
+                moves[key] = None
+                pending = True
+                continue
+            later = _price_near(series, target)
+            moves[key] = (later / run["price"] - 1) * 100 if later and run["price"] else None
+        current = (prices_now or {}).get(run["market"])
+        moves["now"] = (current / run["price"] - 1) * 100 if current and run["price"] else None
+        run["moves"] = moves
+        run["pending"] = pending
+        run["hours"] = round((run["until"] - run["since"]).total_seconds() / 3600, 1)
+    blockades.reverse()  # newest first
+    summary = {}
+    for key, _ in REVIEW_HORIZONS:
+        known = [b["moves"][key] for b in blockades if b["moves"][key] is not None]
+        summary[key] = {
+            "known": len(known),
+            "avoided": sum(1 for m in known if m < 0),
+            "average": sum(known) / len(known) if known else None,
+        }
+    return {"blockades": blockades, "summary": summary, "since": since}

@@ -270,6 +270,36 @@
           {% endif %}
         </section>
 
+        <section class="span-all" id="blocked-review" aria-labelledby="blocked-review-title">
+          {% set br = blocked_review %}
+          <div class="context-head"><h3 class="context-title" id="blocked-review-title">Geblokkeerde aankopen achteraf</h3><span class="card-meta">laatste {{ blocked_review_days }} dagen</span></div>
+          {% if br.blockades %}
+          {% set s6 = br.summary["6u"] %}{% set s24 = br.summary["24u"] %}
+          <p class="small">Per blokkade de koers bij het eerste tegengehouden koopsignaal en hoeveel de koers daarna bewoog. Een min betekent dat de regel een verlies voorkwam, een plus een gemiste winst.{% if s24.known %} Na 24 uur stond de koers in {{ s24.avoided }} van de {{ s24.known }} {{ "geval" if s24.known == 1 else "gevallen" }} lager, gemiddeld {{ s24.average|pct }}.{% elif s6.known %} Na 6 uur stond de koers in {{ s6.avoided }} van de {{ s6.known }} {{ "geval" if s6.known == 1 else "gevallen" }} lager, gemiddeld {{ s6.average|pct }}.{% endif %}</p>
+          {% call ui.table_wrap("Geblokkeerde aankopen achteraf") %}
+          <table class="small">
+            <thead><tr><th scope="col">Vanaf</th><th scope="col">Markt</th><th scope="col">Regel</th><th scope="col" class="num">Koers toen</th><th scope="col" class="num">Na 6u</th><th scope="col" class="num">Na 24u</th><th scope="col" class="num">Nu</th></tr></thead>
+            <tbody>
+            {% for b in br.blockades %}
+            <tr>
+              <td class="nowrap">{{ b.since|dt }}<span class="sub">{% if b.count == 1 %}1 signaal{% else %}{{ b.count }}× in {{ b.hours|num(1) }} uur{% endif %}</span></td>
+              <td class="nowrap"><strong>{{ b.market }}</strong></td>
+              <td>{{ b.reason_nl|refusal }}</td>
+              <td class="num">{{ b.price|price_eur }}</td>
+              {% for key in ("6u", "24u", "now") %}{% set m = b.moves[key] %}
+              <td class="num {{ m|pnl_class(1) if m is not none else '' }}">{{ m|pct if m is not none else ("nog niet" if (b.pending and key != "now") else "–") }}</td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          {% endcall %}
+          <p class="small muted">De koersen daarna komen uit het logboek zelf; een streepje betekent dat de bot op dat moment niet draaide.</p>
+          {% else %}
+          <p class="small muted">Geen tegengehouden aankopen. Zodra een regel een koopsignaal tegenhoudt, zie je hier wat die aankoop had gedaan.</p>
+          {% endif %}
+        </section>
+
         {% if status.trends %}
         <section class="span-all" aria-labelledby="trend-title">
           <div class="context-head"><h3 class="context-title" id="trend-title">Lange-termijntrend</h3><span class="card-meta">PlanB-stijl · dagelijks ververst</span></div>

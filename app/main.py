@@ -132,6 +132,7 @@ from app.trading.events import parse_calendar
 from app.trading.health import bot_health, describe_problem, risk_now
 from app.trading.history import (
     PERIODS,
+    blocked_buy_review,
     candle_dicts,
     market_actions,
     period_spec,
@@ -2197,6 +2198,11 @@ def _cycle_failure_nl(reason: str | None) -> str:
     return f"Bitvavo weigerde het verzoek ({detail}: {message})"
 
 
+# How far back Handelen judges the blocked buys: long enough for a verdict on a rule, not so
+# long that the table dwarfs the agenda.
+BLOCKED_REVIEW_DAYS = 30
+
+
 def _trading_context(
     request: Request,
     engine: TradingEngine,
@@ -2257,6 +2263,11 @@ def _trading_context(
         "settings": settings,
         "status": status,
         "other_mode": {"mode": other, "count": other_count} if other_count else None,
+        # Under Agenda en risk-off: what the buys the rules blocked would have done.
+        "blocked_review": blocked_buy_review(
+            session, engine.mode, now - timedelta(days=BLOCKED_REVIEW_DAYS), now, prices
+        ),
+        "blocked_review_days": BLOCKED_REVIEW_DAYS,
         # One status for the hero (app/trading/health.py) and the limits as current figures.
         "health": _health(request, engine, session, figures=figures, paused=status["paused"]),
         "risk_now": figures,
