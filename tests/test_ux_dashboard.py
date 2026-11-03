@@ -595,3 +595,14 @@ async def test_a_refused_password_marks_the_field(api, monkeypatch):
     page = (await api.get("/", headers=HTML)).text
     assert "Het wachtwoord klopt niet" in _order_card(page)
     assert 'autocomplete="current-password" maxlength="1024" required aria-invalid="true"' in page
+
+
+def test_price_chart_bundles_the_actions_of_one_candle():
+    """The bot can be blocked by a rule every cycle for hours: one square per candle with a
+    count, one label for the whole run, instead of a stack of 'Geblokkeerd' on each candle."""
+    from pathlib import Path
+
+    js = (Path(__file__).parents[1] / "app/static/chart.js").read_text(encoding="utf-8")
+    assert "function priceMarkersFor(" in js and "function groupText(" in js
+    assert '"× " + GROUP_WORDS[kind]' in js and '" acties"' in js
+    assert "function actionsHtml(" in js  # the tooltip merges identical blockades too

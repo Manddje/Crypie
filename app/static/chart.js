@@ -307,20 +307,65 @@
     tip.style.top = top + "px";
   }
 
-  function markerFor(action, t, withCoin) {
-    var text = withCoin ? action.market.split("-")[0] : action.short;
-    if (action.kind === "buy") return { time: action.bar_time, position: "belowBar", shape: "arrowUp", color: t.green, text: text, size: 1.4 };
-    if (action.kind === "sell") return { time: action.bar_time, position: "aboveBar", shape: "arrowDown", color: t.red, text: text, size: 1.4 };
-    if (action.kind === "blocked") return { time: action.bar_time, position: "aboveBar", shape: "square", color: t.orange, text: text, size: 1 };
-    return { time: action.bar_time, position: "aboveBar", shape: "circle", color: t.accent, text: text, size: 1 };
+  // The symbol for a kind of action: 'mixed' (several kinds in one candle) is the neutral dot.
+  function markerShape(kind, time, text, t) {
+    if (kind === "buy") return { time: time, position: "belowBar", shape: "arrowUp", color: t.green, text: text, size: 1.4 };
+    if (kind === "sell") return { time: time, position: "aboveBar", shape: "arrowDown", color: t.red, text: text, size: 1.4 };
+    if (kind === "blocked") return { time: time, position: "aboveBar", shape: "square", color: t.orange, text: text, size: 1 };
+    if (kind === "advice") return { time: time, position: "aboveBar", shape: "circle", color: t.accent, text: text, size: 1 };
+    return { time: time, position: "aboveBar", shape: "circle", color: t.accent, text: text, size: 1.2 };
   }
 
-  function actionHtml(a) {
+  function markerFor(action, t, withCoin) {
+    return markerShape(action.kind, action.bar_time, withCoin ? action.market.split("-")[0] : action.short, t);
+  }
+
+  // What one candle's worth of actions is, for its symbol: an executed order outweighs what
+  // the bot only considered, a blockade outweighs a plain advice.
+  function groupKind(acts) {
+    var kinds = {};
+    acts.forEach(function (a) { kinds[a.kind] = true; });
+    if (kinds.buy && kinds.sell) return "mixed";
+    if (kinds.buy) return "buy";
+    if (kinds.sell) return "sell";
+    return kinds.blocked ? "blocked" : "advice";
+  }
+
+  var GROUP_WORDS = { buy: "koop", sell: "verkoop", blocked: "geblokkeerd", advice: "Claude" };
+
+  // The label of one candle: '4× geblokkeerd' when the same kind repeats, '3 acties' when
+  // they differ. An executed order names the candle on its own ('Stop-loss'), whatever the
+  // bot also considered that hour. Short: labels of neighbouring candles would overlap.
+  function groupText(acts) {
+    var orders = acts.filter(function (a) { return a.executed; });
+    if (orders.length) acts = orders;
+    if (acts.length === 1) return acts[0].short;
+    var kind = acts[0].kind, same = acts.every(function (a) { return a.kind === kind; });
+    return same ? acts.length + "× " + GROUP_WORDS[kind] : acts.length + " acties";
+  }
+
+  function actionHtml(a, count) {
     var how = "";
     if (a.price != null) how += price(a.price);
     if (a.amount_quote != null && a.executed) how += " · " + eur(a.amount_quote);
+    var label = count > 1 ? count + "× " + a.label.charAt(0).toLowerCase() + a.label.slice(1) : a.label;
     var detail = a.detail ? '<span class="detail">' + escapeHtml(a.detail) + "</span>" : "";
-    return '<div class="t-action"><strong>' + escapeHtml(a.label) + "</strong>" + (how ? " · " + escapeHtml(how) : "") + detail + "</div>";
+    return '<div class="t-action"><strong>' + escapeHtml(label) + "</strong>" + (how ? " · " + escapeHtml(how) : "") + detail + "</div>";
+  }
+
+  // The tooltip for one candle. The bot runs several cycles an hour, so the same rule can
+  // block it five times in one candle: those become one line with a count ('5× kopen
+  // geblokkeerd') at the price of the last one. Executed orders are always listed one by one.
+  function actionsHtml(acts) {
+    var groups = [], byKey = {};
+    acts.forEach(function (a) {
+      var key = a.executed ? a.id : a.kind + "|" + a.label + "|" + a.detail;
+      var g = byKey[key];
+      if (!g) { g = byKey[key] = { action: a, count: 0 }; groups.push(g); }
+      g.action = a;
+      g.count += 1;
+    });
+    return groups.map(function (g) { return actionHtml(g.action, g.count); }).join("");
   }
 
   // ---- Price chart ----------------------------------------------------------------------
@@ -360,9 +405,7 @@
         '<div class="t-row"><span>Hoog</span><b>' + price(bar.high, d) + "</b></div>" +
         '<div class="t-row"><span>Laag</span><b>' + price(bar.low, d) + "</b></div>" +
         '<div class="t-row"><span>Slot</span><b>' + price(bar.close, d) + "</b></div>";
-      visibleActions().forEach(function (a) {
-        if (a.bar_time === param.time) html += actionHtml(a);
-      });
+      html += actionsHtml(visibleActions().filter(function (a) { return a.bar_time === param.time; }));
       placeTooltip(priceTip, priceWrap, param.point, html);
     });
   }
@@ -376,13 +419,48 @@
       priceFormat: { type: "price", precision: priceData.decimals, minMove: Math.pow(10, -priceData.decimals) }
     });
     candleSeries.setData(priceData.candles);
-    var barTimes = {};
-    priceData.candles.forEach(function (c) { barTimes[c.time] = true; });
-    priceMarkers.setMarkers(visibleActions()
-      .filter(function (a) { return barTimes[a.bar_time]; })
-      .map(function (a) { return markerFor(a, t, false); }));
+    priceMarkers.setMarkers(priceMarkersFor(t));
     priceChart.timeScale().fitContent();
     renderPriceTable();
+  }
+
+  // One marker per candle. The bot runs several cycles an hour and a rule (risk-off, an order
+  // still underway, the daily limit) blocks it every cycle, so one candle used to carry a
+  // stack of 'Geblokkeerd' labels on top of each other. Now a candle gets one square with a
+  // count, and a run of candles that are all blocked (or all advice) gets one label with the
+  // total for the run ('48× geblokkeerd'), on the highest candle so the neighbouring squares
+  // do not cover it; the other candles are just the symbol the legend explains. Orders are
+  // always labelled. The tooltip and the table under the chart still list everything.
+  function priceMarkersFor(t) {
+    var index = {}, highs = [];
+    priceData.candles.forEach(function (c, i) { index[c.time] = i; highs.push(c.high); });
+    var groups = {}, order = [];
+    visibleActions().forEach(function (a) {
+      if (index[a.bar_time] === undefined) return;
+      if (!groups[a.bar_time]) { groups[a.bar_time] = []; order.push(a.bar_time); }
+      groups[a.bar_time].push(a);
+    });
+    order.sort(function (a, b) { return index[a] - index[b]; });
+    var markers = order.map(function (time) {
+      var acts = groups[time];
+      return { time: time, i: index[time], kind: groupKind(acts), count: acts.length, text: groupText(acts) };
+    });
+    var start = 0;
+    while (start < markers.length) {
+      var end = start, kind = markers[start].kind;
+      while (end + 1 < markers.length && markers[end + 1].kind === kind && markers[end + 1].i === markers[end].i + 1) end += 1;
+      if (end > start && (kind === "blocked" || kind === "advice")) {
+        var total = 0, top = start;
+        for (var k = start; k <= end; k += 1) {
+          total += markers[k].count;
+          if (highs[markers[k].i] > highs[markers[top].i]) top = k;
+          markers[k].text = "";
+        }
+        markers[top].text = total + "× " + GROUP_WORDS[kind];
+      }
+      start = end + 1;
+    }
+    return markers.map(function (m) { return markerShape(m.kind, m.time, m.text, t); });
   }
 
   // Like app.js does for the tables on the page: a table that scrolls sideways becomes a named
@@ -591,9 +669,7 @@
       if (portfolioData.startEur) {
         html += '<div class="t-row"><span>Sinds start</span><b>' + pct(pt.value / portfolioData.startEur - 1) + "</b></div>";
       }
-      portfolioData.actions.forEach(function (a) {
-        if (a.bar_time === param.time) html += actionHtml(a);
-      });
+      html += actionsHtml(portfolioData.actions.filter(function (a) { return a.bar_time === param.time; }));
       placeTooltip(portfolioTip, portfolioWrap, param.point, html);
     });
   }
@@ -610,12 +686,7 @@
     return order.map(function (time) {
       var acts = groups[time];
       if (acts.length === 1) return markerFor(acts[0], t, true);
-      var kinds = {};
-      acts.forEach(function (a) { kinds[a.kind] = true; });
-      var text = acts.length + "×"; // short: neighbouring markers must not overlap
-      if (kinds.buy && !kinds.sell) return { time: time, position: "belowBar", shape: "arrowUp", color: t.green, text: text, size: 1.4 };
-      if (kinds.sell && !kinds.buy) return { time: time, position: "aboveBar", shape: "arrowDown", color: t.red, text: text, size: 1.4 };
-      return { time: time, position: "aboveBar", shape: "circle", color: t.accent, text: text, size: 1.2 };
+      return markerShape(groupKind(acts), time, acts.length + "×", t); // short: neighbouring markers must not overlap
     });
   }
 

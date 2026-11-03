@@ -210,7 +210,7 @@
         {% for p in chart_periods %}<button type="button" data-period="{{ p }}"{% if p == "7d" %} class="active"{% endif %}>{{ p[:-1] }} {{ "dag" if p == "1d" else "dagen" }}</button>{% endfor %}
       </div>
     </div>
-    <p class="card-desc">De koers van Bitvavo met daarop wat de bot deed: elke koop en verkoop, de momenten waarop Claude om advies is gevraagd, en de keren dat een regel een order tegenhield. <span class="dash-hint-hover">Beweeg over de grafiek voor details,</span><span class="dash-hint-touch">Houd je vinger op de grafiek voor details,</span> of open de tabel onder de grafiek.</p>
+    <p class="card-desc">De koers van Bitvavo met daarop wat de bot deed: elke koop en verkoop, de momenten waarop Claude om advies is gevraagd, en de keren dat een regel een order tegenhield. Houdt een regel de bot een tijd lang elke cyclus tegen, dan zie je per candle één vierkantje met hoe vaak. <span class="dash-hint-hover">Beweeg over de grafiek voor details,</span><span class="dash-hint-touch">Houd je vinger op de grafiek voor details,</span> of open de tabel onder de grafiek.</p>
     <div class="chart-legend" hidden>
       <span class="key"><span class="swatch up" aria-hidden="true"></span>Koop</span>
       <span class="key"><span class="swatch down" aria-hidden="true"></span>Verkoop, stop-loss of take-profit</span>
