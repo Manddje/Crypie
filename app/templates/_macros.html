@@ -47,7 +47,8 @@
 {%- if live is none -%}{%- set role = {"error": "alert", "ok": "status"}.get(kind) -%}
 {%- elif live -%}{%- set role = "alert" if kind == "error" else "status" -%}
 {%- else -%}{%- set role = none -%}{%- endif -%}
-<div class="notice notice-{{ kind }}"{% if role %} role="{{ role }}"{% endif %}{% if id %} id="{{ id }}"{% endif %}>
+{#- A flash (live=true) is new on this page: data-flash eases it in once (app.css). -#}
+<div class="notice notice-{{ kind }}"{% if role %} role="{{ role }}"{% endif %}{% if live %} data-flash{% endif %}{% if id %} id="{{ id }}"{% endif %}>
   {{ icon(kind) }}
   <div class="body">{% if title %}<span class="notice-title">{{ title }}</span> {% endif %}{{ text }}{{ caller() if caller is defined }}</div>
 </div>

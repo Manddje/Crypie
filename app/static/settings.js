@@ -338,6 +338,7 @@
     var box = document.createElement("div");
     box.className = "notice notice-warn";
     box.setAttribute("role", "status");
+    box.setAttribute("data-flash", "");
     var body = document.createElement("div");
     body.className = "body";
     var text = document.createElement("p");

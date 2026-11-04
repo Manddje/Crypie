@@ -58,6 +58,13 @@
 
   --tap: 44px;
   --gutter: 20px;
+
+  /* Motion: interactive state changes are transitions (they retarget mid-way), never
+     `transition: all`. Press is the tactile shrink of a button; wide buttons shrink less. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --dur-fast: 150ms;
+  --dur: 200ms;
+  --press-scale: 0.96;
   /* Height of the sticky header; app.js measures it, these are the fallbacks. */
   --header-h: 57px;
 
@@ -106,7 +113,8 @@
   --nav-bg: rgba(255, 255, 255, 0.72);
   --scroll-shadow: rgba(0, 0, 0, 0.16);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.12);
+  /* The raised segment of a segmented control: a hairline, a contact shadow and a soft one. */
+  --shadow-sm: 0 0 0 0.5px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.1), 0 3px 8px rgba(0, 0, 0, 0.08);
 
   /* The charts may keep the brighter colours: chart.js can read these instead of --green. */
   --chart-green: #1f9d4f;
@@ -149,7 +157,7 @@
     --nav-bg: rgba(22, 22, 23, 0.72);
     --scroll-shadow: rgba(0, 0, 0, 0.7);
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
-    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5);
+    --shadow-sm: 0 0 0 0.5px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.4), 0 3px 8px rgba(0, 0, 0, 0.3);
     --chart-green: #30d158;
     --chart-red: #ff453a;
     --chart-accent: #0a84ff;
@@ -190,7 +198,7 @@
   --nav-bg: rgba(22, 22, 23, 0.72);
   --scroll-shadow: rgba(0, 0, 0, 0.7);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 0 0 0.5px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.4), 0 3px 8px rgba(0, 0, 0, 0.3);
   --chart-green: #30d158;
   --chart-red: #ff453a;
   --chart-accent: #0a84ff;
@@ -215,6 +223,9 @@ html:not(.js) .js-only { display: none !important; }
 
 html {
   -webkit-text-size-adjust: 100%;
+  /* Thin, crisp text on macOS (Safari, Chrome and Firefox alike). */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   /* Anchors, focus and error fields stop below the sticky header (and a sticky list of
      parts, --sticky-extra), not under it. */
   scroll-padding-top: calc(var(--header-h) + var(--banner-h, 0px) + var(--sticky-extra, 0px) + 12px);
@@ -230,7 +241,6 @@ body {
   line-height: 1.5;
   color: var(--text);
   background: var(--bg);
-  -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow-wrap: break-word;
 }
@@ -261,6 +271,17 @@ p { margin: 0; }
 p + p { margin-top: 0.6em; }
 code { font-family: var(--mono); font-size: 0.9em; overflow-wrap: anywhere; }
 abbr[title] { text-decoration: underline dotted; text-underline-offset: 0.15em; cursor: help; }
+
+/* Wrapping: titles in lines of even length, short text without one word alone on its last
+ * line. Long prose (notes, reports, Claude's markdown) and code wrap as usual. The longhand
+ * leaves white-space (nowrap, pre-wrap) alone. */
+h1, h2, h3, h4, h5, h6, legend, .card-title, .notice-title, .empty .title { text-wrap-style: balance; }
+:where(p, li, dd, figcaption, .subtitle, .card-desc, .form-help, .setting-help, .status-detail, .notice .body, .empty) { text-wrap-style: pretty; }
+:is(.md, .prose, .report, pre, code), :is(.md, .prose, .report) :is(p, li, dd) { text-wrap-style: auto; }
+
+/* Numbers that update or sit in columns keep their width: times (relative times refresh),
+ * tables, tiles, counts in pills and pages, meta lines. Amounts (.money, .num) set it too. */
+time, table, .pill, .pager, .stat, .status-meta, .trade-meta { font-variant-numeric: tabular-nums; }
 
 /* ==== 3. Opmaak ==== */
 
@@ -349,7 +370,7 @@ abbr[title] { text-decoration: underline dotted; text-underline-offset: 0.15em; 
   color: var(--text-2);
   font-weight: 500;
   white-space: nowrap;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 .nav-links a:hover { background: var(--fill); color: var(--text); text-decoration: none; }
 .nav-links a.active, .nav-links a[aria-current="page"] { background: var(--text); color: var(--bg); }
@@ -412,7 +433,8 @@ abbr[title] { text-decoration: underline dotted; text-underline-offset: 0.15em; 
 }
 
 /* The mode in the navigation: a link to where the mode is set (or to the kill switch). */
-.mode-pill { text-decoration: none; min-height: 28px; }
+.mode-pill { position: relative; text-decoration: none; min-height: 28px; transition: filter var(--dur-fast) var(--ease-out); }
+.mode-pill::after { content: ""; position: absolute; inset: -8px 0; }
 .mode-pill:hover { text-decoration: none; filter: brightness(0.97); }
 .mode-pill .mode-extra { font-weight: 700; }
 
@@ -429,6 +451,7 @@ abbr[title] { text-decoration: underline dotted; text-underline-offset: 0.15em; 
 }
 
 .icon-btn {
+  position: relative;
   width: 34px;
   height: 34px;
   flex: none;
@@ -441,17 +464,29 @@ abbr[title] { text-decoration: underline dotted; text-underline-offset: 0.15em; 
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
+/* The visible circle is 34 px; the target is 44 px. The 10 px gap between the buttons in the
+   header keeps neighbouring targets from overlapping. */
+.icon-btn::after { content: ""; position: absolute; inset: -5px; border-radius: 50%; }
 .icon-btn:hover { background: var(--fill-2); }
+.icon-btn:active { transform: scale(var(--press-scale)); }
 /* The account icon on /account, marked like the current page in the navigation. */
 .icon-btn.active, .icon-btn[aria-current="page"] { background: var(--text); color: var(--bg); }
 .icon-btn svg { width: 16px; height: 16px; }
-/* The theme button shows the current choice: automatic, light or dark. */
-.theme-toggle svg { display: none; }
+/* The theme button shows the current choice: automatic, light or dark. The three icons sit on
+   top of each other and cross-fade (opacity, scale, blur) instead of popping in. */
+.theme-toggle { display: inline-grid; place-items: center; }
+.theme-toggle svg {
+  grid-area: 1 / 1;
+  opacity: 0;
+  transform: scale(0.5);
+  filter: blur(2px);
+  transition: opacity var(--dur) var(--ease-out), transform var(--dur) var(--ease-out), filter var(--dur) var(--ease-out);
+}
 :root:not([data-theme]) .theme-toggle .icon-auto,
 :root[data-theme="light"] .theme-toggle .icon-sun,
-:root[data-theme="dark"] .theme-toggle .icon-moon { display: block; }
+:root[data-theme="dark"] .theme-toggle .icon-moon { opacity: 1; transform: none; filter: none; }
 
 /* ==== 5. Onderdelen ==== */
 
@@ -469,6 +504,9 @@ abbr[title] { text-decoration: underline dotted; text-underline-offset: 0.15em; 
 }
 /* A card inside a card (an evaluation, a proposal): flat and a shade darker. */
 .card .card, .card--inset { --surface: var(--card-2); background: var(--card-2); box-shadow: none; }
+/* Inside a card's 20 px padding the inner card is its own surface: the radius of the other inner
+   surfaces (.stat, .cycle, .trade) instead of the outer card's, which looks swollen in there. */
+.card .card { border-radius: var(--radius-sm); }
 .card .card + .card { margin-top: 14px; }
 .card-header {
   display: flex;
@@ -687,11 +725,13 @@ tr.dim td strong { color: var(--text); }
   cursor: pointer;
   background: var(--fill);
   color: var(--text);
-  transition: background 0.15s ease, transform 0.1s ease;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
   text-decoration: none;
 }
 .btn:hover { text-decoration: none; background: var(--fill-2); }
-.btn:active { transform: scale(0.98); }
+/* Press: a small, quick shrink. A full-width button shrinks less, or its edges travel too far. */
+.btn:active { transform: scale(var(--press-scale)); }
+.btn-block { --press-scale: 0.985; }
 .btn .icon { width: 1.15em; height: 1.15em; }
 .btn-primary { background: var(--accent-fill); color: var(--on-accent); }
 .btn-primary:hover { background: var(--accent-fill-hover); }
@@ -701,7 +741,9 @@ tr.dim td strong { color: var(--text); }
 .btn-danger:hover { background: var(--red-tint-2); }
 .btn-stop { background: var(--red-fill); color: var(--on-red); font-weight: 600; }
 .btn-stop:hover { background: var(--red-fill-hover); }
-.btn-sm { min-height: 34px; padding: 6px 14px; font-size: var(--fs-help); }
+.btn-sm { position: relative; min-height: 34px; padding: 6px 14px; font-size: var(--fs-help); }
+/* A small button keeps a 40 px tall target (::before is the busy spinner). */
+.btn-sm::after { content: ""; position: absolute; inset: -3px 0; }
 .btn-block { width: 100%; justify-content: center; }
 /* Disabled: no colour, a dashed edge; say next to it why it is off. */
 .btn[disabled], .btn[aria-disabled="true"] {
@@ -746,7 +788,7 @@ input, select, textarea {
   padding: 10px 12px;
   min-width: 0;
   max-width: 100%;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 /* One height for every one-line field, at every font size (UX-87): inputs and selects line up
    in a row (order form, journal filters). */
@@ -791,7 +833,7 @@ textarea.code { font-family: var(--mono); font-size: 13px; min-height: 24rem; }
   border-radius: var(--radius-pill);
   background: var(--fill-2);
   box-shadow: inset 0 0 0 1px var(--control-border);
-  transition: background 0.2s ease;
+  transition: background-color var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out);
   flex: none;
 }
 .switch .track::after {
@@ -804,16 +846,19 @@ textarea.code { font-family: var(--mono); font-size: 13px; min-height: 24rem; }
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15), 0 1px 1px rgba(0, 0, 0, 0.16), 0 0 0 0.5px rgba(0, 0, 0, 0.12);
-  transition: transform 0.2s ease;
+  transition: transform var(--dur) var(--ease-out), width var(--dur) var(--ease-out);
 }
-.switch input:checked + .track { background: var(--green); box-shadow: none; }
+.switch input:checked + .track { background: var(--green); box-shadow: inset 0 0 0 1px transparent; }
 .switch input:checked + .track::after { transform: translateX(20px); }
+.switch:active input:not(:disabled) + .track::after { width: 31px; }
+.switch:active input:checked:not(:disabled) + .track::after { transform: translateX(16px); }
 .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
 .switch input:disabled + .track { opacity: 0.5; cursor: not-allowed; }
 .switch .state { font-size: var(--fs-help); color: var(--text-2); min-width: 2.2em; }
 
 /* Segmented radio buttons (the mode). */
-.seg-radio { display: inline-flex; flex-wrap: wrap; padding: 3px; border-radius: 10px; background: var(--fill); gap: 2px; }
+/* Concentric corners: the outer radius is the segment's radius plus the 3 px padding. */
+.seg-radio { display: inline-flex; flex-wrap: wrap; padding: 3px; border-radius: calc(var(--radius-control) + 3px); background: var(--fill); gap: 2px; }
 .seg-radio label { position: relative; display: flex; flex-direction: row; cursor: pointer; margin: 0; }
 .seg-radio input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
 .seg-radio span {
@@ -825,7 +870,7 @@ textarea.code { font-family: var(--mono); font-size: 13px; min-height: 24rem; }
   color: var(--text-2);
   font-size: var(--fs-help);
   font-weight: 500;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 .seg-radio input:checked + span { background: var(--seg-active); color: var(--text); box-shadow: var(--shadow-sm); font-weight: 600; }
 .seg-radio input:checked[value="live"] + span { background: var(--red-fill); color: var(--on-red); }
@@ -866,6 +911,12 @@ textarea.code { font-family: var(--mono); font-size: 13px; min-height: 24rem; }
 .notice-warn .icon { color: var(--orange); }
 .notice-error { background: var(--red-tint); }
 .notice-error .icon { color: var(--red); }
+/* A flash (the result of what you just did: ui.notice with live=true, data-flash) eases in
+   once, so the eye finds it; lasting notices stand still. */
+.notice[data-flash] { animation: crypie-enter 260ms var(--ease-out); }
+@keyframes crypie-enter {
+  from { opacity: 0; transform: translateY(6px); filter: blur(2px); }
+}
 
 /* -- Segmented control (filters, periods) -- */
 .segmented {
@@ -873,7 +924,7 @@ textarea.code { font-family: var(--mono); font-size: 13px; min-height: 24rem; }
   flex-wrap: wrap;
   max-width: 100%;
   padding: 3px;
-  border-radius: 10px;
+  border-radius: calc(var(--radius-control) + 3px);
   background: var(--fill);
   gap: 2px;
 }
@@ -891,6 +942,7 @@ textarea.code { font-family: var(--mono); font-size: 13px; min-height: 24rem; }
   border: 0;
   cursor: pointer;
   white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 .segmented a:hover, .segmented button:hover { text-decoration: none; color: var(--text); }
 .segmented a.active, .segmented button.active, .segmented [aria-current="page"], .segmented [aria-pressed="true"] {
@@ -937,7 +989,10 @@ textarea.code { font-family: var(--mono); font-size: 13px; min-height: 24rem; }
   color: var(--text);
   font-size: var(--fs-detail);
   text-decoration: none;
+  position: relative;
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
+.chip-remove::after { content: ""; position: absolute; inset: -3px 0; }
 .chip-remove:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
 .chip-remove .chip-x { margin-left: 6px; color: var(--text-2); font-weight: 600; }
 @media (pointer: coarse) { .chip-remove { min-height: 36px; } }
@@ -979,7 +1034,7 @@ summary::before {
   border-right: 2px solid currentColor;
   border-bottom: 2px solid currentColor;
   transform: rotate(-45deg);
-  transition: transform 0.15s ease;
+  transition: transform var(--dur-fast) var(--ease-out);
 }
 details[open] > summary::before { transform: rotate(45deg) translate(-0.1em, -0.1em); }
 details.advanced summary { font-weight: 500; color: var(--accent); }
@@ -1003,7 +1058,7 @@ details.advanced > *:not(summary) { margin-top: 14px; }
 .chip { font-size: var(--fs-caption); padding: 3px 9px; border-radius: var(--radius-control); background: var(--fill); overflow-wrap: anywhere; }
 .chip.mono, .chip code { font-family: var(--mono); }
 
-.tag { font-size: var(--fs-caption); padding: 2px 9px; border-radius: var(--radius-pill); background: var(--card); border: 1px solid var(--control-border); color: var(--text-2); text-decoration: none; }
+.tag { font-size: var(--fs-caption); padding: 2px 9px; border-radius: var(--radius-pill); background: var(--card); border: 1px solid var(--control-border); color: var(--text-2); text-decoration: none; transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
 .tag:hover { color: var(--accent); text-decoration: none; }
 
 /* -- Score bar (sentiment) -- */
@@ -1222,7 +1277,7 @@ footer.site .footer-alert { color: var(--red); font-weight: 500; }
 /* Many markets: the buttons wrap inside the card instead of running out of it. */
 .chart-markets { max-width: 100%; }
 .chart-wrap { position: relative; }
-.chart { width: 100%; transition: opacity 0.2s ease; }
+.chart { width: 100%; transition: opacity var(--dur) var(--ease-out); }
 .chart.tall { height: 380px; }
 .chart.short { height: 220px; }
 /* Loading: the old chart stays visible, dimmed, until the new data is in. */
@@ -1453,7 +1508,7 @@ footer.site .footer-alert { color: var(--red); font-weight: 500; }
 .trade-grid h4 { margin: 0 0 6px; }
 .trade-grid .kv { font-size: var(--fs-help); gap: 4px 14px; }
 .trade-grid .why { font-size: var(--fs-help); margin: 8px 0 0; line-height: 1.5; overflow-wrap: anywhere; }
-.trade-note { --surface: var(--card); margin-top: 14px; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--fill); font-size: var(--fs-help); }
+.trade-note { --surface: var(--card); margin-top: 14px; padding: 12px 14px; border-radius: var(--radius-control); background: var(--fill); font-size: var(--fs-help); }
 .trade-note .prose { margin-top: 6px; }
 .trade-note .meta { font-size: var(--fs-detail); color: var(--text-3); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .trade-note .meta strong { color: var(--text); }
@@ -1738,7 +1793,8 @@ footer.site .footer-alert { color: var(--red); font-weight: 500; }
 .setting-dep { color: var(--text-2); font-size: var(--fs-help); margin-top: 5px; font-style: italic; }
 .setting-need { color: var(--orange); font-size: var(--fs-help); font-weight: 500; margin-top: 5px; }
 .lock-tag { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 1px 8px; border-radius: var(--radius-pill); background: var(--fill); color: var(--text-2); font-size: var(--fs-caption); font-weight: 500; }
-.link-btn { background: none; border: 0; padding: 4px 0; margin-top: 2px; font: inherit; font-size: var(--fs-help); color: var(--accent); text-decoration: underline; text-underline-offset: 0.2em; cursor: pointer; min-height: 32px; }
+.link-btn { position: relative; background: none; border: 0; padding: 4px 0; margin-top: 2px; font: inherit; font-size: var(--fs-help); color: var(--accent); text-decoration: underline; text-underline-offset: 0.2em; cursor: pointer; min-height: 32px; }
+.link-btn::after { content: ""; position: absolute; inset: -4px 0; }
 .setting-control { display: flex; flex-direction: column; align-items: flex-end; min-width: 0; }
 .setting-control > input, .setting-control > select, .setting-control > textarea, .setting-control .unit-input { width: 100%; }
 .setting.has-error :is(input, select, textarea) { border-color: var(--red); }
@@ -1902,7 +1958,8 @@ input.code-input { height: 52px; }
 /* API-token: the new token once, in a box with a copy button. */
 .token-reveal { margin: 16px 0 12px; }
 .token-reveal .notice { margin-bottom: 10px; }
-.token-box { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; border-radius: var(--radius-sm); background: var(--fill); }
+/* Concentric with the pill button inside: its radius (34 px / 2) plus the 8 px padding. */
+.token-box { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 16px; border-radius: 25px; background: var(--fill); }
 .token-box code { flex: 1; min-width: 0; font-size: var(--fs-body); letter-spacing: 0.02em; user-select: all; overflow-wrap: anywhere; }
 .token-box .btn { flex: none; }
 .token-reveal-hint { margin-top: 8px; color: var(--text-2); font-size: var(--fs-detail); }
@@ -1934,7 +1991,9 @@ input.code-input { height: 52px; }
 .codeblock { min-width: 0; border-radius: var(--radius-control); background: var(--fill); overflow: hidden; }
 .codeblock-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 38px; padding: 3px 4px 3px 12px; border-bottom: 1px solid var(--hairline); }
 .codeblock-label { color: var(--text-2); font-family: var(--mono); font-size: var(--fs-caption); }
-.codeblock-copy { min-height: 30px; padding: 4px 12px; background: transparent; font-size: var(--fs-detail); }
+/* The button sits 3-4 px inside the block's 8 px corner: a pill there would be rounder than the
+   corner around it, so it gets the corner's radius minus that gap. */
+.codeblock-copy { min-height: 30px; padding: 4px 12px; border-radius: calc(var(--radius-control) - 3px); background: transparent; font-size: var(--fs-detail); }
 .codeblock-copy:hover { background: var(--fill-2); }
 .codeblock pre { margin: 0; padding: 12px 14px; font-family: var(--mono); font-size: 13px; line-height: 1.55; white-space: pre; overflow-x: auto; tab-size: 2; }
 .codeblock--wrap pre { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -1968,6 +2027,7 @@ input.code-input { height: 52px; }
     scroll-behavior: auto !important;
   }
   .btn.is-busy::before { border-right-color: currentColor; opacity: 0.6; }
+  .btn:active, .icon-btn:active { transform: none; }
 }
 
 /* High-contrast mode (Windows contrast themes): the browser paints everything in system colours,
