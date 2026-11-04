@@ -8,7 +8,7 @@ page behind the login: whoever is not logged in lands on /login and comes back h
 from __future__ import annotations
 
 import logging
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -29,6 +29,7 @@ from app.auth.routes import (
 )
 from app.auth.service import AuthService
 from app.db import SessionLocal, get_session
+from app.security import CONTENT_SECURITY_POLICY
 
 log = logging.getLogger(__name__)
 
@@ -110,7 +111,19 @@ def _consent_page(request: Request, status: int = 200, **ctx) -> HTMLResponse:
     ctx.setdefault("req", None)
     ctx.setdefault("params", {})
     ctx.setdefault("access", ACCESS_DESCRIPTION)
-    return _page(request, "auth/consent.html", status=status, **ctx)
+    response = _page(request, "auth/consent.html", status=status, **ctx)
+    if ctx["req"] is not None:
+        # The browser applies this page's form-action also to the redirect that follows the
+        # POST (Chrome does); without the app's origin the way back to Claude is blocked and
+        # the page hangs on "Bezig…".
+        response.headers["Content-Security-Policy"] = consent_csp(ctx["req"].redirect_uri)
+    return response
+
+
+def consent_csp(redirect_uri: str) -> str:
+    parts = urlsplit(redirect_uri)
+    origin = f"{parts.scheme}://{parts.netloc}"
+    return CONTENT_SECURITY_POLICY.replace("form-action 'self'", f"form-action 'self' {origin}")
 
 
 def _client_redirect(redirect_uri: str, **params: str | None) -> RedirectResponse:

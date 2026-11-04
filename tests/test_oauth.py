@@ -93,6 +93,10 @@ async def _grant(client, client_id: str) -> dict:
     verifier, challenge = _pkce()
     page = await client.get(_authorize_url(client_id, challenge))
     assert page.status_code == 200 and "Claude wil Crypie gebruiken" in page.text
+    # The page allows the way back to the app after the POST (Chrome checks form-action on
+    # the redirect); everything else in the policy stays as it is.
+    csp = page.headers["content-security-policy"]
+    assert "form-action 'self' https://claude.ai;" in csp and "script-src 'self';" in csp
     query = await _allow(client, client_id, challenge)
     assert query["state"] == "xyz" and "code" in query
     r = await _exchange(client, client_id, query["code"], verifier)
@@ -281,6 +285,7 @@ async def test_consent_refusals(web):  # noqa: F811
         # Unknown client or a foreign redirect URI: an error page, never a redirect.
         r = await web.get(_authorize_url("nope", challenge))
         assert r.status_code == 400 and "Onbekende app" in r.text
+        assert "form-action 'self';" in r.headers["content-security-policy"]  # the default
         r = await web.get(_authorize_url(client_id, challenge, redirect_uri="https://evil/cb"))
         assert r.status_code == 400 and "hoort niet bij deze app" in r.text
 
