@@ -1,12 +1,21 @@
 """The MCP server at /mcp (app/mcp_server.py) and the API token (app/auth/api_token.py)."""
 
 import json
+import re
 
 import pytest
 
 from app import settings_store as cfg
-from app.auth.api_token import bearer_token, token_matches
-from app.db import SessionLocal
+from app.auth.api_token import (
+    TOKEN_HASH_KEY,
+    bearer_token,
+    issue_token,
+    revoke_token,
+    token_matches,
+    token_status,
+    token_valid,
+)
+from app.db import SessionLocal, Setting, init_db
 from app.main import app
 from app.mcp_server import DEFAULT_PROTOCOL, TOOLS
 from tests.test_api import api  # noqa: F401  (fixture: login off)
@@ -347,3 +356,102 @@ async def test_step_up_through_the_mcp(web):  # noqa: F811
     finally:
         with SessionLocal() as db:
             cfg.reset_overrides(db)
+
+
+# -- a token from the portal ---------------------------------------------------------------------
+
+TOKEN_RE = re.compile(r'<code id="api-token">([A-Za-z0-9_-]+)</code>')
+
+
+def test_portal_token_storage():
+    init_db()
+    env = "e" * 40
+    with SessionLocal() as db:
+        revoke_token(db)
+        assert token_status(db, "").source is None
+        assert token_status(db, env).source == "env"
+        assert token_valid(db, env, env) and not token_valid(db, "", env)
+
+        token = issue_token(db)
+        assert len(token) >= 32
+        assert db.get(Setting, TOKEN_HASH_KEY).value != token  # only the hash is stored
+        assert token_status(db, env).source == "portal" and token_status(db, env).since
+        assert token_valid(db, token, env)
+        assert not token_valid(db, token + "x", env)
+        assert not token_valid(db, env, env)  # the environment does not count meanwhile
+
+        second = issue_token(db)
+        assert second != token and token_valid(db, second, env) and not token_valid(db, token, env)
+        assert revoke_token(db) is True and revoke_token(db) is False
+        assert token_valid(db, env, env) and not token_valid(db, second, env)
+
+
+async def _issue(client, password=PASSWORD):
+    return await client.post("/account", data={"action": "api_token", "password": password})
+
+
+@pytest.mark.parametrize("web", [{"API_TOKEN": TOKEN}], indirect=True)
+async def test_portal_token_replaces_the_environment_token(web):  # noqa: F811
+    await _setup(web)
+    try:
+        page = await web.get("/account")
+        assert "API-token voor Claude" in page.text and "uit de omgeving" in page.text
+        assert "Token intrekken" not in page.text  # nothing to revoke yet
+
+        r = await _issue(web, "fout")
+        assert r.status_code == 401 and "klopt niet" in r.text and 'id="api-token">' not in r.text
+        r = await _issue(web)
+        assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
+        token = TOKEN_RE.search(r.text).group(1)
+        assert len(token) >= 32
+        assert (
+            f'claude mcp add --transport http crypie http://test/mcp --header "Authorization: '
+            f'Bearer {token}"'
+        ) in r.text
+
+        # The new token opens /mcp and the API; the environment token no longer does.
+        assert (await rpc(web, "ping", authorization=f"Bearer {token}")).status_code == 200
+        assert (
+            await web.get("/api/status", headers={"authorization": f"Bearer {token}"})
+        ).status_code == 200
+        assert (await rpc(web, "ping", **BEARER)).status_code == 401
+        page = await web.get("/account")
+        assert "gemaakt in het portaal" in page.text and "Token intrekken" in page.text
+        assert token not in page.text  # shown once
+
+        # A second token replaces the first.
+        second = TOKEN_RE.search((await _issue(web)).text).group(1)
+        assert second != token
+        assert (await rpc(web, "ping", authorization=f"Bearer {token}")).status_code == 401
+        assert (await rpc(web, "ping", authorization=f"Bearer {second}")).status_code == 200
+
+        # Revoking needs the password too; afterwards the environment token applies again.
+        r = await web.post("/account", data={"action": "api_token_revoke", "password": "fout"})
+        assert r.status_code == 401
+        assert (await rpc(web, "ping", authorization=f"Bearer {second}")).status_code == 200
+        r = await web.post("/account", data={"action": "api_token_revoke", "password": PASSWORD})
+        assert (
+            r.status_code == 200 and "ingetrokken" in r.text and "API_TOKEN) geldt weer" in r.text
+        )
+        assert (await rpc(web, "ping", authorization=f"Bearer {second}")).status_code == 401
+        assert (await rpc(web, "ping", **BEARER)).status_code == 200
+    finally:
+        with SessionLocal() as db:
+            revoke_token(db)
+
+
+@pytest.mark.parametrize("web", [{"API_TOKEN": ""}], indirect=True)
+async def test_without_any_token_the_page_says_so(web):  # noqa: F811
+    await _setup(web)
+    try:
+        page = await web.get("/account")
+        assert "maak er hieronder een" in page.text
+        assert (await rpc(web, "ping")).status_code == 401
+        token = TOKEN_RE.search((await _issue(web)).text).group(1)
+        assert (await rpc(web, "ping", authorization=f"Bearer {token}")).status_code == 200
+        r = await web.post("/account", data={"action": "api_token_revoke", "password": PASSWORD})
+        assert r.status_code == 200 and "nieuw token maakt." in r.text
+        assert (await rpc(web, "ping", authorization=f"Bearer {token}")).status_code == 401
+    finally:
+        with SessionLocal() as db:
+            revoke_token(db)

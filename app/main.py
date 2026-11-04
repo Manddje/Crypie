@@ -33,11 +33,11 @@ from app.ai.evaluator import Evaluator
 from app.ai.news_analyst import NewsAnalyst
 from app.ai.strategy_assistant import StrategyAssistant
 from app.api_docs import redoc_page, swagger_page
-from app.auth.api_token import require_login_or_token
 from app.auth.routes import (
     StepUpError,
     enrolment_unfinished,
     require_current_password,
+    require_login_or_token,
     step_up_attempts_left,
     step_up_enabled,
 )

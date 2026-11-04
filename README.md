@@ -787,8 +787,8 @@ Elke pagina en elk API-pad (behalve `/health` en `/static`) vraagt om een login 
 gebruikersnaam en wachtwoord, daarna een 6-cijferige code uit een authenticator-app
 (Google/Microsoft Authenticator, 1Password, Apple Wachtwoorden). Zonder login stuurt de app elke
 bezoeker naar `/login`, ook als er nog geen account is; de API antwoordt dan 401. Alleen `/api/*` en
-`/mcp` kennen een tweede deur: een `API_TOKEN` als bearer-token, voor Claude (zie
-[Sparren met Claude (MCP)](#sparren-met-claude-mcp)).
+`/mcp` kennen een tweede deur: een API-token als bearer-token (van de accountpagina of `API_TOKEN`),
+voor Claude (zie [Sparren met Claude (MCP)](#sparren-met-claude-mcp)).
 
 **Eerste keer.** Het account kan alleen worden aangemaakt met de setup-link. Bij het starten zonder
 account schrijft de server die in de log (niveau WARNING): `no account yet: open /setup?token=...`. Je
@@ -885,12 +885,13 @@ dat in het gesprek vraagt. Een backtest komt zonder de SVG-curve terug; `setting
 
 **Instellen.**
 
-1. Zet in Coolify (of `.env`) een `API_TOKEN` van minstens 32 tekens en deploy opnieuw. Een korter
-   token wordt met een waarschuwing genegeerd. Maak er een met:
-
-   ```bash
-   python -c "import secrets; print(secrets.token_urlsafe(32))"
-   ```
+1. Maak een token op de pagina **Account** (`/account`), blok *API-token voor Claude*: *Nieuw token
+   maken* vraagt je wachtwoord en toont het token één keer, met de `claude mcp add`-regel erbij. Alleen
+   de SHA-256 ervan wordt bewaard (tabel `settings`, sleutel `auth:api_token_hash`); een nieuw token
+   vervangt het vorige en *Token intrekken* wist het. Liever uit de omgeving? Zet dan `API_TOKEN` in
+   Coolify (of `.env`), minstens 32 tekens (korter wordt met een waarschuwing genegeerd), bijvoorbeeld
+   uit `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Zolang er een token uit het
+   portaal is, geldt alleen dat; na intrekken geldt de omgeving weer.
 
 2. Claude Code (op je eigen machine; vul je domein en token in):
 
@@ -931,11 +932,12 @@ browser is het nutteloos. `/mcp` werkt alleen met het token, nooit op een sessie
 ingelogde browser er niets mee kan. Het token geeft wel volledige API-toegang: lezen, oefenorders,
 instellingen zonder wachtwoord (intervallen, modellen, bronnen), de noodstop. Live orders en
 gevoelige instellingen blijven achter je wachtwoord. Bewaar het token alleen in de configuratie van
-Claude; wissel het door `API_TOKEN` te veranderen en opnieuw te deployen. De vergelijking is
-constant-time over een SHA-256; foute tokens worden gelogd met het adres. Het protocol is de
+Claude; wissel het op de accountpagina (een token uit de omgeving: door `API_TOKEN` te veranderen en
+opnieuw te deployen). De vergelijking is constant-time over een SHA-256; foute tokens worden gelogd
+met het adres, en het maken en intrekken van een token ook. Het protocol is de
 stateless, JSON-only vorm van *Streamable HTTP* (één POST per vraag, geen SSE-stream, geen sessie-id;
 `GET` en `DELETE /mcp` antwoorden 405), met `initialize`, `ping`, `tools/list` en `tools/call`.
-Zonder `API_TOKEN` antwoordt `/mcp` 401 (met de login aan).
+Zonder token antwoordt `/mcp` 401 (met de login aan).
 
 ## Claude-kosten
 
@@ -1068,7 +1070,7 @@ als argument mee (het zou in de shell-geschiedenis en de proceslijst terechtkome
 | `SETUP_TOKEN` | leeg | Vast setup-token; leeg = bij elke start een nieuw token in de log |
 | `TRUSTED_ORIGINS` | leeg | Extra origins die mogen posten (komma-gescheiden), bijvoorbeeld `https://crypie.example.nl`; handig als de proxy het https-schema niet doorgeeft |
 | `API_DOCS_ENABLED` | `false` | `/docs`, `/redoc` en `/openapi.json` aan (ook dan achter de login); Swagger UI en ReDoc komen dan in een vaste versie met SRI-hash van jsDelivr |
-| `API_TOKEN` | leeg | Bearer-token (minstens 32 tekens) voor `/api/*` en de MCP-server op `/mcp`; leeg = uit. Zie [Sparren met Claude (MCP)](#sparren-met-claude-mcp) |
+| `API_TOKEN` | leeg | Bearer-token (minstens 32 tekens) voor `/api/*` en de MCP-server op `/mcp`; leeg = uit. Een token uit het portaal (Account) gaat voor. Zie [Sparren met Claude (MCP)](#sparren-met-claude-mcp) |
 | `FORWARDED_ALLOW_IPS` | loopback, privé-reeksen en `fc00::/7` | Proxies die `X-Forwarded-For`/`-Proto` mogen zetten |
 | `BITVAVO_KEY_RESTRICTED` | `false` | Zet op `true` als de Bitvavo-key alleen view/trade-rechten en een IP-whitelist heeft; haalt de herinnering in live-modus weg (wordt niet gecontroleerd) |
 | `EXIT_CHECK_INTERVAL_MIN` | 2 | Minuten tussen controles van stop-loss en take-profit (1-60; ook in het portaal) |
@@ -1098,7 +1100,7 @@ app/
   notify.py                 meldingen buiten de app (ntfy of webhook)
   db.py                     SQLAlchemy-modellen: orders, settings, claude_usage, news_items, positions, decisions, evaluations, auth_users, auth_throttle
   auth/                     login: wachtwoord (passwords.py), TOTP (totp.py), cookie (session.py), account (service.py), routes + middleware (routes.py), CLI (__main__.py)
-  auth/api_token.py         API_TOKEN als bearer-token voor /api/* en /mcp, naast de login
+  auth/api_token.py         bearer-token voor /api/* en /mcp: uit het portaal (gehasht in settings) of API_TOKEN
   mcp_server.py             MCP-server voor Claude Desktop en Claude Code (/mcp): tools om de JSON-API
   bitvavo/client.py         Bitvavo REST-client (publiek + gesigneerd)
   bitvavo/broker.py         PaperBroker / LiveBroker

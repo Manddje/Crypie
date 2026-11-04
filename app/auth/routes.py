@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from app.auth import totp
+from app.auth import api_token, totp
 from app.auth.passwords import hash_password, needs_rehash, verify_password
 from app.auth.service import (
     KNOWN_DEVICE_SECONDS,
@@ -305,6 +305,32 @@ async def require_login(request: Request, call_next):
         # a form that was being sent did not go through.
         add_flash(response, "warn", EXPIRED_POST if request.method == "POST" else EXPIRED_GET)
     return response
+
+
+async def require_login_or_token(request: Request, call_next):
+    """``require_login`` with the API token (app/auth/api_token.py) as a second door.
+
+    With the login on: a valid bearer token opens ``/api/*`` and ``/mcp``; a wrong one answers
+    401 (and is logged); ``/mcp`` without a token answers 401 too, so the MCP endpoint never
+    works on a browser session. Everything else goes to ``require_login`` unchanged. With the
+    login off (AUTH_ENABLED=false) nothing is checked, as everywhere in the app.
+    """
+    auth: AuthService | None = getattr(request.app.state, "auth", None)
+    path = request.url.path
+    if auth is not None and api_token.token_path(path):
+        provided = api_token.bearer_token(request)
+        if provided is not None:
+            with SessionLocal() as db:
+                ok = api_token.token_valid(db, provided, request.app.state.env.api_token)
+            if ok:
+                request.state.user = "api-token"
+                request.state.api_token = True
+                return await call_next(request)
+            log.warning("wrong API token on %s from %s", path, _client_key(request))
+            return api_token.unauthorized("API-token klopt niet")
+        if path == api_token.MCP_PATH:
+            return api_token.unauthorized("Niet ingelogd: /mcp vraagt een API-token")
+    return await require_login(request, call_next)
 
 
 def _next_param(target: str) -> str:
@@ -877,11 +903,15 @@ def _account_page(
     ctx.setdefault("message", None)
     ctx.setdefault("form", None)
     _, session = current_session(request, auth, db)
+    env_token = getattr(getattr(request.app.state, "env", None), "api_token", "")
     return _page(
         request,
         "auth/account.html",
         status=status,
         user=auth.user(db),
+        api_token=api_token.token_status(db, env_token),
+        env_token=bool(env_token),
+        mcp_url=str(request.base_url).rstrip("/") + api_token.MCP_PATH,
         codes_left=auth.recovery_codes_left(db),
         codes_total=RECOVERY_CODE_COUNT,
         session_expires=datetime.fromtimestamp(session.expires_at, UTC) if session else None,
@@ -933,7 +963,8 @@ async def account_action(
             _clear_cookie(response, request, name)
         return response
     key = _client_key(request)
-    form = action if action in ("recovery", "reenrol", "password") else None
+    forms = ("recovery", "reenrol", "password", "api_token", "api_token_revoke")
+    form = action if action in forms else None
 
     def failed(status: int, error: str, field: str = "password") -> HTMLResponse:
         # The error belongs to the form that was sent: shown in its card, its field marked.
@@ -1009,6 +1040,26 @@ async def account_action(
         )
         _reissue_session(response, request, auth, user, session)
         return response
+    if action == "api_token":
+        # Shown once, on this page only: never in a redirect or a (cookie-borne) flash.
+        token = api_token.issue_token(db)
+        log.warning("API token issued for %s from %s", user.username, key)
+        return _account_page(request, auth, db, form="api_token", new_token=token)
+    if action == "api_token_revoke":
+        api_token.revoke_token(db)
+        log.warning("API token revoked for %s from %s", user.username, key)
+        return _account_page(
+            request,
+            auth,
+            db,
+            message="Het API-token is ingetrokken. Claude kan niet meer verbinden tot je een "
+            "nieuw token maakt"
+            + (
+                "; het token uit de omgeving (API_TOKEN) geldt weer."
+                if request.app.state.env.api_token
+                else "."
+            ),
+        )
     return RedirectResponse("/account", status_code=303)
 
 
