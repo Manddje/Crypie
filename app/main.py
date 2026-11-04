@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import re
@@ -11,14 +12,14 @@ import time
 import weakref
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Path, Query, Request
+from fastapi import Depends, FastAPI, Form, Header, HTTPException, Path, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, BeforeValidator, Field, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.datastructures import MutableHeaders
@@ -36,6 +37,7 @@ from app.ai.strategy_assistant import StrategyAssistant
 from app.api_docs import redoc_page, swagger_page
 from app.auth.oauth_routes import router as oauth_router
 from app.auth.routes import (
+    STEP_UP_MISSING,
     StepUpError,
     enrolment_unfinished,
     require_current_password,
@@ -157,6 +159,9 @@ from app.trading.journal import (
     mode_counts,
     save_note,
     unlinked_orders,
+)
+from app.trading.journal import (
+    journal_page as journal_entries_page,
 )
 from app.trading.plan import PLAN_FIELDS, PLAN_MAX_LENGTH, TradingPlan, load_plan, save_plan
 from app.trading.risk import RiskLimits
@@ -783,6 +788,7 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None,
     openapi_url="/openapi.json" if _docs else None,
+    responses=errors.API_ERROR_RESPONSES,
 )
 if _docs:
     app.get("/docs", include_in_schema=False)(lambda: swagger_page(app.title, app.openapi_url))
@@ -802,7 +808,7 @@ app.add_middleware(StaticCacheHeaders)
 app.add_middleware(SecurityHeaders)
 app.add_middleware(Compression)
 errors.install(app)
-app.include_router(auth_router)
+app.include_router(auth_router, include_in_schema=False)
 app.include_router(mcp_router)
 app.include_router(oauth_router)
 
@@ -831,6 +837,107 @@ def get_engine(request: Request) -> TradingEngine:
     return request.app.state.engine
 
 
+# -- API helpers: errors and pages ------------------------------------------------------
+
+CLAUDE_MISSING = (
+    "Claude is niet ingesteld: de Claude-sleutel ontbreekt (ANTHROPIC_API_KEY in de "
+    "serveromgeving)."
+)
+
+
+def _claude_missing(text: str = CLAUDE_MISSING) -> errors.ApiError:
+    return errors.ApiError(503, text, "claude_unavailable")
+
+
+def _budget_error(exc: Exception, prefix: str = "") -> errors.ApiError:
+    return errors.ApiError(429, f"{prefix}{exc}", "claude_budget_exceeded")
+
+
+def _step_up_error(exc: StepUpError) -> errors.ApiError:
+    """The step-up (current password) refused: 401, 403 (missing or wrong) or 429 (wait)."""
+    if exc.status == 403:
+        code = "password_required" if exc.message == STEP_UP_MISSING else "wrong_password"
+    else:
+        code = errors.API_CODES.get(exc.status, "error")
+    return errors.ApiError(exc.status, exc.message, code)
+
+
+# Lists are paged with an opaque cursor: a page that has more after it carries a
+# ``Link: <...&cursor=...>; rel="next"`` header (RFC 8288), so the body keeps its shape.
+CURSOR_MAX = 200
+
+
+def _bad_cursor() -> errors.ApiError:
+    return errors.ApiError(
+        400,
+        "Ongeldige cursor: neem hem over uit de Link-header van de vorige pagina.",
+        "invalid_cursor",
+    )
+
+
+def encode_cursor(**values: Any) -> str:
+    raw = json.dumps(values, separators=(",", ":"), default=str).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _decode_cursor(cursor: str | None, *keys: str) -> dict | None:
+    if not cursor:
+        return None
+    try:
+        values = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+    except ValueError:  # bad base64 (binascii.Error), bad UTF-8 or bad JSON
+        values = None
+    if not isinstance(values, dict) or set(values) != set(keys):
+        raise _bad_cursor()
+    return values
+
+
+def _cursor_id(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= DB_ID_MAX:
+        raise _bad_cursor()
+    return value
+
+
+def id_cursor(cursor: str | None) -> int | None:
+    """The id a page continues below (lists ordered by id, newest first)."""
+    values = _decode_cursor(cursor, "id")
+    return None if values is None else _cursor_id(values["id"])
+
+
+def time_id_cursor(cursor: str | None) -> tuple[datetime, int] | None:
+    """(moment, id) a page continues below (lists ordered by a moment, then id)."""
+    values = _decode_cursor(cursor, "at", "id")
+    if values is None:
+        return None
+    try:
+        at = datetime.fromisoformat(str(values["at"]))
+    except ValueError:
+        raise _bad_cursor() from None
+    at = at.replace(tzinfo=UTC) if at.tzinfo is None else at.astimezone(UTC)
+    return at, _cursor_id(values["id"])
+
+
+def set_next_link(request: Request, response: Response, cursor: str) -> None:
+    url = request.url.include_query_params(cursor=cursor)
+    response.headers["Link"] = f'<{url.path}?{url.query}>; rel="next"'
+
+
+def page_of(request: Request, response: Response, rows: list, limit: int, cursor_of) -> list:
+    """The first ``limit`` of ``rows`` (fetched with limit + 1); when there were more, a Link
+    header to the next page, whose cursor ``cursor_of(last row)`` makes."""
+    if len(rows) > limit:
+        rows = rows[:limit]
+        set_next_link(request, response, cursor_of(rows[-1]))
+    return rows
+
+
+CURSOR_QUERY = Query(
+    None,
+    max_length=CURSOR_MAX,
+    description="Volgende pagina: neem de cursor over uit de Link-header (rel=next)",
+)
+
+
 # -- API -------------------------------------------------------------------------------
 
 
@@ -843,8 +950,8 @@ async def health():
 async def prices(request: Request, client: BitvavoClient = Depends(get_client)):
     try:
         return await client.ticker_prices(request.app.state.settings.markets)
-    except (BitvavoError, Exception) as exc:
-        raise HTTPException(502, f"Bitvavo unreachable: {exc}") from exc
+    except BitvavoError as exc:  # network trouble arrives as a BitvavoError too
+        raise errors.bitvavo_api_error(exc) from exc
 
 
 # Path and query bounds. A market goes into the Bitvavo URL path, so only the strict
@@ -857,7 +964,7 @@ INTERVAL_PATTERN = "^(" + "|".join((*INTERVALS, "1W", "1M")) + ")$"  # what Bitv
 def _tracked_market(request: Request, market: str) -> str:
     market = market.upper()
     if market not in request.app.state.settings.markets:
-        raise HTTPException(404, f"Markt {market} wordt niet gevolgd")
+        raise errors.ApiError(404, f"Markt {market} wordt niet gevolgd.", "market_not_tracked")
     return market
 
 
@@ -873,9 +980,9 @@ async def candles(
     try:
         return await client.candles(market, interval, limit)
     except InvalidMarketError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise errors.ApiError(422, str(exc), "invalid_market") from exc
     except BitvavoError as exc:
-        raise HTTPException(502, str(exc)) from exc
+        raise errors.bitvavo_api_error(exc) from exc
 
 
 # The overview charts (UX-102): the same short wait as the overview itself, and once Bitvavo
@@ -963,7 +1070,12 @@ async def _chart_candles(client: BitvavoClient, market: str, interval: str, limi
 def _chart_error(problem: ChartUnavailable) -> JSONResponse:
     """502 with the reason for chart.js: 'unreachable' and 'busy' offer to try again."""
     return JSONResponse(
-        {"detail": problem.message, "reason": problem.reason, "market": problem.market},
+        {
+            "detail": problem.message,
+            "code": f"bitvavo_{problem.reason}",
+            "reason": problem.reason,
+            "market": problem.market,
+        },
         status_code=502,
     )
 
@@ -1063,78 +1175,171 @@ async def balance(broker: Broker = Depends(get_broker), session: Session = Depen
     try:
         return {"mode": broker.mode, "balances": await broker.balances(session)}
     except BitvavoError as exc:
-        raise HTTPException(502, str(exc)) from exc
+        raise errors.bitvavo_api_error(exc) from exc
 
 
 # Step-up over the API: the current password in a header, for calls without a JSON body.
 PASSWORD_HEADER = "x-current-password"
 
 
+# An Idempotency-Key makes a retried order safe (see create_order).
+IDEMPOTENCY_KEY_MAX = 128
+ORDER_UNCERTAIN_API = (
+    "Order verstuurd, maar de uitkomst is nog niet bekend: Bitvavo bevestigde hem niet op tijd. "
+    "De bot controleert het vanzelf; volg de order via de Location-header en plaats hem niet "
+    "opnieuw."
+)
+ORDER_RESENT_API = (
+    "Order niet geplaatst: deze Idempotency-Key is al gebruikt, dus de order is niet nog een "
+    "keer geplaatst. Kijk bij de orders wat er gebeurde."
+)
+
+
 class OrderIn(BaseModel):
     market: str = Field(max_length=32)
     side: Literal["buy", "sell"]
-    # Range and finiteness are checked by TradingEngine.manual_order (400 with a reason); a
+    # Range and finiteness are checked by TradingEngine.manual_order (422 with a reason); a
     # pydantic error would echo a NaN input back and fail to serialise.
     amount_quote: float = Field(description="Amount in EUR")
     reason: str | None = Field(default=None, max_length=200)
     # Needed while the bot trades live (step-up, like the /account page).
     current_password: str | None = Field(default=None, max_length=1024)
+    # The Idempotency-Key header as a field, for clients that cannot set headers (MCP).
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=IDEMPOTENCY_KEY_MAX)
 
 
-@app.get("/api/orders")
-async def list_orders(session: Session = Depends(get_session)):
-    return [
-        {
-            "id": o.id,
-            "created_at": o.created_at,
-            "mode": o.mode,
-            "market": o.market,
-            "side": o.side,
-            "amount": o.amount,
-            "amount_quote": o.amount_quote,
-            "fee_quote": o.fee_quote,
-            "price": o.price,
-            "status": o.status,
-            "reason": o.reason,
-        }
-        for o in recent_orders(session)
-    ]
+class OrderOut(BaseModel):
+    """An order as the API shows it (documentation; the handlers return plain dicts)."""
+
+    id: int
+    created_at: datetime
+    mode: Literal["paper", "live"]
+    market: str
+    side: Literal["buy", "sell"]
+    amount: float | None = Field(description="In de munt zelf")
+    amount_quote: float | None = Field(description="In euro's")
+    fee_quote: float | None = Field(description="Handelskosten in euro's")
+    price: float | None
+    status: str = Field(
+        description="pending (nog niet verstuurd), rejected, unknown (verstuurd, uitkomst nog "
+        "onbekend) of een Bitvavo-status zoals filled"
+    )
+    reason: str | None
 
 
-@app.post("/api/orders", status_code=201)
+class OrderAcceptedOut(OrderOut):
+    message: str
+
+
+def _order_dict(o: Order) -> dict:
+    return {
+        "id": o.id,
+        "created_at": o.created_at,
+        "mode": o.mode,
+        "market": o.market,
+        "side": o.side,
+        "amount": o.amount,
+        "amount_quote": o.amount_quote,
+        "fee_quote": o.fee_quote,
+        "price": o.price,
+        "status": o.status,
+        "reason": o.reason,
+    }
+
+
+@app.get("/api/orders", responses={200: {"model": list[OrderOut]}})
+async def list_orders(
+    request: Request,
+    response: Response,
+    limit: int = Query(50, ge=1, le=500),
+    mode: Literal["paper", "live"] | None = Query(
+        None, description="Alleen paper of live; leeg = allebei"
+    ),
+    cursor: str | None = CURSOR_QUERY,
+    session: Session = Depends(get_session),
+):
+    """The newest orders first, paper and live (or one ``mode``); more via the Link header."""
+    rows = recent_orders(session, limit + 1, mode=mode, before_id=id_cursor(cursor))
+    rows = page_of(request, response, rows, limit, lambda o: encode_cursor(id=o.id))
+    return [_order_dict(o) for o in rows]
+
+
+@app.get("/api/orders/{order_id}", responses={200: {"model": OrderOut}})
+async def get_order(
+    order_id: int = Path(ge=1, le=DB_ID_MAX), session: Session = Depends(get_session)
+):
+    """One order, e.g. to follow one that answered 202 (outcome not known yet)."""
+    order = session.get(Order, order_id)
+    if order is None:
+        raise errors.ApiError(404, f"Order {order_id} bestaat niet.", "order_not_found")
+    return _order_dict(order)
+
+
+@app.post(
+    "/api/orders",
+    status_code=201,
+    responses={
+        201: {"model": OrderOut, "description": "Geplaatst; Location wijst naar de order"},
+        202: {
+            "model": OrderAcceptedOut,
+            "description": "Verstuurd, uitkomst nog onbekend: volg Location, niet opnieuw sturen",
+        },
+    },
+)
 async def create_order(
     order: OrderIn,
     request: Request,
+    response: Response,
+    idempotency_key: str | None = Header(
+        None,
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=IDEMPOTENCY_KEY_MAX,
+        description="Een unieke tekst per order: dezelfde sleutel plaatst binnen 30 minuten "
+        "niets opnieuw (409 order_resent)",
+    ),
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
     """A manual order under the bot's rules: see ``TradingEngine.manual_order``.
 
-    While the bot trades live the current password is needed as well.
+    While the bot trades live the current password is needed as well. With an
+    ``Idempotency-Key`` (header, or the ``idempotency_key`` field) a retry is safe: the same key
+    places nothing again for 30 minutes (409 ``order_resent``), like the one-time token of the
+    order form. An order that went out but whose outcome Bitvavo did not confirm in time
+    answers 202 with the order (status pending or unknown) and a Location to follow it: it may
+    still be filled, so do not send it again.
     """
     if engine.mode == "live":
         password = order.current_password or request.headers.get(PASSWORD_HEADER)
         try:
             await require_current_password(request, session, password)
         except StepUpError as exc:
-            raise HTTPException(exc.status, exc.message) from exc
+            raise _step_up_error(exc) from exc
+    key = order.idempotency_key or idempotency_key
+    token = f"api:{key}" if key else ""
+    if token and not _claim_order_token(token):
+        raise errors.ApiError(409, ORDER_RESENT_API, "order_resent")
     try:
         o = await engine.manual_order(
             session, order.market, order.side, order.amount_quote, order.reason
         )
+    except OrderUncertain as exc:
+        body = {**_order_dict(exc.order), "message": ORDER_UNCERTAIN_API}
+        return JSONResponse(
+            jsonable_encoder(body),
+            status_code=202,
+            headers={"Location": f"/api/orders/{exc.order.id}"},
+        )
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        # Refused by Crypie's own checks (or an invalid market name) before anything was sent:
+        # no order exists, so the same key may be used again after a fix.
+        _release_order_token(token, bool(token))
+        raise errors.ApiError(422, f"Order niet geplaatst: {exc}.", "order_refused") from exc
     except BitvavoError as exc:
-        raise HTTPException(502, str(exc)) from exc
-    return {
-        "id": o.id,
-        "status": o.status,
-        "price": o.price,
-        "amount": o.amount,
-        "amount_quote": o.amount_quote,
-        "fee_quote": o.fee_quote,
-        "mode": o.mode,
-    }
+        raise errors.bitvavo_api_error(exc) from exc
+    response.headers["Location"] = f"/api/orders/{o.id}"
+    return _order_dict(o)
 
 
 # -- Strategy ------------------------------------------------------------------------
@@ -1197,11 +1402,16 @@ async def put_strategy(
     strategy: Strategy, request: Request, session: Session = Depends(get_session)
 ):
     if strategy.market not in request.app.state.settings.markets:
-        raise HTTPException(400, f"{strategy.market} is not in MARKETS")
+        raise errors.ApiError(
+            422,
+            f"{strategy.market} staat niet bij de markten van de bot (MARKETS).",
+            "market_not_tracked",
+            fields={"market": "staat niet in MARKETS"},
+        )
     try:
         check_for_use(strategy)
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise errors.ApiError(422, str(exc), "invalid_strategy") from exc
     save_strategy(session, strategy)
     return strategy.model_dump()
 
@@ -1214,17 +1424,17 @@ async def propose_strategy(
     session: Session = Depends(get_session),
 ):
     if not assistant.available:
-        raise HTTPException(503, "ANTHROPIC_API_KEY is not configured")
+        raise _claude_missing()
     try:
         proposal = await assistant.propose(
             session, body.description, load_strategy(session), request.app.state.settings.markets
         )
     except BudgetExceeded as exc:
-        raise HTTPException(429, str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
+        raise _budget_error(exc) from exc
+    except ValueError as exc:  # Claude chose a market the bot does not follow
+        raise errors.ApiError(422, f"{exc}.", "market_not_tracked") from exc
     except RuntimeError as exc:
-        raise HTTPException(502, str(exc)) from exc
+        raise errors.ApiError(502, str(exc), "claude_error") from exc
     return {"strategy": proposal.strategy.model_dump(), "explanation": proposal.explanation}
 
 
@@ -1246,9 +1456,9 @@ async def run_backtest(
     try:
         return await _run_backtest(request, client, strategy, body.limit, body.start_eur)
     except BitvavoError as exc:
-        raise HTTPException(502, str(exc)) from exc
+        raise errors.bitvavo_api_error(exc) from exc
     except (ValueError, ArithmeticError) as exc:
-        raise HTTPException(422, f"backtest failed: {exc}") from exc
+        raise errors.ApiError(422, f"Backtest mislukt: {exc}", "backtest_failed") from exc
 
 
 def _waiting_proposal(session: Session, settings: Settings, current: Strategy) -> dict | None:
@@ -1399,7 +1609,7 @@ def _strategy_input(strategy_json: str, settings: Settings) -> Strategy:
     return candidate
 
 
-@app.get("/strategy", response_class=HTMLResponse)
+@app.get("/strategy", response_class=HTMLResponse, include_in_schema=False)
 async def strategy_page(
     request: Request,
     result: str | None = Query(None, max_length=64),
@@ -1418,7 +1628,7 @@ async def strategy_page(
 STRATEGY_ANCHORS = {"invalid": "editor", "claude": "claude", "conflict": "conflict"}
 
 
-@app.post("/strategy", response_class=HTMLResponse)
+@app.post("/strategy", response_class=HTMLResponse, include_in_schema=False)
 async def strategy_action(
     request: Request,
     action: str = Form(..., max_length=32),
@@ -1590,13 +1800,25 @@ NEWS_HOURS_MAX = NEWS_RETENTION_DAYS * 24
 @app.get("/api/news")
 async def list_news(
     request: Request,
+    response: Response,
     hours: int = Query(24, ge=1, le=NEWS_HOURS_MAX),
     limit: int = Query(100, ge=1, le=500),
     counts: bool | None = None,
+    cursor: str | None = CURSOR_QUERY,
     session: Session = Depends(get_session),
 ):
+    """The newest articles first; more via the Link header. ``counts`` filters the page after
+    it is read, so a filtered page can hold fewer than ``limit`` articles."""
     tracked = request.app.state.settings.coins
-    rows = [_news_dict(it, tracked) for it in recent_items(session, hours, limit)]
+    items = recent_items(session, hours, limit + 1, before=time_id_cursor(cursor))
+    items = page_of(
+        request,
+        response,
+        items,
+        limit,
+        lambda it: encode_cursor(at=it.published_at.isoformat(), id=it.id),
+    )
+    rows = [_news_dict(it, tracked) for it in items]
     if counts is not None:
         rows = [r for r in rows if r["counts"] == counts]
     return rows
@@ -1668,7 +1890,7 @@ def _news_refresh_flash(result: dict) -> tuple[str, str]:
     return "ok", text + "."
 
 
-@app.get("/news", response_class=HTMLResponse)
+@app.get("/news", response_class=HTMLResponse, include_in_schema=False)
 async def news_page(
     request: Request,
     hours: int = Query(NEWS_DEFAULT_HOURS, ge=1, le=NEWS_HOURS_MAX),
@@ -1754,7 +1976,7 @@ async def news_page(
     )
 
 
-@app.post("/news/refresh")
+@app.post("/news/refresh", include_in_schema=False)
 async def news_refresh_form(
     hours: int = Form(NEWS_DEFAULT_HOURS, ge=1, le=NEWS_HOURS_MAX),
     telt: str = Form("", max_length=8),
@@ -1905,7 +2127,7 @@ async def trading_cycle(
     try:
         return [r.as_dict() for r in await engine.run_cycle(session)]
     except BitvavoError as exc:
-        raise HTTPException(502, str(exc)) from exc
+        raise errors.bitvavo_api_error(exc) from exc
 
 
 class ConsultIn(BaseModel):
@@ -1922,15 +2144,17 @@ async def trading_consult(
     The rules still hold: without a buy signal he cannot buy."""
     market = body.market.strip().upper()
     if not engine.decision_maker.available:
-        raise HTTPException(409, display.CONSULT_NO_CLAUDE)
+        raise _claude_missing(display.CONSULT_NO_CLAUDE)
     try:
         return (await engine.run_consult(session, market)).as_dict()
-    except ValueError as exc:
-        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:  # not one of the bot's markets
+        raise errors.ApiError(
+            422, f"{exc}.", "market_not_tracked", fields={"market": "geen markt van de bot"}
+        ) from exc
     except BudgetExceeded as exc:
-        raise HTTPException(429, f"Beoordeling niet gestart: {exc}") from exc
+        raise _budget_error(exc, "Beoordeling niet gestart: ") from exc
     except BitvavoError as exc:
-        raise HTTPException(502, str(exc)) from exc
+        raise errors.bitvavo_api_error(exc) from exc
 
 
 class PauseIn(BaseModel):
@@ -1945,45 +2169,69 @@ async def trading_pause(body: PauseIn, session: Session = Depends(get_session)):
 
 @app.get("/api/positions")
 async def positions(
+    request: Request,
+    response: Response,
     mode: Literal["paper", "live"] | None = Query(None),
+    days: int = Query(30, ge=1, le=3650, description="Gesloten posities van de laatste N dagen"),
+    limit: int = Query(200, ge=1, le=1000, description="Gesloten posities per pagina"),
+    cursor: str | None = CURSOR_QUERY,
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
     """Positions of the current mode, or of ``mode`` (e.g. the paper positions that the exits
-    still guard while the bot trades live)."""
+    still guard while the bot trades live). ``open`` is always complete; ``closed`` (newest
+    first) is paged: more via the Link header."""
     mode = mode or engine.mode
+    closed = closed_positions(session, mode, days, limit + 1, before=time_id_cursor(cursor))
+    closed = page_of(
+        request,
+        response,
+        closed,
+        limit,
+        lambda p: encode_cursor(at=p.closed_at.isoformat(), id=p.id),
+    )
     return {
         "mode": mode,
         "open": [_position_dict(p) for p in open_positions(session, mode)],
-        "closed": [_position_dict(p) for p in closed_positions(session, mode)],
+        "closed": [_position_dict(p) for p in closed],
     }
 
 
 @app.get("/api/decisions")
 async def decisions(
+    request: Request,
+    response: Response,
     limit: int = Query(50, ge=1, le=500),
+    cursor: str | None = CURSOR_QUERY,
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
-    return [_decision_dict(d) for d in recent_decisions(session, engine.mode, limit)]
+    """The newest decisions first; more via the Link header."""
+    rows = recent_decisions(session, engine.mode, limit + 1, before_id=id_cursor(cursor))
+    rows = page_of(request, response, rows, limit, lambda d: encode_cursor(id=d.id))
+    return [_decision_dict(d) for d in rows]
 
 
 @app.post("/api/evaluations", status_code=201)
 async def run_evaluation(
+    response: Response,
     days: int = Query(7, ge=1, le=365),
     engine: TradingEngine = Depends(get_engine),
     session: Session = Depends(get_session),
 ):
     if not engine.evaluator.available:
-        raise HTTPException(503, "ANTHROPIC_API_KEY is not configured")
+        raise _claude_missing()
     try:
         ev = await engine.run_evaluation(session, days)
     except EvaluationBusy as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise errors.ApiError(409, str(exc), "evaluation_busy") from exc
     except BudgetExceeded as exc:
-        raise HTTPException(429, str(exc)) from exc
+        raise _budget_error(exc) from exc
+    except BitvavoError as exc:
+        raise errors.bitvavo_api_error(exc) from exc
     except RuntimeError as exc:
-        raise HTTPException(502, str(exc)) from exc
+        raise errors.ApiError(502, str(exc), "claude_error") from exc
+    response.headers["Location"] = f"/api/evaluations/{ev.id}"
     return _evaluation_dict(ev)
 
 
@@ -2001,9 +2249,33 @@ def _evaluation_dict(ev: Evaluation) -> dict:
 
 
 @app.get("/api/evaluations")
-async def list_evaluations(session: Session = Depends(get_session)):
-    rows = session.scalars(select(Evaluation).order_by(Evaluation.id.desc()).limit(20)).all()
+async def list_evaluations(
+    request: Request,
+    response: Response,
+    limit: int = Query(20, ge=1, le=100),
+    cursor: str | None = CURSOR_QUERY,
+    session: Session = Depends(get_session),
+):
+    """The newest evaluations first; more via the Link header."""
+    stmt = select(Evaluation)
+    before = id_cursor(cursor)
+    if before is not None:
+        stmt = stmt.where(Evaluation.id < before)
+    rows = list(session.scalars(stmt.order_by(Evaluation.id.desc()).limit(limit + 1)))
+    rows = page_of(request, response, rows, limit, lambda e: encode_cursor(id=e.id))
     return [_evaluation_dict(e) for e in rows]
+
+
+@app.get("/api/evaluations/{evaluation_id}")
+async def get_evaluation(
+    evaluation_id: int = Path(ge=1, le=DB_ID_MAX), session: Session = Depends(get_session)
+):
+    ev = session.get(Evaluation, evaluation_id)
+    if ev is None:
+        raise errors.ApiError(
+            404, f"Evaluatie {evaluation_id} bestaat niet.", "evaluation_not_found"
+        )
+    return _evaluation_dict(ev)
 
 
 class ProposalError(Exception):
@@ -2204,7 +2476,12 @@ async def apply_evaluation(
     try:
         strategy = _apply_proposal(request, session, evaluation_id)
     except ProposalError as exc:
-        raise HTTPException(exc.status, exc.message) from exc
+        # The pages use 400 for 'cannot be applied'; the API says 422 (refused by the rules).
+        status = 422 if exc.status == 400 else exc.status
+        code = {404: "evaluation_not_found", 409: "proposal_conflict"}.get(
+            status, "proposal_not_applicable"
+        )
+        raise errors.ApiError(status, exc.message, code) from exc
     return {"applied": True, "strategy": strategy.model_dump()}
 
 
@@ -2394,7 +2671,7 @@ def _trading_context(
     }
 
 
-@app.get("/trading", response_class=HTMLResponse)
+@app.get("/trading", response_class=HTMLResponse, include_in_schema=False)
 async def trading_page(
     request: Request,
     view: Literal["important", "all"] = Query("important"),
@@ -2432,7 +2709,7 @@ def _action_refused(request: Request, back: str, status: int, text: str) -> Redi
     raise HTTPException(status, text)
 
 
-@app.post("/trading/action")
+@app.post("/trading/action", include_in_schema=False)
 async def trading_action(
     request: Request,
     action: str = Form(..., max_length=32),
@@ -2612,7 +2889,7 @@ PLAN_SAVED_IDLE = (
 )
 
 
-@app.get("/plan", response_class=HTMLResponse)
+@app.get("/plan", response_class=HTMLResponse, include_in_schema=False)
 async def plan_page(
     request: Request,
     engine: TradingEngine = Depends(get_engine),
@@ -2622,7 +2899,7 @@ async def plan_page(
     return templates.TemplateResponse(request, "plan.html", ctx)
 
 
-@app.post("/plan", response_class=HTMLResponse)
+@app.post("/plan", response_class=HTMLResponse, include_in_schema=False)
 async def plan_save(
     request: Request,
     engine: TradingEngine = Depends(get_engine),
@@ -2797,10 +3074,13 @@ async def api_journal(
 ):
     flt, ignored = _journal_filter(market, status, result, reason, tag, days, q, by)
     shown = _journal_mode(engine, mode)
-    entries = journal_entries(session, shown, flt, limit)
+    entries, truncated = journal_entries_page(session, shown, flt, limit)
     return {
         "mode": shown,
         "ignored_filters": ignored,
+        # True when more positions matched than ``limit``: the oldest were left out (and the
+        # totals cover only the entries shown). Narrow the filter or raise ``limit``.
+        "truncated": truncated,
         "totals": journal_totals(entries),
         "entries": [e.as_dict() for e in entries],
     }
@@ -2820,15 +3100,15 @@ async def api_journal_note(
     try:
         save_note(session, position_id, body.note, body.tags)
     except LookupError as exc:
-        raise HTTPException(404, str(exc)) from exc
+        raise errors.ApiError(404, str(exc), "position_not_found") from exc
     except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
+        raise errors.ApiError(422, str(exc), "invalid_note") from exc
     entry = journal_entry(session, position_id)
     assert entry is not None
     return entry.as_dict()
 
 
-@app.get("/journal", response_class=HTMLResponse)
+@app.get("/journal", response_class=HTMLResponse, include_in_schema=False)
 async def journal_page(
     request: Request,
     market: str | None = JOURNAL_FILTERS["market"],
@@ -2890,7 +3170,7 @@ async def journal_page(
     )
 
 
-@app.post("/journal/{position_id}/note")
+@app.post("/journal/{position_id}/note", include_in_schema=False)
 async def journal_note_form(
     request: Request,
     position_id: int = Path(ge=1, le=DB_ID_MAX),
@@ -2970,20 +3250,7 @@ def _live_missing_text(env: Settings, client: BitvavoClient) -> str | None:
 
 
 # Bitvavo error codes for a refused key, in plain Dutch (the code itself is shown as detail).
-KEY_PROBLEMS_NL = {
-    301: "de sleutel heeft niet de goede lengte; controleer BITVAVO_API_KEY",
-    302: "de klok van de server loopt niet gelijk",
-    304: "de klok van de server loopt niet gelijk",
-    305: "Bitvavo kent deze sleutel niet (meer)",
-    306: "de sleutel is nog niet per e-mail bevestigd",
-    307: "de sleutel mag niet vanaf het IP-adres van deze server",
-    308: "de handtekening klopt niet; controleer BITVAVO_API_SECRET",
-    309: "de handtekening klopt niet; controleer BITVAVO_API_SECRET",
-    310: "de sleutel mag niet handelen",
-    311: "de sleutel mag je accountgegevens niet lezen",
-    317: "je Bitvavo-account is geblokkeerd",
-    318: "je Bitvavo-account moet nog worden geverifieerd",
-}
+KEY_PROBLEMS_NL = errors.KEY_PROBLEMS_NL
 
 
 def _key_problem_nl(problem: dict) -> str:
@@ -3206,20 +3473,45 @@ async def _reset_settings(
     return removed, cfg.changes(old, new, keys)
 
 
-async def _api_password(request: Request, body: dict | None = None) -> str | None:
-    """The current password of an API call: the JSON field current_password, or the
-    X-Current-Password header (handy for DELETE, which usually has no body)."""
-    if body is None:
-        raw = await request.body()
-        if raw:
-            try:
-                body = json.loads(raw)
-            except ValueError:
-                raise HTTPException(400, "ongeldige JSON") from None
+async def _api_password(request: Request) -> str | None:
+    """The current password of a call without a settings body (DELETE): the JSON field
+    current_password, or the X-Current-Password header (DELETE usually has no body)."""
+    body = None
+    raw = await request.body()
+    if raw:
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            raise errors.ApiError(400, "Ongeldige JSON.", "invalid_json") from None
     value = body.get("current_password") if isinstance(body, dict) else None
     if value is not None and not isinstance(value, str):
-        raise HTTPException(422, {"current_password": "moet tekst zijn"})
+        raise errors.ApiError(
+            422,
+            "Niet verwerkt: current_password moet tekst zijn.",
+            "invalid_input",
+            fields={"current_password": "moet tekst zijn"},
+        )
     return value or request.headers.get(PASSWORD_HEADER)
+
+
+class SettingsIn(BaseModel):
+    """Setting -> new value, with the keys of GET /api/settings. Only the keys sent change."""
+
+    model_config = ConfigDict(
+        extra="allow",
+        json_schema_extra={"examples": [{"max_trade_eur": 50, "max_trades_per_day": 4}]},
+    )
+    current_password: str | None = Field(
+        default=None,
+        max_length=1024,
+        description="Nodig als er een gevoelige instelling verandert (of de header "
+        "X-Current-Password)",
+    )
+
+
+def _settings_refused(exc: SettingsError, status: int, code: str) -> errors.ApiError:
+    fields = {str(k): str(v) for k, v in exc.errors.items()}
+    return errors.ApiError(status, errors.fields_sentence(fields), code, fields=fields)
 
 
 @app.get("/api/settings")
@@ -3227,20 +3519,28 @@ async def api_settings(request: Request, session: Session = Depends(get_session)
     return _settings_payload(request, session)
 
 
-@app.put("/api/settings")
+@app.patch("/api/settings")
 async def api_update_settings(
-    body: dict, request: Request, session: Session = Depends(get_session)
+    body: SettingsIn, request: Request, session: Session = Depends(get_session)
 ):
-    """Changes to sensitive settings need ``current_password`` in the body (step-up)."""
-    password = await _api_password(request, body)
-    values = {k: v for k, v in body.items() if k != "current_password"}
+    """Change settings: only the keys sent change. Sensitive settings need the current
+    password (``current_password`` or the X-Current-Password header: step-up)."""
+    password = body.current_password or request.headers.get(PASSWORD_HEADER)
     try:
-        await _save_settings(request, session, values, password)
+        await _save_settings(request, session, dict(body.model_extra or {}), password)
     except SettingsError as exc:
-        raise HTTPException(422, exc.errors) from exc
+        raise _settings_refused(exc, 422, "invalid_settings") from exc
     except StepUpError as exc:
-        raise HTTPException(exc.status, exc.message) from exc
+        raise _step_up_error(exc) from exc
     return _settings_payload(request, session)
+
+
+@app.put("/api/settings", deprecated=True)
+async def api_put_settings(
+    body: SettingsIn, request: Request, session: Session = Depends(get_session)
+):
+    """The same as PATCH (only the keys sent change); kept for existing clients."""
+    return await api_update_settings(body, request, session)
 
 
 @app.delete("/api/settings")
@@ -3250,23 +3550,23 @@ async def api_reset_settings(request: Request, session: Session = Depends(get_se
     try:
         await _reset_settings(request, session, None, password)
     except SettingsError as exc:
-        raise HTTPException(409, exc.errors) from exc
+        raise _settings_refused(exc, 422, "reset_refused") from exc
     except StepUpError as exc:
-        raise HTTPException(exc.status, exc.message) from exc
+        raise _step_up_error(exc) from exc
     return _settings_payload(request, session)
 
 
 @app.delete("/api/settings/{key}")
 async def api_reset_setting(key: str, request: Request, session: Session = Depends(get_session)):
     if key not in cfg.SPEC_BY_KEY:
-        raise HTTPException(404, f"{key} is geen aanpasbare instelling")
+        raise errors.ApiError(404, f"{key} is geen aanpasbare instelling.", "unknown_setting")
     password = await _api_password(request)
     try:
         await _reset_settings(request, session, [key], password)
     except SettingsError as exc:
-        raise HTTPException(409, exc.errors) from exc
+        raise _settings_refused(exc, 422, "reset_refused") from exc
     except StepUpError as exc:
-        raise HTTPException(exc.status, exc.message) from exc
+        raise _step_up_error(exc) from exc
     return _settings_payload(request, session)
 
 
@@ -3532,7 +3832,7 @@ def _settings_context(
     }
 
 
-@app.get("/settings", response_class=HTMLResponse)
+@app.get("/settings", response_class=HTMLResponse, include_in_schema=False)
 async def settings_page(
     request: Request, saved: str | None = None, session: Session = Depends(get_session)
 ):
@@ -3569,7 +3869,7 @@ def _saved_text(title: str, changes: list[str]) -> str:
     return f"{title} opgeslagen; het geldt direct. {_join_changes(changes)}."
 
 
-@app.post("/settings", response_class=HTMLResponse)
+@app.post("/settings", response_class=HTMLResponse, include_in_schema=False)
 async def settings_save(request: Request, session: Session = Depends(get_session)):
     form = await request.form()
     group = str(form.get("group") or "")
@@ -3722,7 +4022,7 @@ async def _reset_paper_action(request, session, form, password, page, step_up_fa
 _last_bitvavo_test = 0.0
 
 
-@app.post("/settings/bitvavo-test")
+@app.post("/settings/bitvavo-test", include_in_schema=False)
 async def settings_bitvavo_test(request: Request):
     """'Verbinding testen': one signed request (account and fee) with the configured key."""
     global _last_bitvavo_test
@@ -3774,7 +4074,7 @@ async def settings_bitvavo_test(request: Request):
     )
 
 
-@app.post("/settings/notify-test")
+@app.post("/settings/notify-test", include_in_schema=False)
 async def settings_notify_test(request: Request):
     """'Testmelding sturen' to the channel set in NOTIFY_URL."""
     ok, text = await send_test(request.app.state.env)
@@ -4271,7 +4571,7 @@ async def _dashboard_context(
     }
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def dashboard(
     request: Request,
     client: BitvavoClient = Depends(get_client),
@@ -4317,7 +4617,7 @@ async def dashboard_status(
     return JSONResponse(body, headers={"Cache-Control": "no-store"})
 
 
-@app.post("/dashboard/getting-started")
+@app.post("/dashboard/getting-started", include_in_schema=False)
 async def hide_getting_started(session: Session = Depends(get_session)):
     """Hide the 'Aan de slag' card for good."""
     row = session.get(Setting, GETTING_STARTED_KEY)
@@ -4368,7 +4668,7 @@ ORDER_RESENT = (
 )
 
 
-@app.post("/orders")
+@app.post("/orders", include_in_schema=False)
 async def dashboard_order(
     request: Request,
     market: str = Form(..., max_length=32),

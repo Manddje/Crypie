@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from fastapi import APIRouter, Request
@@ -105,8 +107,39 @@ class ModeIn(_In):
     )
 
 
+CURSOR_FIELD = Field(
+    default=None,
+    max_length=200,
+    description="Volgende pagina: de cursor die het vorige antwoord noemde",
+)
+
+
+class PositionsIn(ModeIn):
+    days: int = Field(default=30, ge=1, le=3650, description="Gesloten posities van N dagen")
+    limit: int = Field(default=200, ge=1, le=1000, description="Gesloten posities per pagina")
+    cursor: str | None = CURSOR_FIELD
+
+
+class OrdersIn(_In):
+    limit: int = Field(default=50, ge=1, le=500, description="Aantal orders (de nieuwste)")
+    mode: Literal["paper", "live"] | None = Field(
+        default=None, description="Alleen paper of live; leeg = allebei"
+    )
+    cursor: str | None = CURSOR_FIELD
+
+
+class OrderIdIn(_In):
+    order_id: int = Field(ge=1, description="id uit orders of uit place_order")
+
+
+class EvaluationsIn(_In):
+    limit: int = Field(default=20, ge=1, le=100, description="Aantal evaluaties (de nieuwste)")
+    cursor: str | None = CURSOR_FIELD
+
+
 class DecisionsIn(_In):
     limit: int = Field(default=50, ge=1, le=500, description="Aantal beslissingen (de nieuwste)")
+    cursor: str | None = CURSOR_FIELD
 
 
 class JournalIn(_In):
@@ -135,6 +168,7 @@ class NewsIn(_In):
         default=24, ge=1, le=NEWS_HOURS_MAX, description="Berichten van de laatste N uur"
     )
     limit: int = Field(default=100, ge=1, le=500)
+    cursor: str | None = CURSOR_FIELD
 
 
 class SentimentIn(_In):
@@ -164,6 +198,13 @@ class OrderIn(_In):
     )
     current_password: str | None = Field(
         default=None, max_length=1024, description="Alleen nodig terwijl de bot live handelt"
+    )
+    idempotency_key: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description="Unieke tekst per order (bijv. een UUID). Stuur je dezelfde order nog eens "
+        "met dezelfde sleutel, dan plaatst Crypie hem niet opnieuw. Gebruik hem altijd.",
     )
 
 
@@ -390,9 +431,22 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         "orders",
         "Orders",
-        "De laatste orders (paper en live): kant, bedrag, prijs, kosten, status en reden.",
+        "De laatste orders (paper en live, of één modus): kant, bedrag, prijs, kosten, status "
+        "en reden.",
         "GET",
         "/api/orders",
+        OrdersIn,
+        query=_dump,
+        read_only=True,
+    ),
+    Tool(
+        "order",
+        "Eén order",
+        "Eén order op id, bijvoorbeeld om te volgen of een order met onbekende uitkomst "
+        "(status pending of unknown) inmiddels is uitgevoerd.",
+        "GET",
+        lambda a: f"/api/orders/{a.order_id}",
+        OrderIdIn,
         read_only=True,
     ),
     Tool(
@@ -402,7 +456,7 @@ TOOLS: tuple[Tool, ...] = (
         "resultaat.",
         "GET",
         "/api/positions",
-        ModeIn,
+        PositionsIn,
         query=_dump,
         read_only=True,
     ),
@@ -456,6 +510,8 @@ TOOLS: tuple[Tool, ...] = (
         "backtest ervan en of het voorstel is toegepast.",
         "GET",
         "/api/evaluations",
+        EvaluationsIn,
+        query=_dump,
         read_only=True,
     ),
     Tool(
@@ -552,7 +608,10 @@ TOOLS: tuple[Tool, ...] = (
         "place_order",
         "Handmatige order",
         "Plaats een koop- of verkooporder onder de regels van de bot (limieten, minimumbedrag). "
-        "In oefenmodus gesimuleerd; live echt, en dan is current_password nodig.",
+        "In oefenmodus gesimuleerd; live echt, en dan is current_password nodig. Geef altijd een "
+        "idempotency_key mee, dan wordt een herhaalde aanroep niet nog eens geplaatst. Is de "
+        "uitkomst nog onbekend (status pending of unknown), plaats hem dan niet opnieuw maar "
+        "volg hem met de tool order.",
         "POST",
         "/api/orders",
         OrderIn,
@@ -616,7 +675,7 @@ TOOLS: tuple[Tool, ...] = (
         "Instellingen wijzigen",
         "Wijzig één of meer instellingen (sleutels en waarden zoals `settings` ze geeft). "
         "Gevoelige instellingen vragen current_password; alle wijzigingen gelden direct.",
-        "PUT",
+        "PATCH",
         "/api/settings",
         SettingsIn,
         body=_settings_body,
@@ -662,6 +721,18 @@ def _text(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, indent=1, default=str)
 
 
+_NEXT_LINK = re.compile(r'<([^>]*)>\s*;\s*rel="?next"?')
+
+
+def next_cursor(response: httpx.Response) -> str | None:
+    """The cursor of the next page, from the Link header of a paged list (RFC 8288)."""
+    match = _NEXT_LINK.search(response.headers.get("link", ""))
+    if not match:
+        return None
+    values = parse_qs(urlsplit(match.group(1)).query).get("cursor")
+    return values[0] if values else None
+
+
 def _tool_result(tool: Tool, response: httpx.Response) -> dict:
     try:
         data = response.json()
@@ -669,13 +740,18 @@ def _tool_result(tool: Tool, response: httpx.Response) -> dict:
         data = response.text
     if response.status_code >= 400:
         detail = data.get("detail", data) if isinstance(data, dict) else data
-        text = f"Crypie weigerde dit ({response.status_code}): {_text(detail)}"
+        code = f" [{data['code']}]" if isinstance(data, dict) and data.get("code") else ""
+        text = f"Crypie weigerde dit ({response.status_code}{code}): {_text(detail)}"
         return {"content": [{"type": "text", "text": text}], "isError": True}
     if tool.trim is not None:
         data = tool.trim(data)
-    result: dict = {"content": [{"type": "text", "text": _text(data)}]}
+    text = _text(data)
+    cursor = next_cursor(response)
+    if cursor:
+        text += f'\n\nEr is meer: roep {tool.name} opnieuw aan met cursor="{cursor}".'
+    result: dict = {"content": [{"type": "text", "text": text}]}
     if isinstance(data, dict):
-        result["structuredContent"] = data
+        result["structuredContent"] = {**data, "next_cursor": cursor} if cursor else data
     return result
 
 

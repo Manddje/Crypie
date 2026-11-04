@@ -7,7 +7,7 @@ import logging
 from collections.abc import Iterable
 
 from starlette.datastructures import Headers, MutableHeaders
-from starlette.responses import PlainTextResponse
+from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 log = logging.getLogger(__name__)
@@ -54,6 +54,14 @@ def _own_origin(scope: Scope, headers: Headers) -> str | None:
     return f"{scope.get('scheme', 'http')}://{host}".lower()
 
 
+def refusal(scope: Scope, status: int, text: str, api_text: str, code: str) -> Response:
+    """A refusal before the app runs: plain text for pages and forms, and the API's own error
+    shape ({"detail", "code"}, see app/errors.py) for /api/*."""
+    if scope.get("path", "").startswith("/api/"):
+        return JSONResponse({"detail": api_text, "code": code}, status_code=status)
+    return PlainTextResponse(text, status_code=status)
+
+
 class CrossOriginProtection:
     """Refuse state-changing requests that a browser sent from another origin.
 
@@ -94,10 +102,8 @@ class CrossOriginProtection:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http" and not self.allowed(scope):
-            response = PlainTextResponse(
-                "Geweigerd: dit verzoek kwam van een andere website.", status_code=403
-            )
-            await response(scope, receive, send)
+            text = "Geweigerd: dit verzoek kwam van een andere website."
+            await refusal(scope, 403, text, text, "cross_origin")(scope, receive, send)
             return
         await self.app(scope, receive, send)
 
@@ -125,7 +131,14 @@ class BodySizeLimit:
         if declared is not None:
             declared = declared.strip()
             if not declared.isascii() or not declared.isdigit():
-                await PlainTextResponse("Invalid Content-Length", 400)(scope, receive, send)
+                response = refusal(
+                    scope,
+                    400,
+                    "Invalid Content-Length",
+                    "Ongeldige Content-Length.",
+                    "invalid_content_length",
+                )
+                await response(scope, receive, send)
                 return
             if int(declared) > limit:
                 await self._too_large(scope, receive, send)
@@ -172,7 +185,9 @@ class BodySizeLimit:
 
     @staticmethod
     async def _too_large(scope: Scope, receive: Receive, send: Send) -> None:
-        response = PlainTextResponse("Request body too large", status_code=413)
+        response = refusal(
+            scope, 413, "Request body too large", "Wat je verstuurde is te groot.", "too_large"
+        )
         response.headers["Connection"] = "close"
         await response(scope, receive, send)
 

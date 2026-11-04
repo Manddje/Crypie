@@ -1,5 +1,6 @@
 """Step-up re-authentication for sensitive settings and live manual orders (audit F21)."""
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -257,12 +258,16 @@ def live(owner, monkeypatch):
         placed.append((market, side, amount_quote))
         return SimpleNamespace(
             id=1,
+            created_at=datetime.now(UTC),
+            market=market,
+            side=side,
             status="filled",
             price=100.0,
             amount=0.1,
             amount_quote=amount_quote,
             fee_quote=0.0,
             mode="live",
+            reason=reason,
         )
 
     async def no_prices(markets):
@@ -308,12 +313,16 @@ async def test_paper_manual_orders_need_no_password(owner, monkeypatch):
         placed.append(market)
         return SimpleNamespace(
             id=1,
+            created_at=datetime.now(UTC),
+            market=market,
+            side=side,
             status="filled",
             price=1.0,
             amount=1.0,
             amount_quote=10.0,
             fee_quote=0.0,
             mode="paper",
+            reason=reason,
         )
 
     monkeypatch.setattr(app.state.engine, "manual_order", manual_order)

@@ -147,7 +147,10 @@ async def test_unknown_page_is_an_html_page_with_a_way_back(api):
     assert "script-src 'self'" in r.headers["content-security-policy"]
     assert r.headers["x-frame-options"] == "DENY"
     # The API and clients that do not ask for HTML keep JSON.
-    assert (await api.get("/api/bestaat-niet", headers=HTML)).json() == {"detail": "Not Found"}
+    assert (await api.get("/api/bestaat-niet", headers=HTML)).json() == {
+        "detail": "Dit adres bestaat niet.",
+        "code": "not_found",
+    }
     assert (await api.get("/bestaat-niet")).json() == {"detail": "Not Found"}
 
 
@@ -236,7 +239,8 @@ async def test_a_crash_shows_the_500_page_with_the_security_headers(api, monkeyp
     assert "geheim intern detail" not in r.text and 'href="/plan"' in r.text
     assert "script-src 'self'" in r.headers["content-security-policy"]
     r = await api.get("/api/plan", headers=HTML)
-    assert r.status_code == 500 and r.json() == {"detail": "Interne fout"}
+    assert r.status_code == 500 and r.json()["code"] == "internal_error"
+    assert r.json()["detail"].startswith("Interne fout") and "geheim" not in r.text
 
 
 # -- static files: caching and compression ----------------------------------------------------
@@ -299,7 +303,8 @@ async def test_consult_action_and_api(api, monkeypatch):
     msg = flashes_from_response(r)[-1]
     assert msg["kind"] == "error" and msg["text"].startswith("Claude kan niet beoordelen")
     r = await api.post("/api/trading/consult", json={"market": "btc-eur"})
-    assert r.status_code == 409 and "ANTHROPIC_API_KEY" in r.json()["detail"]
+    assert r.status_code == 503 and "ANTHROPIC_API_KEY" in r.json()["detail"]
+    assert r.json()["code"] == "claude_unavailable"
     r = await api.post("/trading/action", data={"action": "consult:nope"})
     assert r.status_code == 400 and "consult:<MUNT>-EUR" in r.json()["detail"]
 
@@ -325,7 +330,7 @@ async def test_consult_action_and_api(api, monkeypatch):
 
     monkeypatch.setattr(engine, "run_consult", unknown)
     r = await api.post("/api/trading/consult", json={"market": "XXX-EUR"})
-    assert r.status_code == 404
+    assert r.status_code == 422 and r.json()["code"] == "market_not_tracked"
     r = await api.post("/trading/action", data={"action": "consult:XXX-EUR"}, headers=HTML)
     msg = flashes_from_response(r)[-1]
     assert msg["kind"] == "error" and "staat niet bij de markten" in msg["text"]

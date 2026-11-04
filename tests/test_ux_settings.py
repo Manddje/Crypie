@@ -165,7 +165,8 @@ async def test_block_reset_keeps_the_mode_and_a_reset_to_live_is_refused(api, mo
     # Resetting everything (or the mode itself) through the API would switch to live: refused.
     for path in ("/api/settings", "/api/settings/trading_mode"):
         r = await api.delete(path)
-        assert r.status_code == 409 and "TRADING_MODE=live" in r.json()["detail"]["trading_mode"]
+        assert r.status_code == 422 and "TRADING_MODE=live" in r.json()["fields"]["trading_mode"]
+        assert r.json()["code"] == "reset_refused"
     assert app.state.broker.mode == "paper"
 
 
@@ -192,7 +193,7 @@ async def test_live_checklist_lists_every_missing_requirement(api):
         r'<div class="seg-radio".*?</div>', block, re.S
     ).group(0)
     r = await api.put("/api/settings", json={"trading_mode": "live"})
-    detail = r.json()["detail"]["trading_mode"]
+    detail = r.json()["fields"]["trading_mode"]
     assert "AUTH_ENABLED" in detail and "Bitvavo-sleutel" in detail and "LIVE_TRADING_ACK" in detail
 
 
@@ -343,7 +344,7 @@ async def test_unknown_market_is_refused_with_a_suggestion(api, monkeypatch):
     app.state.market_names = None
     r = await api.put("/api/settings", json={"markets": "BTC-EUR, BTCC-EUR"})
     assert r.status_code == 422
-    assert r.json()["detail"]["markets"] == "BTCC-EUR bestaat niet op Bitvavo. Bedoel je BTC-EUR?"
+    assert r.json()["fields"]["markets"] == "BTCC-EUR bestaat niet op Bitvavo. Bedoel je BTC-EUR?"
     r = await api.put("/api/settings", json={"markets": "SOL-EUR"})
     assert r.status_code == 200
 

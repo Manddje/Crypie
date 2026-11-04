@@ -304,8 +304,14 @@ async def require_login(request: Request, call_next):
         return await call_next(request)
     if session is not None and path in STAGE_ONE_PATHS:
         return await call_next(request)
+    if api_token.token_path(path):
+        # The JSON API: a 401 names its challenge (RFC 9110), the way in with a token.
+        return api_token.unauthorized(
+            "Niet ingelogd: log in, of stuur een API-token (Authorization: Bearer ...)",
+            resource_metadata_url(request, path),
+        )
     if _wants_json(request):
-        return JSONResponse({"detail": "Niet ingelogd"}, status_code=401)
+        return JSONResponse({"detail": "Niet ingelogd", "code": "not_authenticated"}, 401)
     target = path + (f"?{request.url.query}" if request.url.query else "")
     response = RedirectResponse(
         f"/login?next={_next_param(target)}" if target != "/" else "/login", status_code=303
@@ -315,6 +321,13 @@ async def require_login(request: Request, call_next):
         # a form that was being sent did not go through.
         add_flash(response, "warn", EXPIRED_POST if request.method == "POST" else EXPIRED_GET)
     return response
+
+
+def resource_metadata_url(request: Request, path: str) -> str:
+    """Where the OAuth metadata (RFC 9728) of ``path`` is: /mcp has its own document, the JSON
+    API the one of the whole site (only those two are served)."""
+    suffix = oauth.MCP_PATH if path == oauth.MCP_PATH else ""
+    return str(request.base_url).rstrip("/") + oauth.RESOURCE_METADATA_PATH + suffix
 
 
 async def require_login_or_token(request: Request, call_next):
@@ -331,7 +344,7 @@ async def require_login_or_token(request: Request, call_next):
     path = request.url.path
     if auth is not None and api_token.token_path(path):
         provided = api_token.bearer_token(request)
-        metadata = str(request.base_url).rstrip("/") + oauth.RESOURCE_METADATA_PATH + path
+        metadata = resource_metadata_url(request, path)
         if provided is not None:
             with SessionLocal() as db:
                 if api_token.token_valid(db, provided, request.app.state.env.api_token):

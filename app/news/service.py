@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import anthropic
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -292,15 +292,28 @@ def pending_items(session: Session, limit: int, since: datetime | None = None) -
     )
 
 
-def recent_items(session: Session, hours: int = 24, limit: int = 100) -> list[NewsItem]:
+def recent_items(
+    session: Session,
+    hours: int = 24,
+    limit: int = 100,
+    before: tuple[datetime, int] | None = None,
+) -> list[NewsItem]:
+    """Articles of the last ``hours``, newest first; ``before`` = (published_at, id) of the
+    last one of the previous page."""
     now = datetime.now(UTC)
     cutoff = now - timedelta(hours=hours)
+    stmt = select(NewsItem).where(NewsItem.published_at >= cutoff, NewsItem.published_at <= now)
+    if before is not None:
+        at, item_id = before
+        stmt = stmt.where(
+            or_(
+                NewsItem.published_at < at,
+                and_(NewsItem.published_at == at, NewsItem.id < item_id),
+            )
+        )
     return list(
         session.scalars(
-            select(NewsItem)
-            .where(NewsItem.published_at >= cutoff, NewsItem.published_at <= now)
-            .order_by(NewsItem.published_at.desc())
-            .limit(limit)
+            stmt.order_by(NewsItem.published_at.desc(), NewsItem.id.desc()).limit(limit)
         )
     )
 

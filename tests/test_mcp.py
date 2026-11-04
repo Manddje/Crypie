@@ -63,7 +63,7 @@ def test_token_helpers():
 
 def test_every_tool_is_consistent():
     names = [t.name for t in TOOLS]
-    assert len(names) == len(set(names)) == 32
+    assert len(names) == len(set(names)) == 33
     for tool in TOOLS:
         assert tool.read_only == (tool.method == "GET"), tool.name
         assert tool.description and tool.title
@@ -231,15 +231,15 @@ async def test_acting_tools_go_through_the_api(api):  # noqa: F811
 async def test_api_refusals_are_tool_errors(api):  # noqa: F811
     answer = await call(api, "journal_note", {"position_id": 999, "note": "x"})
     assert answer["result"]["isError"] is True
-    assert _text(answer).startswith("Crypie weigerde dit (404)")
+    assert _text(answer).startswith("Crypie weigerde dit (404 [position_not_found])")
 
     strategy = (await call(api, "strategy"))["result"]["structuredContent"]
     strategy["market"] = "XRP-EUR"  # not in MARKETS
     answer = await call(api, "set_strategy", {"strategy": strategy})
-    assert answer["result"]["isError"] is True and "(400)" in _text(answer)
+    assert answer["result"]["isError"] is True and "(422 [market_not_tracked])" in _text(answer)
 
     answer = await call(api, "reset_settings", {"key": "no_such_setting"})
-    assert answer["result"]["isError"] is True and "(404)" in _text(answer)
+    assert answer["result"]["isError"] is True and "(404 [unknown_setting])" in _text(answer)
 
 
 def _fake_candles(n=60, start=30000.0):
@@ -326,7 +326,7 @@ async def test_step_up_through_the_mcp(web):  # noqa: F811
     try:
         answer = await call(web, "update_settings", {"changes": {"max_trade_eur": 40}}, **BEARER)
         assert answer["result"]["isError"] is True
-        assert "(403)" in _text(answer) and "wachtwoord" in _text(answer)
+        assert "(403 [password_required])" in _text(answer) and "wachtwoord" in _text(answer)
         assert app.state.settings.max_trade_eur == 100.0
 
         answer = await call(
@@ -347,7 +347,7 @@ async def test_step_up_through_the_mcp(web):  # noqa: F811
         assert app.state.settings.max_trade_eur == 40.0
 
         answer = await call(web, "reset_settings", {"key": "max_trade_eur"}, **BEARER)
-        assert answer["result"]["isError"] is True and "(403)" in _text(answer)
+        assert answer["result"]["isError"] is True and "(403 [password_required])" in _text(answer)
         answer = await call(
             web, "reset_settings", {"key": "max_trade_eur", "current_password": PASSWORD}, **BEARER
         )

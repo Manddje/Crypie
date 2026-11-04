@@ -446,10 +446,11 @@ def _no_stop_json() -> dict:
 
 async def test_api_and_form_refuse_a_strategy_without_stop(api):
     r = await api.put("/api/strategy", json=_no_stop_json())
-    assert r.status_code == 400 and "geen stop vanaf de instap" in r.json()["detail"]
+    assert r.status_code == 422 and "geen stop vanaf de instap" in r.json()["detail"]
     trivial = DEFAULT_STRATEGY.model_dump() | {"buy": [{"left": "close", "op": ">", "right": 0}]}
     r = await api.put("/api/strategy", json=trivial)
-    assert r.status_code == 400 and "altijd waar" in r.json()["detail"]
+    assert r.status_code == 422 and "altijd waar" in r.json()["detail"]
+    assert r.json()["code"] == "invalid_strategy"
 
     r = await api.post(
         "/strategy", data={"action": "save", "strategy_json": json.dumps(_no_stop_json())}
@@ -506,7 +507,8 @@ def _add_evaluation(proposal: dict | str | None) -> int:
 async def test_applying_an_evaluation_proposal(api):
     no_stop = _add_evaluation(_no_stop_json())
     r = await api.post(f"/api/evaluations/{no_stop}/apply")
-    assert r.status_code == 400 and "geen stop vanaf de instap" in r.json()["detail"]
+    assert r.status_code == 422 and "geen stop vanaf de instap" in r.json()["detail"]
+    assert r.json()["code"] == "proposal_not_applicable"
     r = await api.post("/trading/action", data={"action": f"apply:{no_stop}"})
     assert r.status_code == 400 and "geen stop vanaf de instap" in r.text
 
@@ -515,7 +517,7 @@ async def test_applying_an_evaluation_proposal(api):
     assert r.status_code == 400 and "XRP-EUR staat niet in MARKETS" in r.text
 
     broken = _add_evaluation('{"name": "kapot"}')
-    assert (await api.post(f"/api/evaluations/{broken}/apply")).status_code == 400
+    assert (await api.post(f"/api/evaluations/{broken}/apply")).status_code == 422
 
     for bad in ("apply:abc", "apply:", "apply:1:2", "apply:-1", "apply:²", "apply:" + "9" * 20):
         r = await api.post("/trading/action", data={"action": bad})
@@ -576,9 +578,9 @@ async def test_settings_api_refuses_nan_and_values_above_ceiling(api):
         content='{"max_trade_eur": NaN}',
         headers={"content-type": "application/json"},
     )
-    assert r.status_code == 422 and r.json()["detail"]["max_trade_eur"] == "geen geldig getal"
+    assert r.status_code == 422 and r.json()["fields"]["max_trade_eur"] == "geen geldig getal"
     r = await api.put("/api/settings", json={"max_trade_eur": 5000})
-    assert r.status_code == 422 and "MAX_TRADE_EUR_CEILING" in r.json()["detail"]["max_trade_eur"]
+    assert r.status_code == 422 and "MAX_TRADE_EUR_CEILING" in r.json()["fields"]["max_trade_eur"]
     r = await api.put("/api/settings", json={"news_rss_feeds": ["http://169.254.169.254/"]})
     assert r.status_code == 422
     assert (await api.get("/api/trading/status")).status_code == 200

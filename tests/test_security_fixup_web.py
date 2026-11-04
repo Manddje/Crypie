@@ -233,15 +233,15 @@ def _proposal(**overrides) -> dict:
 async def test_trailing_stop_that_starts_late_is_no_stop(api):  # noqa: F811
     late = _add_evaluation(_proposal(stop_loss_pct=None, trailing_start_pct=400))
     r = await api.post(f"/api/evaluations/{late}/apply")
-    assert r.status_code == 400 and "geen stop vanaf de instap" in r.json()["detail"]
+    assert r.status_code == 422 and "geen stop vanaf de instap" in r.json()["detail"]
     r = await api.put("/api/strategy", json=_proposal(stop_loss_pct=None, trailing_start_pct=2))
-    assert r.status_code == 400
+    assert r.status_code == 422
 
 
 async def test_proposal_that_widens_the_stop_is_refused(api):  # noqa: F811
     wider = _add_evaluation(_proposal(stop_loss_pct=50))
     r = await api.post(f"/api/evaluations/{wider}/apply")
-    assert r.status_code == 400 and "stop ruimer (5% -> 50%)" in r.json()["detail"]
+    assert r.status_code == 422 and "stop ruimer (5% -> 50%)" in r.json()["detail"]
     page = (await api.get("/trading")).text
     assert "stop ruimer" in page and "Dit voorstel kan niet worden toegepast" in page
     # The owner can still save it deliberately on the strategy page.
@@ -258,7 +258,7 @@ async def test_proposal_that_buys_on_most_candles_is_refused(api):  # noqa: F811
         )
         s.commit()
     r = await api.post(f"/api/evaluations/{ev_id}/apply")
-    assert r.status_code == 400 and "80% van de candles" in r.json()["detail"]
+    assert r.status_code == 422 and "80% van de candles" in r.json()["detail"]
 
 
 # -- F21: https-only feeds; stored http feeds still load ----------------------------------------
@@ -278,7 +278,7 @@ def test_stored_http_feed_still_loads():
 
 async def test_api_refuses_plain_http_feeds(api):  # noqa: F811
     r = await api.put("/api/settings", json={"news_rss_feeds": ["http://example.org/feed"]})
-    assert r.status_code == 422 and "gebruik https://" in r.json()["detail"]["news_rss_feeds"]
+    assert r.status_code == 422 and "gebruik https://" in r.json()["fields"]["news_rss_feeds"]
 
 
 def test_default_strategy_passes_the_new_checks():

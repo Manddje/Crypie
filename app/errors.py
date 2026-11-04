@@ -14,6 +14,7 @@ from __future__ import annotations
 import html
 import logging
 import re
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import (
@@ -22,6 +23,7 @@ from fastapi.exception_handlers import (
 )
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.routing import Match, Mount
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -84,6 +86,145 @@ _JOURNAL_NOTE_RE = re.compile(r"^/journal/([0-9]{1,10})/note/?$")
 
 def is_api(request: Request) -> bool:
     return request.url.path.startswith("/api/") or request.url.path == "/openapi.json"
+
+
+# -- API errors ------------------------------------------------------------------------------
+#
+# Every API error has one shape: {"detail": "<Dutch sentence>", "code": "<snake_case>"}, plus
+# "fields" ({field: message}) when particular input fields are wrong. The status says what
+# kind of problem it is:
+#   400 the request itself is broken (invalid JSON, an invalid cursor)
+#   401 not signed in / wrong token        403 not allowed (wrong password, other website)
+#   404 does not exist                     409 clashes with the current state (busy, changed)
+#   422 understood, but refused by validation or by Crypie's rules
+#   429 wait (throttle, Claude budget)     502 Bitvavo or Claude failed
+#   503 a service is not configured (no Claude key)
+API_CODES = {
+    400: "bad_request",
+    401: "not_authenticated",
+    403: "forbidden",
+    404: "not_found",
+    405: "method_not_allowed",
+    409: "conflict",
+    413: "too_large",
+    422: "invalid_input",
+    429: "too_many_requests",
+    500: "internal_error",
+    502: "upstream_error",
+    503: "unavailable",
+}
+API_DETAILS = {
+    400: "Het verzoek klopt niet.",
+    401: "Niet ingelogd.",
+    403: "Dit mag niet.",
+    404: "Dit adres bestaat niet.",
+    405: "Deze methode werkt niet op dit adres.",
+    409: "Dat kan nu even niet.",
+    413: "Wat je verstuurde is te groot.",
+    429: "Te veel verzoeken. Wacht even en probeer het opnieuw.",
+}
+# Starlette's own English texts for a bare status (no route, wrong method, ...).
+STANDARD_DETAILS = ("Not Found", "Method Not Allowed", "Bad Request", "Forbidden", "Unauthorized")
+# Bitvavo error codes for a refused key, in plain Dutch (the code itself is shown as detail).
+KEY_PROBLEMS_NL = {
+    301: "de sleutel heeft niet de goede lengte; controleer BITVAVO_API_KEY",
+    302: "de klok van de server loopt niet gelijk",
+    304: "de klok van de server loopt niet gelijk",
+    305: "Bitvavo kent deze sleutel niet (meer)",
+    306: "de sleutel is nog niet per e-mail bevestigd",
+    307: "de sleutel mag niet vanaf het IP-adres van deze server",
+    308: "de handtekening klopt niet; controleer BITVAVO_API_SECRET",
+    309: "de handtekening klopt niet; controleer BITVAVO_API_SECRET",
+    310: "de sleutel mag niet handelen",
+    311: "de sleutel mag je accountgegevens niet lezen",
+    317: "je Bitvavo-account is geblokkeerd",
+    318: "je Bitvavo-account moet nog worden geverifieerd",
+}
+
+
+class ErrorOut(BaseModel):
+    """The body of every API error (for the OpenAPI documentation)."""
+
+    detail: str = Field(description="Wat er mis is, in een Nederlandse zin")
+    code: str = Field(description="Vaste foutcode, bijv. market_not_tracked of bitvavo_busy")
+    fields: dict[str, str] | None = Field(
+        default=None, description="Per invoerveld wat er mis is, als dat zo aan te wijzen is"
+    )
+
+
+API_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    401: {"model": ErrorOut, "description": "Niet ingelogd of een fout API-token"},
+    422: {"model": ErrorOut, "description": "Ongeldige invoer of geweigerd door de regels"},
+}
+
+
+class ApiError(StarletteHTTPException):
+    """An HTTP error with a machine-readable ``code`` next to the Dutch ``detail``, and
+    ``fields`` ({field: message}) for input that is wrong per field."""
+
+    def __init__(
+        self,
+        status_code: int,
+        detail: str,
+        code: str,
+        *,
+        fields: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+    ):
+        super().__init__(status_code, detail, headers)
+        self.code = code
+        self.fields = fields
+
+
+def fields_sentence(fields: dict[str, Any]) -> str:
+    """'Niet verwerkt: field: message; ...' for an error with per-field messages."""
+    return "Niet verwerkt: " + "; ".join(f"{k}: {v}" for k, v in fields.items()) + "."
+
+
+def api_error_body(
+    status_code: int, detail: Any, code: str | None = None, fields: dict | None = None
+) -> dict:
+    if isinstance(detail, dict) and detail:
+        fields = {**{str(k): str(v) for k, v in detail.items()}, **(fields or {})}
+        detail = fields_sentence(detail)
+    elif not isinstance(detail, str) or not detail.strip() or detail.strip() in STANDARD_DETAILS:
+        detail = API_DETAILS.get(status_code, "Dat lukte niet.")
+    body: dict[str, Any] = {"detail": detail, "code": code or API_CODES.get(status_code, "error")}
+    if fields:
+        body["fields"] = fields
+    return body
+
+
+def api_error_response(
+    status_code: int,
+    detail: Any,
+    code: str | None = None,
+    *,
+    fields: dict | None = None,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
+    return JSONResponse(
+        api_error_body(status_code, detail, code, fields), status_code=status_code, headers=headers
+    )
+
+
+def bitvavo_code(exc: BaseException) -> str:
+    """Why Bitvavo did not do it, as an error code: bitvavo_unreachable (no answer, an outage),
+    bitvavo_busy (rate limit), bitvavo_key (the API key) or bitvavo_refused (anything else)."""
+    if isinstance(exc, TimeoutError) or not isinstance(exc, BitvavoError):
+        return "bitvavo_unreachable"
+    if exc.rate_limited:
+        return "bitvavo_busy"
+    if exc.status == 0 or exc.status >= 500:
+        return "bitvavo_unreachable"
+    if exc.status in (401, 403) or exc.code in KEY_PROBLEMS_NL:
+        return "bitvavo_key"
+    return "bitvavo_refused"
+
+
+def bitvavo_api_error(exc: BitvavoError) -> ApiError:
+    """502 for a Bitvavo failure; ``detail`` keeps Bitvavo's own words (chart.js reads them)."""
+    return ApiError(502, str(exc), bitvavo_code(exc))
 
 
 def wants_html(request: Request) -> bool:
@@ -182,11 +323,19 @@ def bitvavo_text(exc: BitvavoError) -> str:
 
 
 def _validation_lines(exc: RequestValidationError) -> list[str]:
-    lines = []
-    for err in exc.errors()[:6]:
-        loc = [str(p) for p in err.get("loc", ()) if p not in ("body", "query", "path")]
-        # Never the internal parameter name in the Dutch text (an unknown one is 'een waarde').
-        name = FIELD_NL.get(loc[-1], "een waarde") if loc else "invoer"
+    # Never the internal parameter name in the Dutch text (an unknown one is 'een waarde').
+    return [
+        f"{FIELD_NL.get(field.rsplit('.', 1)[-1], 'een waarde') if field else 'invoer'} {what}"
+        for field, what in _validation_items(exc)[:6]
+    ]
+
+
+def _validation_items(exc: RequestValidationError) -> list[tuple[str, str]]:
+    """(field, what is wrong in Dutch) per validation error; field is the dotted path of the
+    parameter ('' for the body as a whole), its location (body, query, path) left out."""
+    items = []
+    for err in exc.errors():
+        loc = [str(p) for p in err.get("loc", ()) if p not in ("body", "query", "path", "header")]
         kind = str(err.get("type", ""))
         if kind == "missing":
             what = "ontbreekt"
@@ -200,8 +349,21 @@ def _validation_lines(exc: RequestValidationError) -> list[str]:
             what = "heeft een ongeldige vorm"
         else:
             what = "is ongeldig"
-        lines.append(f"{name} {what}")
-    return lines
+        items.append((".".join(loc), what))
+    return items
+
+
+def _api_validation_error(exc: RequestValidationError) -> Response:
+    """422 with the wrong fields by name (the API's own parameter names), without echoing the
+    input back (that could be a password); a body that is no JSON at all is a 400."""
+    if any(str(err.get("type")) == "json_invalid" for err in exc.errors()):
+        return api_error_response(400, "Ongeldige JSON.", "invalid_json")
+    fields: dict[str, str] = {}
+    for field, what in _validation_items(exc):
+        key = field or "body"
+        fields[key] = f"{fields[key]}; {what}" if key in fields else what
+    detail = "Niet verwerkt: " + "; ".join(f"{k} {v}" for k, v in fields.items()) + "."
+    return api_error_response(422, detail, "invalid_input", fields=fields)
 
 
 def error_page(
@@ -273,7 +435,13 @@ def _logout_page(request: Request) -> Response:
 
 async def http_error(request: Request, exc: StarletteHTTPException) -> Response:
     if is_api(request):
-        return await http_exception_handler(request, exc)
+        return api_error_response(
+            exc.status_code,
+            exc.detail,
+            getattr(exc, "code", None),
+            fields=getattr(exc, "fields", None),
+            headers=exc.headers,
+        )
     path, method = request.url.path, request.method
     if exc.status_code == 405 and method in ("GET", "HEAD"):
         # A form address opened as a page (bookmark, reload after a redirect, typed in).
@@ -296,6 +464,8 @@ async def http_error(request: Request, exc: StarletteHTTPException) -> Response:
 
 
 async def validation_error(request: Request, exc: RequestValidationError) -> Response:
+    if is_api(request):
+        return _api_validation_error(exc)
     if not wants_html(request):
         return await request_validation_exception_handler(request, exc)
     lines = _validation_lines(exc)
@@ -314,6 +484,8 @@ async def validation_error(request: Request, exc: RequestValidationError) -> Res
 
 async def bitvavo_error(request: Request, exc: BitvavoError) -> Response:
     log.warning("%s %s: %s", request.method, request.url.path, exc)
+    if is_api(request):
+        return api_error_response(502, str(exc), bitvavo_code(exc))
     if not wants_html(request):
         return JSONResponse({"detail": str(exc)}, status_code=502)
     text = bitvavo_text(exc)
@@ -335,6 +507,13 @@ async def login_disabled(request: Request, exc: LoginDisabled) -> Response:
 
 
 def server_error_response(request: Request) -> Response:
+    if is_api(request):
+        return api_error_response(
+            500,
+            "Interne fout. Wat je vroeg is mogelijk niet uitgevoerd; de details staan in de "
+            "serverlog.",
+            "internal_error",
+        )
     if not wants_html(request):
         return JSONResponse({"detail": "Interne fout"}, status_code=500)
     # This response is made outside FlashMiddleware, so it cannot clear the flash cookie:

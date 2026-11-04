@@ -413,11 +413,15 @@ class LiveBroker:
         return True
 
 
-def recent_orders(session: Session, limit: int = 50, mode: str | None = None) -> list[Order]:
+def recent_orders(
+    session: Session, limit: int = 50, mode: str | None = None, before_id: int | None = None
+) -> list[Order]:
     """The newest orders first. ``mode`` ("paper" or "live") keeps one mode apart from the
     other, like the positions and the charts do: the overview never shows fictitious orders
-    next to real ones."""
+    next to real ones. ``before_id``: only orders older than that one (the next page)."""
     stmt = select(Order)
     if mode is not None:
         stmt = stmt.where(Order.mode == mode)
+    if before_id is not None:
+        stmt = stmt.where(Order.id < before_id)
     return list(session.scalars(stmt.order_by(Order.id.desc()).limit(limit)))

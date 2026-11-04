@@ -134,7 +134,7 @@ def unauthorized(
         parts.append(f'resource_metadata="{resource_metadata}"')
     challenge = "Bearer" + (" " + ", ".join(parts) if parts else "")
     return JSONResponse(
-        {"detail": detail},
+        {"detail": detail, "code": "invalid_token" if invalid else "not_authenticated"},
         status_code=401,
         headers={"WWW-Authenticate": challenge, "Cache-Control": "no-store"},
     )

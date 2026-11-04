@@ -122,10 +122,25 @@ Het dashboard is Nederlandstalig en werkt ook zonder JavaScript; JavaScript maak
   Een geweigerd formulier gaat terug naar zijn pagina met de reden; API-clients (zonder `text/html` in
   `Accept`) houden hun statuscode (400, 403, 409, 429, 502).
 - **Foutpagina's** (404, 405, 400, 500 en 502 als Bitvavo niet reageert) zijn gewone pagina's met een
-  weg terug. `/api/*` en andere clients krijgen JSON (`{"detail": ...}`). Wie niet is ingelogd, ziet de
+  weg terug. `/api/*` en andere clients krijgen JSON (zie *JSON-API* hieronder). Wie niet is ingelogd, ziet de
   foutpagina in de opmaak van de inlogpagina, zonder gegevens van de instantie. Met
   `AUTH_ENABLED=false` sturen `/login`, `/setup`, `/account` en de MFA-pagina's door naar het overzicht
   met een melding. `GET /logout` toont een knop om uit te loggen.
+- **JSON-API** (`/api/*`, ook wat de MCP-server aanroept). Elke fout heeft één vorm:
+  `{"detail": "<Nederlandse zin>", "code": "<vaste code>"}`, plus `fields` (`{veld: melding}`) als
+  bepaalde velden fout zijn; de invoer wordt nooit teruggestuurd. Statuscodes: 400 kapot verzoek
+  (`invalid_json`, `invalid_cursor`), 401 niet ingelogd of fout token (met `WWW-Authenticate`), 403
+  geweigerd (`password_required`, `wrong_password`, `cross_origin`), 404 bestaat niet
+  (`market_not_tracked` voor een markt in het adres, `order_not_found`, ...), 409 botst met de
+  toestand (`evaluation_busy`, `order_resent`), 422 ongeldig of geweigerd door de regels
+  (`invalid_input`, `order_refused`, `market_not_tracked`, `invalid_settings`, ...), 429 wachten
+  (`claude_budget_exceeded`), 502 Bitvavo of Claude faalt (`bitvavo_unreachable`, `bitvavo_busy`,
+  `bitvavo_key`, `bitvavo_refused`, `claude_error`), 503 Claude niet ingesteld (`claude_unavailable`).
+  Tijden zijn UTC met tijdzone (`+00:00`). Lijsten (`/api/orders`, `/api/decisions`, `/api/news`,
+  `/api/evaluations`, de gesloten posities in `/api/positions`) geven de nieuwste eerst; is er meer,
+  dan wijst de header `Link: <...&cursor=...>; rel="next"` naar de volgende pagina. Losse items:
+  `GET /api/orders/{id}`, `GET /api/evaluations/{id}`; een aangemaakte order of evaluatie geeft
+  `Location`. Met `API_DOCS_ENABLED=true` beschrijven `/docs` en `/openapi.json` alleen de API.
 - **Thema**: de knop rechtsboven wisselt tussen automatisch (volgt je systeem), licht en donker; de
   kleur van de browserbalk volgt mee. De app heeft een manifest en iconen, zodat je hem op het
   beginscherm van je telefoon kunt zetten.
@@ -196,7 +211,8 @@ Niet in het portaal, met opzet: de sleutels (`BITVAVO_API_KEY`, `BITVAVO_API_SEC
 `ANTHROPIC_API_KEY`, `CRYPTOPANIC_TOKEN`), `DATABASE_URL`, `LIVE_TRADING_ACK` en de plafonds van de
 limieten. Live-modus kun je in het portaal pas kiezen als de omgeving `LIVE_TRADING_ACK=true`,
 `AUTH_ENABLED=true` én een Bitvavo-sleutel heeft; anders weigert de app de wijziging en blijft hij in
-oefenmodus. Dezelfde instellingen zijn er als API: `GET/PUT /api/settings`,
+oefenmodus. Dezelfde instellingen zijn er als API: `GET /api/settings`, `PATCH /api/settings` (alleen
+de meegestuurde sleutels veranderen; `PUT` doet hetzelfde en blijft werken voor bestaande clients),
 `DELETE /api/settings[/{key}]`.
 
 **Huidig wachtwoord bij gevoelige wijzigingen.** Wie de modus, automatisch handelen aan/uit
@@ -248,7 +264,7 @@ Grenzen bij het opslaan:
   het veld (waarschijnlijk een typfout). `GET /api/settings` geeft die waarschuwingen in `warnings`.
 - **Standaard herstellen** zet nooit de modus terug. Een reset die de app naar live zou laten schakelen
   (omdat de omgeving `TRADING_MODE=live` heeft) wordt geweigerd, in het portaal en via
-  `DELETE /api/settings[/{key}]` (409).
+  `DELETE /api/settings[/{key}]` (422, `reset_refused`).
 - **Naar live** vraagt in het portaal, naast het wachtwoord, om het woord `LIVE` te typen; het paneel
   noemt eerst de limieten die dan gelden. De API vraagt dat niet (wel het wachtwoord). Zie
   [Live gaan](#live-gaan).
@@ -553,7 +569,11 @@ de noodstop (dan kun je alleen verkopen) en de harde limieten, opent een bescher
 markt) en kan niet als er al een positie of een onafgehandelde order in die markt is. Een verkoop kan
 vanaf € 5 en mag groter zijn dan het maximum per order; blijft er minder dan € 5 over, dan wordt de hele
 positie verkocht, en *Hele positie verkopen* doet dat in één keer. Een verkoop verkleint of sluit de
-positie van de bot in die markt. In het formulier:
+positie van de bot in die markt. Via de API (en de MCP-tool `place_order`) maakt een
+`Idempotency-Key` (header, of het veld `idempotency_key`) een herhaalde aanroep veilig: dezelfde sleutel
+plaatst binnen 30 minuten niets opnieuw (409, `order_resent`), net als het eenmalige token van het
+formulier. Bevestigt Bitvavo een verstuurde order niet op tijd, dan antwoordt de API 202 met de order
+(status `pending` of `unknown`) en een `Location` om hem te volgen: niet opnieuw sturen. In het formulier:
 
 - typ je het bedrag met een komma of punt (`25,50`); een onduidelijk bedrag zoals `1.000` wordt
   geweigerd. Onder het veld staat wat de app las ("= € 25,50");
@@ -682,7 +702,8 @@ dezelfde woorden als bij een handmatige order (noodstop, orders per dag). Een on
   netto winst), winst/verlies-factor, kosten, gemiddelde looptijd, per markt en per bron. Adressen in
   notities zijn klikbaar. Notities staan op de positie zelf (`positions.note`, `positions.tags`) en gaan
   als `owner_notes` mee naar de evaluatie. Handmatige orders zonder positie staan apart in *Orders zonder
-  trade*. API: `GET /api/journal` (ook `?mode=` en `?by=`; geeft `ignored_filters`),
+  trade*. API: `GET /api/journal` (ook `?mode=` en `?by=`; geeft `ignored_filters`, en `truncated`
+  als er meer trades passen dan `limit`: de oudste vallen dan weg en de totalen tellen alleen wat er staat),
   `PUT /api/journal/{id}/note`.
 
 ### Grafieken op het overzicht

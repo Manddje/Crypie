@@ -182,7 +182,11 @@ async def test_without_an_account_nothing_gives_away_that_setup_is_open(client):
     r = await client.get("/login")
     assert r.status_code == 200 and "Gebruikersnaam" in r.text
     r = await client.get("/api/prices")
-    assert r.status_code == 401 and r.json() == {"detail": "Niet ingelogd"}
+    assert r.status_code == 401 and r.json()["code"] == "not_authenticated"
+    # RFC 9110: a 401 names its challenge; the metadata it names is one that is served.
+    challenge = r.headers["www-authenticate"]
+    assert challenge.startswith("Bearer ")
+    assert '/.well-known/oauth-protected-resource"' in challenge
     assert (await client.get("/health")).status_code == 200
     # /setup only with the token from the server log.
     r = await client.get("/setup")
@@ -233,7 +237,7 @@ async def test_everything_needs_a_login(client):
     r = await client.get("/trading?x=1")
     assert r.headers["location"] == "/login?next=/trading?x=1"
     r = await client.get("/api/prices")
-    assert r.status_code == 401 and r.json() == {"detail": "Niet ingelogd"}
+    assert r.status_code == 401 and r.json()["code"] == "not_authenticated"
     assert (await client.get("/docs")).status_code == 303
     assert (await client.get("/health")).status_code == 200
     assert (await client.get("/static/app.css")).status_code == 200

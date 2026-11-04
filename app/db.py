@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    TypeDecorator,
     create_engine,
     text,
 )
@@ -36,6 +37,28 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+class UTCDateTime(TypeDecorator):
+    """A moment in UTC that also comes back with its time zone.
+
+    SQLite keeps no time zone and hands back naive datetimes; the API then sent times without
+    an offset, which JavaScript reads as local time. Stored as before (UTC, no offset), so no
+    migration; a naive value written by older code counts as UTC.
+    """
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value: datetime | None, dialect) -> datetime | None:
+        if value is not None and value.tzinfo is not None:
+            value = value.astimezone(UTC)
+        return value
+
+    def process_result_value(self, value: datetime | None, dialect) -> datetime | None:
+        if value is None:
+            return None
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
 def clip(value: str | None, length: int) -> str | None:
     """Cut free text to its column length, so a long message can never fail a commit."""
     if value is None:
@@ -54,7 +77,7 @@ class Order(Base):
     __tablename__ = "orders"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     mode: Mapped[str] = mapped_column(String(8))  # paper | live
     market: Mapped[str] = mapped_column(String(16), index=True)
     side: Mapped[str] = mapped_column(String(4))  # buy | sell
@@ -84,9 +107,7 @@ class Setting(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow
-    )
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
 
 
 class ClaudeUsage(Base):
@@ -95,9 +116,7 @@ class ClaudeUsage(Base):
     __tablename__ = "claude_usage"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, index=True
-    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
     purpose: Mapped[str] = mapped_column(String(32))  # strategy | news | decision
     model: Mapped[str] = mapped_column(String(64))
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
@@ -118,8 +137,8 @@ class NewsItem(Base):
     url: Mapped[str] = mapped_column(String(1024), unique=True)
     title: Mapped[str] = mapped_column(Text)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    published_at: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)
+    fetched_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     source_coins: Mapped[str | None] = mapped_column(String(128), nullable=True)  # "BTC,ETH"
     source_votes: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON (CryptoPanic)
     # RSS only: the site of the feed the item came from. A feed chooses its own links, so the
@@ -128,7 +147,7 @@ class NewsItem(Base):
 
     # Assessment (filled by Claude)
     assessed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    assessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    assessed_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     assessment_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
     relevant: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     sentiment: Mapped[float | None] = mapped_column(Float, nullable=True)  # -1 .. 1
@@ -170,8 +189,8 @@ class NewsEvent(Base):
     __tablename__ = "news_events"
 
     event_key: Mapped[str] = mapped_column(String(64), primary_key=True)
-    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)
     article_count: Mapped[int] = mapped_column(Integer, default=0)
     max_impact: Mapped[int | None] = mapped_column(Integer, nullable=True)
     min_sentiment: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -182,12 +201,8 @@ class NewsEvent(Base):
     # while the fact is fresh; older facts read it from the candles).
     price_at_first_seen: Mapped[str | None] = mapped_column(Text, nullable=True)
     shock_count: Mapped[int] = mapped_column(Integer, default=0)
-    last_shock_started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    last_shock_ended_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    last_shock_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    last_shock_ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     # The newest shock-trigger article already judged, so each one is judged once.
     last_trigger_id: Mapped[int] = mapped_column(Integer, default=0)
 
@@ -228,11 +243,9 @@ class ShockPause(Base):
     mode: Mapped[str] = mapped_column(String(8))  # claude | fixed
     scope: Mapped[str] = mapped_column(String(8))  # markt | coin
     coins: Mapped[str] = mapped_column(String(128), default="")  # "SOL" (coin) or "ALL" (markt)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    next_recheck_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    ended_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, index=True
-    )
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)
+    next_recheck_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True, index=True)
     end_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
     trigger_news_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     summary_nl: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -287,13 +300,13 @@ class Position(Base):
     amount: Mapped[float] = mapped_column(Float)  # base currency held
     entry_price: Mapped[float] = mapped_column(Float)
     entry_quote: Mapped[float] = mapped_column(Float)  # EUR spent incl. fee
-    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    opened_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     stop_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     high_price: Mapped[float | None] = mapped_column(Float, nullable=True)  # peak since entry
     take_profit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     exit_quote: Mapped[float | None] = mapped_column(Float, nullable=True)
-    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     pnl_eur: Mapped[float | None] = mapped_column(Float, nullable=True)
     pnl_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     close_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -303,7 +316,7 @@ class Position(Base):
     # Trade journal: the owner's own notes on this trade, written on /journal.
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     tags: Mapped[str | None] = mapped_column(String(128), nullable=True)  # "fout,nieuws"
-    note_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    note_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
     def tag_list(self) -> list[str]:
         return [t for t in (self.tags or "").split(",") if t]
@@ -319,9 +332,7 @@ class Decision(Base):
     __tablename__ = "decisions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, index=True
-    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
     mode: Mapped[str] = mapped_column(String(8))
     market: Mapped[str] = mapped_column(String(16), index=True)
     price: Mapped[float] = mapped_column(Float)
@@ -366,7 +377,7 @@ class Evaluation(Base):
     __tablename__ = "evaluations"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     model: Mapped[str] = mapped_column(String(64))
     period_days: Mapped[int] = mapped_column(Integer)
     report_nl: Mapped[str] = mapped_column(Text)
@@ -382,14 +393,12 @@ class AuthUser(Base):
 
     username: Mapped[str] = mapped_column(String(64), primary_key=True)
     password_hash: Mapped[str] = mapped_column(String(256))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    totp_enrolled_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    totp_enrolled_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     totp_last_counter: Mapped[int | None] = mapped_column(Integer, nullable=True)
     recovery_codes: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list of hashes
-    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     # Random per account, so cookies of a deleted account never fit a new one ("" = not set yet,
     # filled in at startup).
     account_id: Mapped[str] = mapped_column(String(64), default="")
@@ -397,9 +406,7 @@ class AuthUser(Base):
     session_version: Mapped[int] = mapped_column(Integer, default=0)
     # One-time code printed by the CLI that allows linking an authenticator (HMAC, not plain).
     enrol_token_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    enrol_token_expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    enrol_token_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     # Wrong second-factor codes for this account counted just before the last successful
     # login; shown on /account so a leaked password plus code guessing does not go unnoticed.
     mfa_failures_before_login: Mapped[int] = mapped_column(Integer, default=0)
@@ -418,8 +425,8 @@ class OAuthClient(Base):
     client_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
     redirect_uris: Mapped[str] = mapped_column(Text)  # JSON list
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
 
 class OAuthCode(Base):
@@ -433,7 +440,7 @@ class OAuthCode(Base):
     code_challenge: Mapped[str] = mapped_column(String(128))
     scope: Mapped[str] = mapped_column(String(256), default="")
     resource: Mapped[str | None] = mapped_column(Text, nullable=True)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime())
 
 
 class OAuthToken(Base):
@@ -447,9 +454,9 @@ class OAuthToken(Base):
     client_id: Mapped[str] = mapped_column(String(64), index=True)
     family: Mapped[str] = mapped_column(String(64), index=True)
     scope: Mapped[str] = mapped_column(String(256), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
 
 class AuthThrottle(Base):

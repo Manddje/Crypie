@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -125,25 +125,40 @@ def open_positions(session: Session, mode: str) -> list[Position]:
 
 
 def closed_positions(
-    session: Session, mode: str, days: int = 30, limit: int = 200
+    session: Session,
+    mode: str,
+    days: int = 30,
+    limit: int = 200,
+    before: tuple[datetime, int] | None = None,
 ) -> list[Position]:
+    """Closed positions of the last ``days``, newest first; ``before`` = (closed_at, id) of the
+    last one of the previous page."""
     cutoff = datetime.now(UTC) - timedelta(days=days)
-    return list(
-        session.scalars(
-            select(Position)
-            .where(Position.mode == mode, Position.status == "closed", Position.closed_at >= cutoff)
-            .order_by(Position.closed_at.desc())
-            .limit(limit)
+    stmt = select(Position).where(
+        Position.mode == mode, Position.status == "closed", Position.closed_at >= cutoff
+    )
+    if before is not None:
+        at, pid = before
+        stmt = stmt.where(
+            or_(Position.closed_at < at, and_(Position.closed_at == at, Position.id < pid))
         )
+    return list(
+        session.scalars(stmt.order_by(Position.closed_at.desc(), Position.id.desc()).limit(limit))
     )
 
 
 def recent_decisions(
-    session: Session, mode: str, limit: int = 50, days: int | None = None
+    session: Session,
+    mode: str,
+    limit: int = 50,
+    days: int | None = None,
+    before_id: int | None = None,
 ) -> list[Decision]:
     stmt = select(Decision).where(Decision.mode == mode)
     if days is not None:
         stmt = stmt.where(Decision.created_at >= datetime.now(UTC) - timedelta(days=days))
+    if before_id is not None:
+        stmt = stmt.where(Decision.id < before_id)
     return list(session.scalars(stmt.order_by(Decision.id.desc()).limit(limit)))
 
 

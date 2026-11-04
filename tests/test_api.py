@@ -57,7 +57,7 @@ async def test_paper_order_flow(api):
     assert balances["EUR"] == pytest.approx(900.0) and balances["ETH"] == pytest.approx(0.049875)
 
     r = await api.post("/api/orders", json={"market": "XRP-EUR", "side": "buy", "amount_quote": 10})
-    assert r.status_code == 400
+    assert r.status_code == 422 and r.json()["code"] == "order_refused"
 
     r = await api.get("/")
     assert r.status_code == 200 and "ETH-EUR" in r.text
@@ -111,7 +111,7 @@ async def test_strategy_roundtrip_and_backtest(api):
     assert (await api.put("/api/strategy", json=bad)).status_code == 422
 
     r = await api.put("/api/strategy", json=new | {"market": "XRP-EUR"})
-    assert r.status_code == 400
+    assert r.status_code == 422 and r.json()["code"] == "market_not_tracked"
 
     respx.get(f"{BASE}/ETH-EUR/candles").mock(return_value=Response(200, json=_candles()))
     r = await api.post("/api/backtest", json={"limit": 120})
@@ -316,14 +316,15 @@ async def test_settings_page_and_api_change_the_running_app(api):
     assert app.state.settings.markets == ["SOL-EUR"] and app.state.engine.markets == ["SOL-EUR"]
     assert app.state.news.coins == ["SOL"] and app.state.settings.trading_enabled is False
     r = await api.post("/api/orders", json={"market": "BTC-EUR", "side": "buy", "amount_quote": 10})
-    assert r.status_code == 400  # BTC-EUR is no longer a configured market
+    assert r.status_code == 422  # BTC-EUR is no longer a configured market
 
     r = await api.put("/api/settings", json={"max_exposure_pct": 500})
     assert r.status_code == 422 and "max_exposure_pct" in r.json()["detail"]
 
     # Live mode needs the environment safeguards; the portal alone cannot switch it on.
     r = await api.put("/api/settings", json={"trading_mode": "live"})
-    assert r.status_code == 422 and "kan nog niet" in r.json()["detail"]["trading_mode"]
+    assert r.status_code == 422 and "kan nog niet" in r.json()["fields"]["trading_mode"]
+    assert r.json()["code"] == "invalid_settings"
     assert (await api.get("/api/settings")).json()["mode"] == "paper"
 
     # Reset one key, then everything.

@@ -889,9 +889,9 @@ async def test_order_endpoints_validate_input(api):
         content=b'{"market": "BTC-EUR", "side": "buy", "amount_quote": NaN}',
         headers={"content-type": "application/json"},
     )
-    assert r.status_code == 400 and "geen geldig getal" in r.json()["detail"]
+    assert r.status_code == 422 and "geen geldig getal" in r.json()["detail"]
     r = await api.post("/api/orders", json={"market": "BTC-EUR", "side": "buy", "amount_quote": -5})
-    assert r.status_code == 400 and "minimaal" in r.json()["detail"]
+    assert r.status_code == 422 and "minimaal" in r.json()["detail"]
     r = await api.post(
         "/api/orders", json={"market": "BTC-EUR", "side": "short", "amount_quote": 10}
     )
@@ -899,7 +899,8 @@ async def test_order_endpoints_validate_input(api):
     r = await api.post(
         "/api/orders", json={"market": "BTC-EUR", "side": "sell", "amount_quote": 10}
     )
-    assert r.status_code == 400 and "geen open positie" in r.json()["detail"]
+    assert r.status_code == 422 and "geen open positie" in r.json()["detail"]
+    assert r.json()["code"] == "order_refused"
     r = await api.post("/orders", data={"market": "BTC-EUR", "side": "buy", "amount_quote": "inf"})
     assert r.status_code == 400 and "Order niet geplaatst" in r.text
 

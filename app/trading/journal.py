@@ -286,6 +286,14 @@ def journal_entries(
     session: Session, mode: str, flt: JournalFilter | None = None, limit: int = 500
 ) -> list[JournalEntry]:
     """Open positions first, then closed ones newest first, after the filter."""
+    return journal_page(session, mode, flt, limit)[0]
+
+
+def journal_page(
+    session: Session, mode: str, flt: JournalFilter | None = None, limit: int = 500
+) -> tuple[list[JournalEntry], bool]:
+    """``journal_entries`` plus whether more positions matched the filter than ``limit``
+    (the most recently opened ``limit`` are kept; a search term filters those)."""
     flt = flt or JournalFilter()
     stmt = select(Position).where(Position.mode == mode)
     if flt.market:
@@ -308,7 +316,10 @@ def journal_entries(
             stmt = stmt.where(manual)
         else:  # a position without an opening order (very old rows) counts as the bot's
             stmt = stmt.where(or_(Position.open_order_id.is_(None), ~manual))
-    rows = list(session.scalars(stmt.order_by(Position.opened_at.desc()).limit(limit)))
+    stmt = stmt.order_by(Position.opened_at.desc(), Position.id.desc()).limit(limit + 1)
+    rows = list(session.scalars(stmt))
+    truncated = len(rows) > limit
+    rows = rows[:limit]
 
     def _ts(p: Position) -> float:
         t = p.opened_at if p.opened_at.tzinfo else p.opened_at.replace(tzinfo=UTC)
@@ -325,7 +336,7 @@ def journal_entries(
             or q in (e.entry_reasoning or "").lower()
             or q in (e.exit_reasoning or "").lower()
         ]
-    return entries
+    return entries, truncated
 
 
 def _manual_order_ids():
