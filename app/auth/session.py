@@ -1,8 +1,8 @@
 """Signed, expiring cookies (HMAC-SHA256, stdlib only).
 
-Every token names its purpose ("session", "login", "mfa_setup", "reauth", "setup_resume"); a
-token made for one purpose is never accepted for another, and no token may live longer than its
-purpose allows.
+Every token names its purpose ("session", "login", "mfa_setup", "reauth", "setup_resume",
+"known_device"); a token made for one purpose is never accepted for another, and no token may
+live longer than its purpose allows.
 """
 
 from __future__ import annotations
@@ -24,12 +24,14 @@ LOGIN = "login"  # password checked, second factor still to do
 MFA_SETUP = "mfa_setup"  # the candidate authenticator secret during enrolment
 REAUTH = "reauth"  # password plus code checked again, to re-link the authenticator
 SETUP_RESUME = "setup_resume"  # this browser made the account at /setup (restart the linking)
+KNOWN_DEVICE = "known_device"  # this browser completed a login before (password stage throttle)
 DEFAULT_MAX_LIFETIMES = {
     SESSION: 24 * 3600,
     LOGIN: 10 * 60,
     MFA_SETUP: 15 * 60,
     REAUTH: 5 * 60,
     SETUP_RESUME: 60 * 60,
+    KNOWN_DEVICE: 180 * 24 * 3600,
 }
 CLOCK_SKEW_SECONDS = 60
 

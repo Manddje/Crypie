@@ -14,6 +14,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.auth import routes, totp
+from app.auth import service as routes_service
 from app.auth.__main__ import main as auth_cli
 from app.auth.passwords import ITERATIONS, MIN_ITERATIONS, hash_password, verify_password
 from app.auth.routes import _client_key, _safe_next
@@ -400,6 +401,86 @@ async def test_password_stage_is_never_locked_per_account(web):
     ).status_code == 429
     await attacker.aclose()
     assert (await _login(web)).status_code == 303  # the owner, from another address
+
+
+def _browser(ip: str) -> AsyncClient:
+    return AsyncClient(transport=ASGITransport(app=app, client=(ip, 1)), base_url="http://test")
+
+
+async def _spread_wrong_passwords(count: int, prefix: str = "203.0.113") -> None:
+    """``count`` wrong passwords, at most 4 per address: never the per-address wait."""
+    for i in range(count):
+        if i % 4 == 0:
+            c = _browser(f"{prefix}.{i // 4 + 1}")
+        r = await c.post("/login", data={"username": "kris", "password": "fout"})
+        assert r.status_code in (401, 429)
+        if i % 4 == 3 or i == count - 1:
+            await c.aclose()
+
+
+async def test_password_guesses_spread_over_addresses_share_an_account_wide_wait(web):
+    await _setup(web)  # this browser completed a login: it is known
+    await web.post("/logout")
+    assert "crypie_device" in web.cookies  # logging out keeps it
+    await _spread_wrong_passwords(routes_service.PASSWORD_ACCOUNT_MAX_FAILURES)
+    # A browser that never logged in, from yet another address: held up, even with the password.
+    stranger = _browser("198.51.100.200")
+    r = await _login(stranger)
+    assert r.status_code == 429 and "clear-throttle" in r.text and "eerder" in r.text
+    await stranger.aclose()
+    # The owner's known browser is never held up by the account-wide limit.
+    assert (await _login(web)).status_code == 303
+
+
+async def test_wrong_passwords_from_a_known_browser_do_not_count_account_wide(web):
+    await _setup(web)
+    await web.post("/logout")
+    for _ in range(4):
+        assert (await _login(web, "fout")).status_code == 401
+    with SessionLocal() as db:
+        keys = [row.key for row in db.query(AuthThrottle).all()]
+    assert keys and not any(k.startswith("pw:") for k in keys)
+
+
+async def test_known_browser_cookie_is_set_after_a_login_and_bound_to_the_account(web):
+    secret, _ = await _setup(web)
+    auth = app.state.auth
+    user = _user()
+    token = web.cookies["crypie_device"]
+    assert auth.known_device(user, token)
+    # Set again by a normal password-plus-code login in a fresh browser.
+    fresh = _browser("192.0.2.50")
+    await _login(fresh)
+    _forget_last_code()
+    assert (await fresh.post("/login/mfa", data={"code": _current_code(secret)})).status_code == 303
+    assert auth.known_device(user, fresh.cookies["crypie_device"])
+    await fresh.aclose()
+    # A password alone does not make a browser known.
+    half = _browser("192.0.2.51")
+    await _login(half)
+    assert "crypie_device" not in half.cookies
+    await half.aclose()
+    # Not for another account, another purpose or a forged signature.
+    other = SimpleNamespace(account_id="someone-else", username=user.username)
+    assert not auth.known_device(other, token)
+    assert not auth.known_device(user, auth.full_token(user))
+    assert not auth.known_device(user, token[:-2] + ("00" if token[-2:] != "00" else "11"))
+    assert not auth.known_device(user, None)
+
+
+def test_account_wide_password_rows_are_never_evicted():
+    t = LoginThrottle(max_failures=2, decay_seconds=10_000, max_entries=5)
+    with SessionLocal() as db:
+        db.query(AuthThrottle).delete()
+        db.commit()
+        t.record_failure(db, "pw:acct", now=0)
+        t.record_failure(db, "mfa:acct", now=0)
+        for i in range(20):
+            t.record_failure(db, f"ip:10.0.0.{i}", now=10 + i)
+        assert t.failures(db, "pw:acct", now=100) == 1
+        assert t.failures(db, "mfa:acct", now=100) == 1
+        db.query(AuthThrottle).delete()
+        db.commit()
 
 
 async def test_second_factor_is_throttled_per_account(web):

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.auth import totp
 from app.auth.passwords import hash_password, verify_password
 from app.auth.session import (
+    KNOWN_DEVICE,
     LOGIN,
     MFA_SETUP,
     REAUTH,
@@ -41,6 +42,14 @@ ENROL_TOKEN_SECONDS = 60 * 60  # lifetime of the one-time enrol code printed by 
 # linking of the first authenticator, and only in the browser that made the account (it holds a
 # signed cookie). Later, or elsewhere, only the enrol code from the CLI works (shell access).
 SETUP_RESUME_SECONDS = 60 * 60
+# A browser that completed a login (password plus second factor) is remembered this long; it is
+# never held up by the account-wide password limit below, only by the one for its own address.
+KNOWN_DEVICE_SECONDS = 180 * 24 * 3600
+# Account-wide limit on wrong passwords from browsers that never logged in: many addresses
+# (a botnet, a cheap IPv6 /48) together get this many attempts before they share a wait.
+PASSWORD_ACCOUNT_MAX_FAILURES = 20
+# Throttle keys that hold for the whole account; never evicted early (see _make_room).
+ACCOUNT_KEY_PREFIXES = ("mfa:", "pw:")
 MIN_PASSWORD_LENGTH = 10
 MIN_SESSION_SECRET_LENGTH = 32
 SESSION_SECRET_KEY = "auth:session_secret"
@@ -151,8 +160,8 @@ class LoginThrottle:
     def _make_room(self, db: Session, now: float) -> None:
         """Never grow without bound: drop stale entries, then the oldest per-address ones.
 
-        Per-account rows (``mfa:``) are never evicted early: otherwise anyone could reset the
-        account-wide second-factor counter by filling the table from many addresses.
+        Per-account rows (``mfa:``, ``pw:``) are never evicted early: otherwise anyone could
+        reset an account-wide counter by filling the table from many addresses.
         """
         count = db.scalar(select(func.count()).select_from(AuthThrottle)) or 0
         if count < self.max_entries:
@@ -163,7 +172,7 @@ class LoginThrottle:
         if excess > 0:
             oldest = db.scalars(
                 select(AuthThrottle.key)
-                .where(AuthThrottle.key.not_like("mfa:%"))
+                .where(*(AuthThrottle.key.not_like(f"{p}%") for p in ACCOUNT_KEY_PREFIXES))
                 .order_by(AuthThrottle.last_failure)
                 .limit(excess)
             ).all()
@@ -192,13 +201,16 @@ class AuthService:
                 MFA_SETUP: MFA_SETUP_SECONDS,
                 REAUTH: REAUTH_SECONDS,
                 SETUP_RESUME: SETUP_RESUME_SECONDS,
+                KNOWN_DEVICE: KNOWN_DEVICE_SECONDS,
             },
         )
         self._code_key = hmac.new(secret.encode(), b"crypie recovery codes", sha256).digest()
         self._enrol_key = hmac.new(secret.encode(), b"crypie enrol token", sha256).digest()
-        # Password stage: per client address only (never per account, or anyone could lock
-        # the owner out). Second-factor stage: per address and per account.
+        # Password stage: per client address, plus an account-wide limit that only counts and
+        # holds up browsers that never completed a login (a known browser is exempt, so no one
+        # can lock the owner out). Second-factor stage: per address and per account.
         self.throttle = LoginThrottle()
+        self.password_throttle = LoginThrottle(max_failures=PASSWORD_ACCOUNT_MAX_FAILURES)
         # Proof of ownership for /setup while there is no account (see build_auth).
         self.setup_token: str = settings.setup_token or secrets.token_urlsafe(24)
         self.setup_token_from_env = bool(settings.setup_token)
@@ -494,6 +506,27 @@ class AuthService:
             and data.account_id == user.account_id
             and data.version == (user.session_version or 0)
             and self.username_matches(user, data.username)
+        )
+
+    def known_device_token(self, user: AuthUser) -> str:
+        """Given after a complete login: this browser is exempt from the account-wide password
+        limit. Not tied to the session version, so logging out (everywhere) keeps it; it grants
+        no access by itself."""
+        return self.signer.encode(
+            user.username,
+            mfa=False,
+            max_age=KNOWN_DEVICE_SECONDS,
+            purpose=KNOWN_DEVICE,
+            account_id=user.account_id,
+        )
+
+    def known_device(self, user: AuthUser, token: str | None) -> bool:
+        """True when ``token`` is this account's known-browser cookie (see known_device_token)."""
+        data = self.signer.decode(token, purpose=KNOWN_DEVICE)
+        return (
+            data is not None
+            and bool(user.account_id)
+            and secrets.compare_digest(data.account_id.encode(), user.account_id.encode())
         )
 
     def setup_secret_token(self, user: AuthUser, secret: str) -> str:

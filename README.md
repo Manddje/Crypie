@@ -901,8 +901,12 @@ Crypie handelt met echt geld en draait op een publiek domein, dus het web-deel i
   vragen opnieuw om je wachtwoord (zie [Instellingen](#instellingen)).
 - **Wachttijd bij foute pogingen**: per clientadres (IPv6 per /64) voor het wachtwoord, en per account
   voor de tweede stap. Bewaard in de database (tabel `auth_throttle`, overleeft een herstart); mislukte
-  pogingen worden na 24 uur vergeten. De wachtwoordstap wordt nooit per account geblokkeerd. Meer dan
-  twee gelijktijdige wachtwoordcontroles krijgen meteen een 429 ("Het is even druk op de server").
+  pogingen worden na 24 uur vergeten. Daarbovenop delen browsers die nog nooit volledig hebben
+  ingelogd één limiet per account voor het wachtwoord: na 20 foute wachtwoorden, van welke adressen
+  ook, moeten ze samen wachten (30 seconden, oplopend tot 15 minuten). Een browser waarin je eerder met
+  wachtwoord én code hebt ingelogd krijgt een cookie (`crypie_device`, 180 dagen, blijft na uitloggen)
+  en heeft van die accountlimiet nooit last, zodat niemand jou zo kan buitensluiten. Meer dan twee
+  gelijktijdige wachtwoordcontroles krijgen meteen een 429 ("Het is even druk op de server").
 - **Cross-site bescherming**: POST/PUT/PATCH/DELETE vanaf een andere site worden geweigerd (403). Dat
   leunt op de `Sec-Fetch-Site`-header van browsers; voor oudere browsers moet de `Origin` gelijk zijn aan
   het eigen `schema://host`. Achter een TLS-proxy moet de app de `X-Forwarded-Proto` van de proxy dus

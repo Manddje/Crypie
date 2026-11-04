@@ -21,12 +21,14 @@ from starlette.concurrency import run_in_threadpool
 from app.auth import totp
 from app.auth.passwords import hash_password, needs_rehash, verify_password
 from app.auth.service import (
+    KNOWN_DEVICE_SECONDS,
     MFA_SETUP_SECONDS,
     REAUTH_SECONDS,
     RECOVERY_CODE_COUNT,
     SETUP_RESUME_SECONDS,
     STAGE_ONE_SECONDS,
     AuthService,
+    LoginThrottle,
     validate_new_password,
 )
 from app.auth.session import COOKIE_NAME, LOGIN, REAUTH, SESSION, SessionData, cookie_name
@@ -48,6 +50,9 @@ SETUP_SECRET_COOKIE = "crypie_mfa_setup"
 REAUTH_COOKIE = "crypie_reauth"
 # Set in the browser that made the account at /setup; it survives 'Later koppelen' (a logout).
 SETUP_RESUME_COOKIE = "crypie_setup_resume"
+# Set after a complete login; it survives logging out. Such a browser is never held up by the
+# account-wide password limit (see AuthService.password_throttle).
+KNOWN_DEVICE_COOKIE = "crypie_device"
 
 # PBKDF2 runs in worker threads, at most this many at once; more concurrent attempts get a 429
 # straight away instead of queueing up (and an attacker cannot stall the trading loop).
@@ -175,6 +180,21 @@ def _account_key(user: AuthUser) -> str:
     return f"mfa:{user.account_id}"
 
 
+def _password_account_key(user: AuthUser) -> str:
+    """Throttle key for wrong passwords to the account from browsers that never logged in."""
+    return f"pw:{user.account_id}"
+
+
+def _known_device(request: Request, auth: AuthService, user: AuthUser | None) -> bool:
+    return user is not None and auth.known_device(user, _read_cookie(request, KNOWN_DEVICE_COOKIE))
+
+
+def _remember_device(response: Response, request: Request, auth: AuthService, user: AuthUser):
+    _set_cookie(
+        response, request, KNOWN_DEVICE_COOKIE, auth.known_device_token(user), KNOWN_DEVICE_SECONDS
+    )
+
+
 def _wait_text(wait: int) -> str:
     """'29 seconden', '1 minuut', '15 minuten'."""
     wait = max(int(wait), 1)
@@ -192,13 +212,16 @@ def _wait_message(wait: int) -> str:
     )
 
 
-def _attempts_note(auth: AuthService, db: Session, key: str) -> str:
+def _attempts_note(
+    auth: AuthService, db: Session, key: str, throttle: LoginThrottle | None = None
+) -> str:
     """After a wrong password or code: the wait that starts now, or a warning when only one or
     two attempts are left before it does."""
-    wait = auth.throttle.blocked_for(db, key)
+    throttle = throttle or auth.throttle
+    wait = throttle.blocked_for(db, key)
     if wait:
         return " " + _wait_message(wait)
-    left = auth.throttle.max_failures - auth.throttle.failures(db, key)
+    left = throttle.max_failures - throttle.failures(db, key)
     if 0 < left <= 2:
         word = "poging" if left == 1 else "pogingen"
         return f" Nog {left} {word}; daarna moet je even wachten."
@@ -224,6 +247,11 @@ LOCKED_OUT_HELP = (
     "clear-throttle de blokkade op."
 )
 LOGGED_OUT_EVERYWHERE = "Je bent overal uitgelogd: elke browser moet opnieuw inloggen."
+ACCOUNT_LOCKED_HELP = (
+    "Er zijn vanaf veel adressen foute wachtwoorden geprobeerd voor dit account. Een browser "
+    "waarin je eerder volledig hebt ingelogd heeft hier geen last van; op de server heft python "
+    "-m app.auth clear-throttle de blokkade op."
+)
 
 
 def _page(request: Request, name: str, status: int = 200, **ctx) -> HTMLResponse:
@@ -532,16 +560,30 @@ async def login_submit(
     if wait:
         return again(429, _wait_message(wait) + " " + LOCKED_OUT_HELP)
     user = auth.account(db)
+    # Browsers that never logged in also share one account-wide limit, so spreading the guesses
+    # over many addresses does not help; a known browser (the owner's) is never held up by it.
+    account_key = None
+    if user is not None and not _known_device(request, auth, user):
+        account_key = _password_account_key(user)
+        wait = auth.password_throttle.blocked_for(db, account_key)
+        if wait:
+            return again(429, _wait_message(wait) + " " + ACCOUNT_LOCKED_HELP)
     try:
         ok = await _hashing(_verify, password, user.password_hash if user else None)
     except _Busy:
         return again(429, BUSY)
     if user is None or not ok or not auth.username_matches(user, username):
         auth.throttle.record_failure(db, key)
+        note = _attempts_note(auth, db, key)
+        if account_key is not None:
+            auth.password_throttle.record_failure(db, account_key)
+            wait = auth.password_throttle.blocked_for(db, account_key)
+            if wait:
+                log.warning("wrong passwords from many addresses: account-wide wait started")
+                note = " " + _wait_message(max(wait, auth.throttle.blocked_for(db, key)))
+                note += " " + ACCOUNT_LOCKED_HELP
         log.warning("failed login from %s", key)
-        return again(
-            401, "Gebruikersnaam of wachtwoord klopt niet." + _attempts_note(auth, db, key)
-        )
+        return again(401, "Gebruikersnaam of wachtwoord klopt niet." + note)
     if needs_rehash(user.password_hash):
         try:
             auth.store_rehash(db, user, await _hashing(hash_password, password))
@@ -655,6 +697,7 @@ async def mfa_submit(
     auth.throttle.reset(db, _account_key(user))
     response = RedirectResponse(_safe_next(next), status_code=303)
     _set_cookie(response, request, COOKIE_NAME, auth.full_token(user), auth.session_seconds)
+    _remember_device(response, request, auth, user)
     if kind == "recovery":
         left = auth.recovery_codes_left(db)
         add_flash(
@@ -792,6 +835,7 @@ async def mfa_setup_submit(
     _clear_cookie(response, request, SETUP_SECRET_COOKIE)
     _clear_cookie(response, request, SETUP_RESUME_COOKIE)
     _set_cookie(response, request, COOKIE_NAME, auth.full_token(user), auth.session_seconds)
+    _remember_device(response, request, auth, user)
     return response
 
 
