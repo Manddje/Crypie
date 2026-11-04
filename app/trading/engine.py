@@ -35,11 +35,12 @@ from app.strategy.engine import backtest, compute_series, signal_at
 from app.strategy.model import LOOKBACK_OPS, Strategy
 from app.strategy.store import load_strategy, load_strategy_checked
 from app.trading import risk
-from app.trading.events import MarketEvent, active_event, recent_shock, upcoming_events
+from app.trading.events import MarketEvent, active_event, upcoming_events
 from app.trading.health import describe_problem
 from app.trading.journal import JournalFilter, journal_entries, notes_for_claude
 from app.trading.plan import load_plan
 from app.trading.risk import RiskLimits
+from app.trading.shock import ShockGuard
 from app.trading.trend import load_trend
 
 log = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ LIVE_CANDLES_MIN = 300
 LIVE_CANDLES_MAX = 1440
 # Deadlines, so one hanging HTTP or Claude call cannot hold up the other markets.
 DATA_TIMEOUT_S = 60.0
+SHOCK_SCAN_TIMEOUT_S = 150.0  # the news-shock check before a cycle (at most one Claude call)
 DECISION_TIMEOUT_S = 150.0
 MARKET_RUN_TIMEOUT_S = 300.0
 EXIT_LOCK_WAIT_S = 30.0
@@ -349,6 +351,7 @@ class TradingEngine:
         backtest_fee_pct: float = 0.25,
         fee_pct: float = 0.25,
         watch_max_min: int = 180,
+        shock_assessor: Any = None,
     ):
         self.client = client
         self.broker = broker
@@ -368,7 +371,15 @@ class TradingEngine:
         self.risk_off_enabled = True
         self.risk_off_before_min = 60
         self.risk_off_after_min = 120
-        self.shock_pause_hours = 6
+        # News shocks (app/trading/shock.py): Claude judges new vs repeat ("claude") or a fixed
+        # pause ("fixed", also the fallback without Claude).
+        self.shock_mode = "claude"
+        self.shock_min_hours = 1.0
+        self.shock_max_hours = 48.0
+        self.shock_recheck_min = 60
+        self.shock_pause_hours = 2
+        self.shock_assessor = shock_assessor
+        self.shock = ShockGuard(self)
         self.last_run: datetime | None = None
         self.last_results: list[dict[str, Any]] = []
         self.last_error: str | None = None
@@ -662,6 +673,15 @@ class TradingEngine:
         self.cycle_error_at = now
         self.cycle_failing_since = self.cycle_failing_since or now
 
+    async def shock_scan(self, session: Session) -> None:
+        """Judge news-shock triggers that came in since the last look, so the cycle acts on
+        the latest news (rechecks of running pauses are the scheduler's). Never raises."""
+        try:
+            await asyncio.wait_for(self.shock.tick(session, rechecks=False), SHOCK_SCAN_TIMEOUT_S)
+        except Exception:  # noqa: BLE001 - a failed check leaves the pauses as they are
+            session.rollback()
+            log.exception("news-shock check before the cycle failed")
+
     async def run_cycle(self, session: Session) -> list[CycleResult]:
         strategy = self._trading_strategy(session)
         try:
@@ -671,6 +691,7 @@ class TradingEngine:
             self._cycle_failed(describe_problem(exc))
             raise
         self.remember_prices(prices)
+        await self.shock_scan(session)
         results: list[CycleResult] = []
         for market in list(self.markets):
             try:
@@ -860,22 +881,9 @@ class TradingEngine:
                     f"{start:%H:%M} tot {end:%H:%M} UTC"
                 ),
             }
-        shock = recent_shock(session, market.split("-")[0], self.shock_pause_hours, now)
-        if shock is not None:
-            published = shock.published_at
-            if published.tzinfo is None:
-                published = published.replace(tzinfo=UTC)
-            until = published + timedelta(hours=self.shock_pause_hours)
-            return {
-                "kind": "shock",
-                "label": shock.summary_nl or shock.title,
-                "at": published.isoformat(),
-                "until": until.isoformat(),
-                "reason_nl": (
-                    f"nieuwsschok ({shock.summary_nl or shock.title}); geen nieuwe aankopen tot "
-                    f"{until:%H:%M} UTC"
-                ),
-            }
+        pause = self.shock.pause_for(session, market.split("-")[0], now)
+        if pause is not None:
+            return self.shock.risk_off_info(pause)
         return None
 
     def events_context(self, session: Session, market: str, now: datetime) -> dict[str, Any]:
@@ -888,6 +896,7 @@ class TradingEngine:
             ],
             "window_min": {"before": self.risk_off_before_min, "after": self.risk_off_after_min},
             "shock_pause_hours": self.shock_pause_hours,
+            "shock_mode": self.shock_mode,
         }
 
     def events_status(self, session: Session) -> dict[str, Any]:
@@ -915,6 +924,10 @@ class TradingEngine:
             "before_min": self.risk_off_before_min,
             "after_min": self.risk_off_after_min,
             "shock_pause_hours": self.shock_pause_hours,
+            "shock_mode": self.shock_mode,
+            "shock_min_hours": self.shock.min_hours,
+            "shock_max_hours": self.shock.max_hours,
+            "shock_pauses": self.shock.status(session, now),
         }
 
     async def run_market(

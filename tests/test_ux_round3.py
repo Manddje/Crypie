@@ -54,6 +54,10 @@ def test_protection_settings_keep_their_group_but_save_in_their_own_block():
         "risk_off_enabled",
         "risk_off_before_min",
         "risk_off_after_min",
+        "shock_mode",
+        "shock_min_hours",
+        "shock_max_hours",
+        "shock_recheck_min",
         "shock_pause_hours",
         "event_calendar",
     ]

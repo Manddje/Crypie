@@ -161,6 +161,101 @@ class NewsItem(Base):
         return url
 
 
+class NewsEvent(Base):
+    """One news fact (event key) across all its articles: when it was first and last seen, how
+    heavy it was, the price when it first appeared, and the shock pauses it caused. Kept beyond
+    the news retention, so a fact that returns weeks later is still known (app/news/registry.py).
+    """
+
+    __tablename__ = "news_events"
+
+    event_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    article_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_impact: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    min_sentiment: Mapped[float | None] = mapped_column(Float, nullable=True)
+    coins: Mapped[str] = mapped_column(String(128), default="")  # "BTC,SOL" or "ALL"
+    # The summary of the first article, for the shock assessment ("what was this about").
+    first_summary_nl: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # JSON {"BTC": 69515.0, ...}: the price per coin when the fact first appeared (only filled
+    # while the fact is fresh; older facts read it from the candles).
+    price_at_first_seen: Mapped[str | None] = mapped_column(Text, nullable=True)
+    shock_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_shock_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_shock_ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # The newest shock-trigger article already judged, so each one is judged once.
+    last_trigger_id: Mapped[int] = mapped_column(Integer, default=0)
+
+    def coin_list(self) -> list[str]:
+        return [c for c in (self.coins or "").split(",") if c]
+
+    def prices(self) -> dict[str, float]:
+        try:
+            data = json.loads(self.price_at_first_seen or "{}")
+        except ValueError:
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        out = {}
+        for coin, value in data.items():
+            try:
+                price = float(value)
+            except (TypeError, ValueError):
+                continue
+            if 0 < price < float("inf"):
+                out[str(coin)] = price
+        return out
+
+
+class ShockPause(Base):
+    """No new buys after a news shock (app/trading/shock.py).
+
+    ``mode`` claude: Claude judged the shock new; the pause lasts at least SHOCK_MIN_HOURS and
+    at most SHOCK_MAX_HOURS after ``started_at`` and Claude rechecks it in between.
+    ``mode`` fixed: SHOCK_PAUSE_HOURS from ``started_at``, without Claude (the fixed mode, or the
+    fallback when Claude is not available). The bounds follow the current settings.
+    """
+
+    __tablename__ = "shock_pauses"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_key: Mapped[str] = mapped_column(String(64), index=True)
+    mode: Mapped[str] = mapped_column(String(8))  # claude | fixed
+    scope: Mapped[str] = mapped_column(String(8))  # markt | coin
+    coins: Mapped[str] = mapped_column(String(128), default="")  # "SOL" (coin) or "ALL" (markt)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    next_recheck_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    end_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    trigger_news_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    summary_nl: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # JSON list of the assessments in this pause, oldest first: {"at", "kind": "A"|"B",
+    # "verdict", "confidence", "reason"}.
+    verdicts: Mapped[str] = mapped_column(Text, default="[]")
+    failures: Mapped[int] = mapped_column(Integer, default=0)  # rechecks in a row that failed
+
+    @validates("end_reason")
+    def _clip_text(self, key: str, value: str | None) -> str | None:
+        return clip(value, self.__table__.c[key].type.length)
+
+    def coin_list(self) -> list[str]:
+        return [c for c in (self.coins or "").split(",") if c]
+
+    def verdict_list(self) -> list[dict]:
+        try:
+            data = json.loads(self.verdicts or "[]")
+        except ValueError:
+            return []
+        return [v for v in data if isinstance(v, dict)] if isinstance(data, list) else []
+
+
 ACTIVE_POSITION_STATUSES = ("open", "opening", "closing")
 
 

@@ -320,8 +320,10 @@ TOOLS: tuple[Tool, ...] = (
         "status",
         "Status van de bot",
         "Gezondheid van de bot (handelt hij, wanneer voor het laatst, wat hapert), de harde "
-        "limieten zoals ze nu staan (ruimte vandaag, blootstelling, dagverlies) en posities "
-        "zonder bescherming. Snel, zonder Bitvavo-aanroep. Begin hier.",
+        "limieten zoals ze nu staan (ruimte vandaag, blootstelling, dagverlies), posities "
+        "zonder bescherming en lopende schokpauzes na zwaar nieuws (event, sinds, volgende "
+        "beoordeling, uiterlijk einde, Claude's laatste oordeel). Snel, zonder Bitvavo-aanroep. "
+        "Begin hier.",
         "GET",
         "/api/status",
         read_only=True,

@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     claude_model_decision: str = "claude-sonnet-5-5"
     claude_model_news: str = "claude-haiku-5-5"
     claude_model_evaluation: str = "claude-fable-5-1"
+    claude_model_shock: str = "claude-sonnet-5-5"
     claude_monthly_budget_usd: float = 100.0
 
     # News (step 3)
@@ -91,7 +92,14 @@ class Settings(BaseSettings):
     risk_off_enabled: bool = True
     risk_off_before_min: int = 60
     risk_off_after_min: int = 120
-    shock_pause_hours: int = 6  # after highest-impact, strongly negative news; 0 = off
+    # News shocks (app/trading/shock.py). claude: Claude tells a new shock from a repeat and
+    # rechecks a running pause; fixed: a pause of SHOCK_PAUSE_HOURS without Claude. The fixed
+    # pause is also the fallback when Claude is not available (no key, budget spent, an error).
+    shock_mode: Literal["claude", "fixed"] = "claude"
+    shock_min_hours: float = 1.0  # a Claude pause lasts at least this long
+    shock_max_hours: float = 48.0  # and ends by itself after this
+    shock_recheck_min: int = 60  # retry after a failed recheck (Claude picks 30-180 itself)
+    shock_pause_hours: int = 2  # the fixed pause after a shock; 0 = off
     event_calendar: Annotated[list[str], NoDecode] = default_calendar_lines()
     live_trading_ack: bool = False  # must be true to start in live mode
     # Your statement that the live key can only trade (no withdraw) and has an IP whitelist in

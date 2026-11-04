@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -21,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.ai.budget import BudgetExceeded, prune_usage
 from app.ai.news_analyst import NewsAnalyst, apply_assessments, normalize_key
 from app.db import NewsItem, Setting
+from app.news.registry import register_items
 from app.news.sources import (
     MAX_VOTES_JSON,
     NewsFetcher,
@@ -185,7 +187,20 @@ MARKET_MOOD_MAX_AGE = timedelta(hours=48)
 
 
 def save_market_mood(session: Session, mood: dict) -> None:
+    """Store the Fear & Greed index. The value it replaces is kept as ``previous`` when it is
+    from an earlier day (the index changes once a day), for "yesterday" in the shock check."""
     row = session.get(Setting, MARKET_MOOD_KEY)
+    mood = dict(mood)
+    if row is not None:
+        try:
+            old = json.loads(row.value)
+        except ValueError:
+            old = {}
+        if isinstance(old, dict) and "value" in old:
+            if old.get("at") and mood.get("at") and old["at"] != mood["at"]:
+                mood["previous"] = {"value": old["value"], "at": old["at"]}
+            elif isinstance(old.get("previous"), dict):
+                mood["previous"] = old["previous"]
     payload = json.dumps(mood)
     if row is None:
         session.add(Setting(key=MARKET_MOOD_KEY, value=payload))
@@ -229,6 +244,25 @@ def load_market_mood(session: Session, now: datetime | None = None) -> dict | No
     if when is None or now - when > MARKET_MOOD_MAX_AGE:
         return None
     return {"value": value, "label": fear_greed_label(value), "at": at}
+
+
+def load_market_mood_previous(session: Session, now: datetime | None = None) -> dict | None:
+    """The Fear & Greed value before the current one (normally yesterday's), or None when it is
+    not known or older than 72 hours."""
+    row = session.get(Setting, MARKET_MOOD_KEY)
+    if row is None:
+        return None
+    try:
+        prev = json.loads(row.value).get("previous")
+        raw = float(prev["value"])
+        when = aware(datetime.fromisoformat(prev["at"]))
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return None
+    now = now or datetime.now(UTC)
+    if not math.isfinite(raw) or now - when > timedelta(hours=72):
+        return None
+    value = int(min(max(round(raw), 0), 100))
+    return {"value": value, "label": fear_greed_label(value), "at": prev["at"]}
 
 
 # alternative.me's bands, as the news page says them (the stored label stays English: Claude
@@ -734,6 +768,10 @@ class NewsService:
         self.last_run: datetime | None = None
         self.last_error: str | None = None
         self._lock = asyncio.Lock()  # one refresh at a time (scheduler and the button)
+        # Set by the app: the last known prices per market (for the event registry's price at
+        # first sight), and what runs after a refresh assessed articles (the shock scan).
+        self.price_lookup: Callable[[], dict[str, float]] | None = None
+        self.after_assess: Callable[[Session, list[NewsItem]], Awaitable[None]] | None = None
 
     def _next_batch(self, session: Session, since: datetime) -> list[NewsItem]:
         """Fresh items in one batch; items that failed before go one at a time, so one bad
@@ -763,6 +801,15 @@ class NewsService:
                 )
         session.commit()
         return quarantined
+
+    def _register(self, session: Session, batch: list[NewsItem]) -> None:
+        """Bring the event registry up to date for a scored batch (best-effort)."""
+        try:
+            prices = self.price_lookup() if self.price_lookup is not None else None
+            register_items(session, batch, prices=prices, tracked=self.coins)
+        except Exception:  # noqa: BLE001 - the registry is context, never block the news
+            session.rollback()
+            log.exception("event registry update failed")
 
     async def refresh(self, session: Session, max_batches: int = 4) -> dict[str, int | str | None]:
         """Fetch new items and assess pending ones. Safe to call from the scheduler or UI."""
@@ -801,6 +848,7 @@ class NewsService:
                 session.rollback()
                 log.exception("Fear & Greed update failed")
         assessed = 0
+        scored: list[NewsItem] = []
         since = now - timedelta(hours=self.max_age_hours)
         if self.analyst.available:
             for _ in range(max_batches):
@@ -839,11 +887,19 @@ class NewsService:
                     self._count_failure(session, batch, now)
                     continue
                 assessed += n
+                scored += [it for it in batch if it.assessed and it.relevant]
+                self._register(session, batch)
                 skipped = [it for it in batch if not it.assessed]
                 if skipped:  # Claude left these out; count it so they cannot loop forever
                     self._count_failure(session, skipped, now)
                 if n == 0:
                     break  # Claude returned nothing usable; do not loop forever
+        if self.after_assess is not None:
+            try:
+                await self.after_assess(session, scored)
+            except Exception:  # noqa: BLE001 - the news itself is stored; never fail the run
+                session.rollback()
+                log.exception("after-assessment hook failed")
         # Without a key nothing is assessed. That is a choice, not a failure of this run: it
         # is reported as 'assessing': False (and on the page), never as last_error.
         self.last_error = "; ".join(dict.fromkeys(errors)) or None

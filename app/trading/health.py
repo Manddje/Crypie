@@ -308,6 +308,21 @@ def bot_health(
             blockers.append(
                 f"risk-off rond {event.label}; geen nieuwe aankopen tot {_hm(until)} UTC"
             )
+        # News-shock pauses: one over the whole market blocks every buy; one for some coins
+        # only those markets (a note).
+        guard = getattr(engine, "shock", None)
+        pauses = guard.active_pauses(session, now) if guard is not None else []
+        for pause in pauses:
+            markets = guard.pause_markets(pause)
+            if markets and set(markets) >= set(engine.markets):
+                blockers.append(f"risk-off: {guard.reason_nl(pause)}")
+                until = guard.bounds(pause)["until"]
+                if until is not None and (
+                    not isinstance(blocked_until, datetime) or until > _aware(blocked_until)
+                ):
+                    blocked_until = until
+            elif markets:
+                notes.append(f"Risk-off in {', '.join(markets)}: {guard.reason_nl(pause)}.")
 
     # -- one status --
     if errors:

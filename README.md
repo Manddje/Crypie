@@ -473,9 +473,20 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    **Risk-off** (`RISK_OFF_ENABLED`, standaard aan): rond de momenten in de agenda (`EVENT_CALENDAR`, standaard de
    FOMC-rentebesluiten en Amerikaanse CPI-cijfers t/m 2027, regels als `2026-12-09 19:00 Omschrijving` in UTC)
    koopt de bot niet van `RISK_OFF_BEFORE_MIN` (60) minuten ervoor tot `RISK_OFF_AFTER_MIN` (120) minuten erna.
-   Na een **nieuwsschok** (een nieuwsfeit met impact groot (3) en sentiment ≤ -0,5, zoals een hack of een
-   beurs in problemen) koopt de bot `SHOCK_PAUSE_HOURS` (6) uur niet in de geraakte coins, mits minstens twee bronnen het melden (één bron die
-   een hack meldt pauzeert dus niet; zo kan één vijandige feed niet alle aankopen stilzetten). Verkopen,
+   Een **nieuwsschok** begint met een trigger: een nieuwsfeit met impact groot (3) en sentiment ≤ -0,5, zoals
+   een hack of een beurs in problemen, gemeld door minstens twee bronnen (één bron die een hack meldt doet dus
+   niets; zo kan één vijandige feed niet alle aankopen stilzetten). Met `SHOCK_MODE=claude` (standaard) bepaalt
+   Claude (`CLAUDE_MODEL_SHOCK`) aan de hand van een feitenblok dat de bot berekent (eerste melding van het
+   event, koers sindsdien, uurbeweging en uurvolume t.o.v. de 7-daagse mediaan, Fear & Greed) of het een nieuwe
+   schok is, een nieuwe ontwikkeling of een herhaling. Bij een herhaling komt er geen pauze. Anders koopt de bot
+   minstens `SHOCK_MIN_HOURS` (1) en hooguit `SHOCK_MAX_HOURS` (48) uur niet in de geraakte coins (bij een
+   marktbrede schok in geen enkele); vanaf het minimum vraagt de bot Claude om de 30 tot 180 minuten of de
+   markt nog in schok is, en stopt de pauze zodra dat niet meer zo is. Per event loopt hoogstens één pauze;
+   een nieuw artikel over hetzelfde event start er geen tweede. Met `SHOCK_MODE=fixed`, en als terugval als
+   Claude niet kan oordelen (geen sleutel, budget op, storing), geldt een vaste pauze van `SHOCK_PAUSE_HOURS`
+   (2) uur vanaf het bericht. Mislukt een herbeoordeling, dan blijft de pauze staan en probeert de bot het na
+   `SHOCK_RECHECK_MIN` (60) minuten opnieuw. Elk oordeel staat als beslissing in het journaal ("Schokbeoordeling
+   (…)"), de lopende pauzes in `/api/status`, en de kosten in `claude_usage` onder `shock`. Verkopen,
    stop-loss en take-profit blijven werken; de
    dipbewaking wordt niet gewapend. Claude ziet dit als `market_events` (actieve risk-off en de komende 72 uur);
    /trading toont de agenda en een actieve risk-off. Alles instelbaar in het portaal.
@@ -968,7 +979,8 @@ van die app.
 Elke Claude-aanroep wordt met tokens en geschatte kosten opgeslagen in de tabel `claude_usage`.
 Het maandbudget (standaard `CLAUDE_MONTHLY_BUDGET_USD` = 100) is een harde grens: bij 90% waarschuwt het
 dashboard, bij 100% weigert de app nieuwe Claude-aanroepen tot de volgende maand. Het budget en het model
-per taak (`CLAUDE_MODEL_STRATEGY`, `CLAUDE_MODEL_DECISION`, `CLAUDE_MODEL_NEWS`, `CLAUDE_MODEL_EVALUATION`)
+per taak (`CLAUDE_MODEL_STRATEGY`, `CLAUDE_MODEL_DECISION`, `CLAUDE_MODEL_NEWS`, `CLAUDE_MODEL_EVALUATION`,
+`CLAUDE_MODEL_SHOCK`)
 pas je aan op **Instellingen** (het budget met je huidige wachtwoord).
 
 - Per doel geldt een plafond: de nieuwsbeoordeling mag hoogstens 50% van het maandbudget gebruiken. Is dat

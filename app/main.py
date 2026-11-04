@@ -31,6 +31,7 @@ from app.ai.budget import BudgetExceeded, BudgetGuard
 from app.ai.decision_maker import DecisionMaker
 from app.ai.evaluator import Evaluator
 from app.ai.news_analyst import NewsAnalyst
+from app.ai.shock_assessor import ShockAssessor
 from app.ai.strategy_assistant import StrategyAssistant
 from app.api_docs import redoc_page, swagger_page
 from app.auth.oauth_routes import router as oauth_router
@@ -61,6 +62,7 @@ from app.config import Settings, get_settings
 from app.db import Evaluation, Order, Position, SessionLocal, Setting, get_session, init_db
 from app.labels import limit_pct
 from app.mcp_server import router as mcp_router
+from app.news.registry import backfill_events
 from app.news.service import (
     FEAR_GREED_NL,
     NEWS_RETENTION_DAYS,
@@ -295,6 +297,8 @@ def apply_settings(app: FastAPI, new: Settings) -> None:
         state.broker.fee_pct = new.trading_fee_pct
     engine.decision_maker.model = new.claude_model_decision
     engine.evaluator.model = new.claude_model_evaluation
+    if engine.shock_assessor is not None:
+        engine.shock_assessor.model = new.claude_model_shock
     news: NewsService = state.news
     news.analyst.model = new.claude_model_news
     news.coins = new.coins
@@ -316,6 +320,10 @@ def _apply_risk_off(engine: TradingEngine, settings: Settings) -> None:
     engine.risk_off_before_min = settings.risk_off_before_min
     engine.risk_off_after_min = settings.risk_off_after_min
     engine.shock_pause_hours = settings.shock_pause_hours
+    engine.shock_mode = settings.shock_mode
+    engine.shock_min_hours = settings.shock_min_hours
+    engine.shock_max_hours = settings.shock_max_hours
+    engine.shock_recheck_min = settings.shock_recheck_min
 
 
 @asynccontextmanager
@@ -342,6 +350,15 @@ async def lifespan(app: FastAPI):
         except Exception:  # noqa: BLE001 - never block startup on housekeeping
             session.rollback()
             log.exception("clamping future-dated news at startup failed")
+        try:
+            # The event registry behind the shock assessment: one row per news fact, filled
+            # from the stored news the first time (and for any key that has none yet).
+            created = backfill_events(session)
+            if created:
+                log.info("news: %d event(s) added to the event registry", created)
+        except Exception:  # noqa: BLE001 - never block startup on housekeeping
+            session.rollback()
+            log.exception("backfilling the event registry failed")
     client = BitvavoClient(env.bitvavo_api_key, env.bitvavo_api_secret, env.bitvavo_rest_url)
     app.state.client = client
     if client.authenticated:
@@ -411,6 +428,9 @@ async def lifespan(app: FastAPI):
         settings.backtest_fee_pct,
         settings.trading_fee_pct,
         settings.watch_max_min,
+        shock_assessor=ShockAssessor(
+            settings.anthropic_api_key, settings.claude_model_shock, app.state.budget
+        ),
     )
     engine: TradingEngine = app.state.engine
     engine.trend_context = settings.trend_context_enabled
@@ -418,6 +438,10 @@ async def lifespan(app: FastAPI):
     engine.live_capital_eur = settings.live_capital_eur
     engine.broker_for_mode = lambda mode: exit_broker(app, mode)
     _apply_risk_off(engine, settings)
+    # News shocks: the registry records each fact's price at first sight, and a refresh that
+    # scored articles has the shock guard judge new triggers right away.
+    app.state.news.price_lookup = lambda: dict(engine.last_prices)
+    app.state.news.after_assess = engine.shock.on_news
     # Notifications are configured in the environment only (NOTIFY_URL); off without it.
     notifier = Notifier(env)
     app.state.notifier = notifier
@@ -444,6 +468,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(watch_scheduler(app)),
         asyncio.create_task(trend_scheduler(app)),
         asyncio.create_task(evaluation_scheduler(app)),
+        asyncio.create_task(shock_scheduler(app)),
     ]
     try:
         yield
@@ -667,6 +692,26 @@ async def trend_scheduler(app: FastAPI) -> None:
         job,
         lambda s: 24 * 3600 if s.trading_enabled and s.trend_context_enabled else 0,
         initial_delay=10,  # before the first trading cycle (at 20 s)
+    )
+
+
+async def shock_scheduler(app: FastAPI) -> None:
+    """Every minute while risk-off is on: judge new news-shock triggers (call A), recheck the
+    shock pauses whose recheck is due (call B) and close the ones that ran out. Independent of
+    TRADING_ENABLED: a pause must end on time even while the bot does not trade."""
+
+    async def job(session: Session) -> None:
+        engine: TradingEngine = app.state.engine
+        await engine.shock.tick(session)
+
+    await _run_periodically(
+        app,
+        "shock check",
+        job,
+        lambda s: 60 if s.risk_off_enabled else 0,
+        initial_delay=25,
+        persist=False,
+        timeout=600,
     )
 
 
@@ -1835,6 +1880,8 @@ async def api_status(
         "health": _health(request, engine, session, figures=figures),
         "risk_now": figures,
         "unprotected_positions": engine.unprotected,
+        # Running news-shock pauses: what, since when, the bounds and Claude's last judgement.
+        "shock_pauses": engine.shock.status(session),
         "now": datetime.now(UTC),
     }
     return JSONResponse(jsonable_encoder(body), headers={"Cache-Control": "no-store"})

@@ -712,18 +712,13 @@ async def test_risk_off_window_blocks_buys_without_asking_claude(session):
     assert result.action == "buy" and result.executed
 
 
-async def test_news_shock_pauses_buying_but_not_selling(session):
-    decider = FakeDecider(
-        TradeDecision(action="buy", confidence=0.9, amount_quote=100, reasoning_nl="Kopen.")
-    )
-    engine = make_engine_(session, {"BTC-EUR": candles(BUY_SERIES)}, {"BTC-EUR": 12.0}, decider)
-    # A shock needs two outlets reporting the same event (F37).
-    for hours_ago, outlet in ((1, "coindesk.com"), (2, "theblock.co")):
+def _shock_news(session, key, hours_ago_by_outlet):
+    for hours_ago, outlet in hours_ago_by_outlet:
         session.add(
             NewsItem(
                 source="rss",
                 source_name=outlet,
-                url=f"https://{outlet}/hack",
+                url=f"https://{outlet}/{key}",
                 title="Exchange hacked",
                 summary_nl="Grote beurs gehackt.",
                 published_at=datetime.now(UTC) - timedelta(hours=hours_ago),
@@ -732,24 +727,38 @@ async def test_news_shock_pauses_buying_but_not_selling(session):
                 sentiment=-0.9,
                 impact=3,
                 coins="ALL",
-                event_key="exchange-hack",
+                event_key=key,
             )
         )
     session.commit()
+
+
+async def test_news_shock_pauses_buying_but_not_selling(session):
+    decider = FakeDecider(
+        TradeDecision(action="buy", confidence=0.9, amount_quote=100, reasoning_nl="Kopen.")
+    )
+    engine = make_engine_(session, {"BTC-EUR": candles(BUY_SERIES)}, {"BTC-EUR": 12.0}, decider)
+    # A shock needs two outlets reporting the same event (F37).
+    _shock_news(session, "exchange-hack", ((1, "coindesk.com"), (2, "theblock.co")))
     (result,) = await engine.run_cycle(session)
-    assert result.action == "hold" and "nieuwsschok (Grote beurs gehackt.)" in result.reason
+    # No Claude for the shock check in this engine: the fixed pause (SHOCK_PAUSE_HOURS) applies.
+    assert result.action == "hold"
+    assert "Risk-off: nieuwsschok exchange-hack sinds" in result.reason
+    assert "vaste pauze, geen nieuwe aankopen tot" in result.reason
     assert decider.contexts == []
 
-    # With an open position the shock does not block Claude: selling must stay possible.
+    # The fixed duration follows the setting: at 0 hours the pause is over and the bot buys.
     engine.shock_pause_hours = 0
     (result,) = await engine.run_cycle(session)
     assert result.action == "buy" and result.executed
-    engine.shock_pause_hours = 6
+
+    # With an open position a (new) shock does not block Claude: selling must stay possible.
     decider.decision = TradeDecision(
         action="sell", confidence=0.9, amount_quote=0, reasoning_nl="Eruit."
     )
     engine2 = make_engine_(session, {"BTC-EUR": candles(SELL_SERIES)}, {"BTC-EUR": 12.0}, decider)
     engine2.shock_pause_hours = 6
+    _shock_news(session, "exchange-hack-2", ((0.2, "coindesk.com"), (0.1, "theblock.co")))
     (result,) = await engine2.run_cycle(session)
     assert result.action == "sell" and result.executed
     # Claude saw the shock in its context while deciding about the open position.

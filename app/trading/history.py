@@ -166,7 +166,10 @@ def _blocked_detail(d: Decision) -> str:
 
 def _decision_action(d: Decision, interval: str) -> dict:
     action_nl = ACTIONS_NL.get(d.action, d.action)
-    if d.blocked_by:
+    if d.signal == SHOCK_SIGNAL:
+        # Why a news-shock pause started, went on or ended (app/trading/shock.py).
+        kind, label, short, detail = "advice", "Schokbeoordeling", "Schok", d.reasoning or ""
+    elif d.blocked_by:
         kind = "blocked"
         label = _blocked_label(d)
         short = "Geblokkeerd"
@@ -322,11 +325,15 @@ def _as_utc(moment: datetime) -> datetime:
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
+# The journal rows of the news-shock check carry this signal (app/trading/shock.py).
+SHOCK_SIGNAL = "shock"
+
+
 def is_blocked_buy(d: Decision) -> bool:
     """A decision where a rule stopped a buy: the signal said buy (or Claude did) and
     ``blocked_by`` says why. A blocked sell is not one."""
-    if not d.blocked_by or d.executed:
-        return False
+    if not d.blocked_by or d.executed or d.signal == SHOCK_SIGNAL:
+        return False  # a news-shock assessment explains a pause; it was no buy
     if d.action == "buy":
         return True
     return d.action == "hold" and not (d.signal == "sell" and d.has_position)

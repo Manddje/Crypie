@@ -122,7 +122,7 @@ SUMMARY: dict[str, tuple[tuple[str, str], ...]] = {
     "bescherming": (
         ("exit_check_interval_min", "stop-loss en take-profit elke {}"),
         ("risk_off_enabled", "risk-off {}"),
-        ("shock_pause_hours", "schok-pauze {}"),
+        ("shock_mode", "nieuwsschok: {}"),
     ),
     "limits": (
         ("max_trade_eur", "max. {} per order"),
@@ -329,11 +329,60 @@ SPECS: tuple[Spec, ...] = (
         depends="risk_off_enabled",
     ),
     Spec(
+        "shock_mode",
+        "trading",
+        "Nieuwsschok",
+        "Na nieuws met impact groot en sterk negatief sentiment. Claude: Claude bepaalt of het "
+        "een nieuwe schok is of een herhaling, en tijdens de pauze of de markt nog in schok is. "
+        "Vast: altijd de vaste schok-pauze hieronder.",
+        kind="choice",
+        choices=(("claude", "Claude beoordeelt"), ("fixed", "Vaste pauze")),
+        section="bescherming",
+        depends="risk_off_enabled",
+    ),
+    Spec(
+        "shock_min_hours",
+        "trading",
+        "Schokpauze: minimaal",
+        "Zo lang duurt een pauze na een nieuwe schok minstens; pas daarna kijkt Claude opnieuw.",
+        kind="float",
+        min=0.25,
+        max=12,
+        unit="uur",
+        section="bescherming",
+        depends="risk_off_enabled",
+    ),
+    Spec(
+        "shock_max_hours",
+        "trading",
+        "Schokpauze: maximaal",
+        "Daarna eindigt de pauze vanzelf, wat Claude ook zegt.",
+        kind="float",
+        min=1,
+        max=72,
+        unit="uur",
+        section="bescherming",
+        depends="risk_off_enabled",
+    ),
+    Spec(
+        "shock_recheck_min",
+        "trading",
+        "Schokpauze: nieuwe poging na een storing",
+        "Mislukt een herbeoordeling, dan blijft de pauze staan en probeert de bot het na zo "
+        "veel minuten opnieuw. Zonder storing kiest Claude zelf (30 tot 180 minuten).",
+        kind="int",
+        min=15,
+        max=240,
+        unit="minuten",
+        section="bescherming",
+        depends="risk_off_enabled",
+    ),
+    Spec(
         "shock_pause_hours",
         "trading",
-        "Schok-pauze",
-        "Na een nieuwsschok (impact groot, sterk negatief) koopt de bot zo lang niet in de "
-        "geraakte coins. 0 = uit.",
+        "Vaste schok-pauze",
+        "Bij 'Vaste pauze', en als terugval als Claude niet kan beoordelen (geen sleutel, "
+        "budget op, storing): zo lang koopt de bot niet in de geraakte coins. 0 = uit.",
         kind="int",
         min=0,
         max=72,
@@ -516,6 +565,14 @@ SPECS: tuple[Spec, ...] = (
         choices=MODEL_CHOICES,
     ),
     Spec(
+        "claude_model_shock",
+        "claude",
+        "Model voor de schokbeoordeling",
+        "Alleen na zwaar negatief nieuws en tijdens een schokpauze.",
+        kind="model",
+        choices=MODEL_CHOICES,
+    ),
+    Spec(
         "evaluation_interval_hours",
         "claude",
         "Evaluatie-interval",
@@ -653,6 +710,9 @@ SENSITIVE_KEYS: frozenset[str] = frozenset(
         "risk_off_after_min",
         "event_calendar",
         "shock_pause_hours",
+        "shock_mode",
+        "shock_min_hours",
+        "shock_max_hours",
         "news_rss_feeds",
         "claude_monthly_budget_usd",
         # The fee sits in its own block (it is no hard limit), but it still decides what paper
@@ -1049,6 +1109,10 @@ def check_consistency(settings: Settings) -> dict[str, str]:
     errors: dict[str, str] = {}
     if settings.min_trade_eur > settings.max_trade_eur:
         errors["min_trade_eur"] = "het minimum per order kan niet boven het maximum liggen"
+    if settings.shock_min_hours > settings.shock_max_hours:
+        errors["shock_min_hours"] = (
+            "het minimum van de schokpauze kan niet boven het maximum liggen"
+        )
     return errors
 
 

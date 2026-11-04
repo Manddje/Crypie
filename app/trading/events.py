@@ -6,8 +6,9 @@ Two sources of "risk-off":
   adds in the settings). Around each one, from ``before_min`` before to ``after_min`` after, the
   bot opens no new positions. Selling and the mechanical stop-loss keep working.
 * A **news shock**: a market-wide or coin-specific news fact of the highest impact with strongly
-  negative sentiment (an exchange hack, an exchange in trouble). For ``shock_pause_hours`` after
-  it, the bot opens no new positions in the coins it touches.
+  negative sentiment (an exchange hack, an exchange in trouble), confirmed by a second outlet.
+  Such an article is a trigger; app/trading/shock.py decides whether it pauses buying (Claude
+  tells a new shock from a repeat) and for how long.
 
 Calendar lines are plain text, one per line, in UTC like everything else in the app:
 ``2026-12-09 19:00 FOMC-rentebesluit``.
@@ -154,13 +155,15 @@ def upcoming_events(
     return out[:limit]
 
 
-def recent_shock(session, coin: str, hours: int, now: datetime | None = None):
-    """The newest highest-impact, strongly negative news fact for ``coin`` (or the whole market)
-    within ``hours``; None when there is none. Returns the NewsItem.
+def confirmed_triggers(session, now: datetime, hours: float, coins: list[str] | None = None):
+    """Shock triggers of the last ``hours``, newest first: assessed, relevant articles of the
+    highest impact with strongly negative sentiment, for one of ``coins`` or the whole market
+    (every coin when ``coins`` is None).
 
-    Like the sentiment, a shock needs a second outlet: one article (one press release, one
+    Like the sentiment, a trigger needs a second outlet: one article (one press release, one
     hostile feed) cannot pause buying for every coin. The other outlets' articles about the
-    same event (same event key) count as confirmation whatever impact they were given.
+    same event (same event key) count as confirmation whatever impact they were given. Articles
+    dated in the future never count (they would keep a pause going for months).
     """
     from sqlalchemy import select
 
@@ -168,13 +171,12 @@ def recent_shock(session, coin: str, hours: int, now: datetime | None = None):
     from app.news.service import MIN_CONFIRMING_OUTLETS, event_key_for, outlet_of
 
     if hours <= 0:
-        return None
-    now = now or datetime.now(UTC)
+        return []
     window = (
         NewsItem.assessed.is_(True),
         NewsItem.relevant.is_(True),
         NewsItem.published_at >= now - timedelta(hours=hours),
-        NewsItem.published_at <= now,  # a future date must not keep a pause going for months
+        NewsItem.published_at <= now,
     )
     rows = session.scalars(
         select(NewsItem)
@@ -183,15 +185,27 @@ def recent_shock(session, coin: str, hours: int, now: datetime | None = None):
             NewsItem.impact >= SHOCK_MIN_IMPACT,
             NewsItem.sentiment <= SHOCK_MAX_SENTIMENT,
         )
-        .order_by(NewsItem.published_at.desc())
+        .order_by(NewsItem.published_at.desc(), NewsItem.id.desc())
     ).all()
-    candidates = [it for it in rows if coin in it.coin_list() or "ALL" in it.coin_list()]
+    wanted = set(coins) if coins is not None else None
+    candidates = [
+        it
+        for it in rows
+        if wanted is None or "ALL" in it.coin_list() or wanted & set(it.coin_list())
+    ]
     if not candidates:
-        return None
+        return []
     outlets: dict[str, set[str]] = {}
     for it in session.scalars(select(NewsItem).where(*window)):
         outlets.setdefault(event_key_for(it), set()).add(outlet_of(it))
-    for it in candidates:
-        if len(outlets.get(event_key_for(it), ())) >= MIN_CONFIRMING_OUTLETS:
-            return it
-    return None
+    return [
+        it for it in candidates if len(outlets.get(event_key_for(it), ())) >= MIN_CONFIRMING_OUTLETS
+    ]
+
+
+def recent_shock(session, coin: str, hours: int, now: datetime | None = None):
+    """The newest confirmed shock trigger for ``coin`` (or the whole market) within ``hours``;
+    None when there is none. Returns the NewsItem (see confirmed_triggers)."""
+    now = now or datetime.now(UTC)
+    found = confirmed_triggers(session, now, hours, [coin])
+    return found[0] if found else None
