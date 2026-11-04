@@ -18,7 +18,15 @@ UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 # that still fits every form and JSON body the app takes.
 MAX_BODY_BYTES = 1024 * 1024
 PUBLIC_MAX_BODY_BYTES = 16 * 1024
-PUBLIC_BODY_PATHS = {"/login", "/login/mfa", "/setup", "/logout"}
+PUBLIC_BODY_PATHS = {
+    "/login",
+    "/login/mfa",
+    "/setup",
+    "/logout",
+    "/oauth/register",
+    "/oauth/token",
+    "/oauth/revoke",
+}
 
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
@@ -35,7 +43,7 @@ DOCS_CONTENT_SECURITY_POLICY = (
     "frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
 )
 DOCS_PATHS = ("/docs", "/redoc")
-NO_STORE_PREFIXES = ("/login", "/setup", "/account", "/logout")
+NO_STORE_PREFIXES = ("/login", "/setup", "/account", "/logout", "/oauth")
 HSTS = "max-age=31536000"
 
 

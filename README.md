@@ -787,8 +787,9 @@ Elke pagina en elk API-pad (behalve `/health` en `/static`) vraagt om een login 
 gebruikersnaam en wachtwoord, daarna een 6-cijferige code uit een authenticator-app
 (Google/Microsoft Authenticator, 1Password, Apple Wachtwoorden). Zonder login stuurt de app elke
 bezoeker naar `/login`, ook als er nog geen account is; de API antwoordt dan 401. Alleen `/api/*` en
-`/mcp` kennen een tweede deur: een API-token als bearer-token (van de accountpagina of `API_TOKEN`),
-voor Claude (zie [Sparren met Claude (MCP)](#sparren-met-claude-mcp)).
+`/mcp` kennen een tweede deur: een API-token als bearer-token (van de accountpagina of `API_TOKEN`) of
+een OAuth-token van een gekoppelde app, voor Claude (zie
+[Sparren met Claude (MCP)](#sparren-met-claude-mcp)).
 
 **Eerste keer.** Het account kan alleen worden aangemaakt met de setup-link. Bij het starten zonder
 account schrijft de server die in de log (niveau WARNING): `no account yet: open /setup?token=...`. Je
@@ -883,27 +884,35 @@ handmatige orders in live-modus vragen ook via de MCP je huidige wachtwoord (`cu
 Claude krijgt in de serverinstructies mee dat hij daar nooit zelf om vraagt en alleen ingrijpt als jij
 dat in het gesprek vraagt. Een backtest komt zonder de SVG-curve terug; `settings` komt compact terug.
 
-**Instellen.**
+**Instellen.** Er zijn twee manieren om Claude te koppelen: via OAuth (claude.ai, Claude Desktop en
+Claude Code, zonder token) of met een API-token (Claude Code, of Claude Desktop via `mcp-remote`).
 
-1. Genereer een token op de pagina **Account** (`/account`), blok *API-token voor Claude*: *Nieuw token
-   genereren* vraagt je wachtwoord en toont het token één keer, met de `claude mcp add`-regel erbij. Alleen
-   de SHA-256 ervan wordt bewaard (tabel `settings`, sleutel `auth:api_token_hash`); een nieuw token
-   vervangt het vorige en *Token intrekken* wist het. Liever uit de omgeving? Zet dan `API_TOKEN` in
-   Coolify (of `.env`), minstens 32 tekens (korter wordt met een waarschuwing genegeerd), bijvoorbeeld
-   uit `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Zolang er een token uit het
-   portaal is, geldt alleen dat; na intrekken geldt de omgeving weer. Het blok heeft een uitklapbare
-   uitleg *Zo gebruik je het* met de stappen hieronder, ingevuld voor jouw domein en token.
+1. **Custom connector (OAuth)**: in claude.ai of Claude Desktop ga je naar *Settings → Connectors →
+   Add custom connector*, naam *Crypie*, URL `https://crypie.example.nl/mcp`. Claude stuurt je naar
+   `/oauth/authorize` op je eigen site: je logt in (wachtwoord plus authenticator), ziet welke app
+   toegang vraagt en bevestigt met je wachtwoord. Daarna staat de app op de accountpagina onder
+   *Gekoppeld via OAuth*, met *ontkoppelen* (vraagt je wachtwoord). Claude Code kan dit ook:
+   `claude mcp add --transport http crypie https://crypie.example.nl/mcp` en daarna `/mcp` in een
+   gesprek om in te loggen.
 
-2. Claude Code (op je eigen machine; vul je domein en token in):
+2. **API-token**: genereer een token op de pagina **Account** (`/account`), blok *API-token voor
+   Claude*: *Nieuw token genereren* vraagt je wachtwoord en toont het token één keer, met de
+   `claude mcp add`-regel erbij. Alleen de SHA-256 ervan wordt bewaard (tabel `settings`, sleutel
+   `auth:api_token_hash`); een nieuw token vervangt het vorige en *Token intrekken* wist het. Liever uit
+   de omgeving? Zet dan `API_TOKEN` in Coolify (of `.env`), minstens 32 tekens (korter wordt met een
+   waarschuwing genegeerd), bijvoorbeeld uit `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+   Zolang er een token uit het portaal is, geldt alleen dat; na intrekken geldt de omgeving weer. Het
+   blok heeft een uitklapbare uitleg *Zo gebruik je het* met de stappen hieronder, ingevuld voor jouw
+   domein en token.
+
+   Claude Code met het token:
 
    ```bash
    claude mcp add --transport http crypie https://crypie.example.nl/mcp --header "Authorization: Bearer <token>"
    ```
 
-3. Claude Desktop kent voor een eigen server met een bearer-token geen instelling in de app zelf
-   (*Custom connectors* verwacht OAuth). Gebruik de brug `mcp-remote` (Node.js) in
-   `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/`); het token staat in
-   `env`, niet in de argumenten:
+   Claude Desktop met het token, via de brug `mcp-remote` (Node.js) in `claude_desktop_config.json`
+   (macOS: `~/Library/Application Support/Claude/`); het token staat in `env`, niet in de argumenten:
 
    ```json
    {
@@ -938,7 +947,21 @@ opnieuw te deployen). De vergelijking is constant-time over een SHA-256; foute t
 met het adres, en het maken en intrekken van een token ook. Het protocol is de
 stateless, JSON-only vorm van *Streamable HTTP* (één POST per vraag, geen SSE-stream, geen sessie-id;
 `GET` en `DELETE /mcp` antwoorden 405), met `initialize`, `ping`, `tools/list` en `tools/call`.
-Zonder token antwoordt `/mcp` 401 (met de login aan).
+Zonder token antwoordt `/mcp` 401 (met de login aan), met in `WWW-Authenticate` waar de
+OAuth-metadata staat.
+
+**OAuth, hoe het werkt.** Crypie is voor `/mcp` zelf de OAuth-server (OAuth 2.1 zoals de
+MCP-specificatie die vraagt): `/.well-known/oauth-protected-resource[/mcp]` en
+`/.well-known/oauth-authorization-server` wijzen de weg, `POST /oauth/register` registreert een app
+(alleen publieke clients, PKCE met S256 verplicht, alleen `https`-antwoordadressen of loopback, hoogstens
+50 apps; registraties zonder koppeling vervallen na een dag), `GET /oauth/authorize` is de
+toestemmingspagina achter de login, `POST /oauth/token` geeft een access-token (1 uur) en een
+refresh-token (30 dagen, wisselt bij elk gebruik; het oude vervalt), `POST /oauth/revoke` trekt in. Alleen
+hashes van codes en tokens staan in de database (tabellen `oauth_clients`, `oauth_codes`,
+`oauth_tokens`). Een access-token opent precies wat het API-token opent: `/api/*` en `/mcp`, nooit een
+pagina, en gevoelige wijzigingen vragen je wachtwoord. Toestemming geven, intrekken en elke geweigerde
+aanvraag staan in de log. Ontkoppelen op de accountpagina wist de tokens, de codes en de registratie
+van die app.
 
 ## Claude-kosten
 
@@ -1099,9 +1122,11 @@ app/
   flash.py                  eenmalige meldingen na een actie (gesigneerd cookie)
   errors.py                 foutpagina's (HTML voor browsers, JSON voor de API) en Post/Redirect/Get
   notify.py                 meldingen buiten de app (ntfy of webhook)
-  db.py                     SQLAlchemy-modellen: orders, settings, claude_usage, news_items, positions, decisions, evaluations, auth_users, auth_throttle
+  db.py                     SQLAlchemy-modellen: orders, settings, claude_usage, news_items, positions, decisions, evaluations, auth_users, auth_throttle, oauth_clients, oauth_codes, oauth_tokens
   auth/                     login: wachtwoord (passwords.py), TOTP (totp.py), cookie (session.py), account (service.py), routes + middleware (routes.py), CLI (__main__.py)
   auth/api_token.py         bearer-token voor /api/* en /mcp: uit het portaal (gehasht in settings) of API_TOKEN
+  auth/oauth.py             OAuth 2.1 voor /mcp (custom connector): registratie, codes, tokens, intrekken
+  auth/oauth_routes.py      de OAuth-endpoints: metadata, /oauth/register, /oauth/authorize (toestemming), /oauth/token, /oauth/revoke
   mcp_server.py             MCP-server voor Claude Desktop en Claude Code (/mcp): tools om de JSON-API
   bitvavo/client.py         Bitvavo REST-client (publiek + gesigneerd)
   bitvavo/broker.py         PaperBroker / LiveBroker

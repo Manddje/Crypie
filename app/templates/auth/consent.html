@@ -1,0 +1,27 @@
+{% extends "auth/_base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Toegang toestaan{% endblock %}
+{% block content %}
+<h1>Toegang toestaan</h1>
+{% if req %}
+<p class="auth-sub">{{ req.client.name }} wil Crypie gebruiken</p>
+{% if error %}{{ ui.notice("error", error, live=true, id="consent-error") }}{% endif %}
+<p class="muted">{{ access }}</p>
+<p class="small muted">De koppeling blijft 30 dagen geldig zolang de app hem gebruikt; je trekt hem in op je accountpagina onder <em>Gekoppeld via OAuth</em>. Antwoordadres: <span class="mono">{{ req.redirect_uri }}</span></p>
+<form method="post" action="/oauth/authorize" class="auth-form">
+  {% for key, value in params.items() %}<input type="hidden" name="{{ key }}" value="{{ value }}">
+  {% endfor %}
+  <label>Je wachtwoord, ter bevestiging
+    <input type="password" name="password" autocomplete="current-password" required autofocus{% if error %} aria-invalid="true" aria-describedby="consent-error"{% endif %}>
+  </label>
+  <button class="btn btn-primary btn-block" type="submit" name="decision" value="allow" data-busy="Bezig…">Toegang toestaan</button>
+  <button class="btn btn-block" type="submit" name="decision" value="deny" formnovalidate>Weigeren</button>
+</form>
+{% else %}
+{% if error %}{{ ui.notice("error", error, live=true) }}{% endif %}
+<p class="muted">Deze koppeling kan niet doorgaan. Begin opnieuw in de app die toegang vroeg.</p>
+{% endif %}
+{% endblock %}
+{% block below %}
+<p class="auth-below"><a class="btn btn-sm" href="/account">Naar je account</a></p>
+{% endblock %}

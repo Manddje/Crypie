@@ -281,7 +281,7 @@ async def test_a_crash_in_a_tool_does_not_leak(api, monkeypatch):  # noqa: F811
 @pytest.mark.parametrize("web", [{"API_TOKEN": TOKEN}], indirect=True)
 async def test_mcp_needs_the_api_token(web):  # noqa: F811
     r = await rpc(web, "ping")
-    assert r.status_code == 401 and r.headers["www-authenticate"] == "Bearer"
+    assert r.status_code == 401 and r.headers["www-authenticate"].startswith("Bearer")
     assert "API-token" in r.json()["detail"]
     r = await rpc(web, "ping", authorization=f"Bearer {TOKEN}x")
     assert r.status_code == 401 and r.json()["detail"] == "API-token klopt niet"

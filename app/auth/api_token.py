@@ -122,9 +122,19 @@ def token_valid(db: Session, provided: str | None, env_token: str) -> bool:
     return token_matches(provided, env_token)
 
 
-def unauthorized(detail: str) -> JSONResponse:
+def unauthorized(
+    detail: str, resource_metadata: str | None = None, invalid: bool = False
+) -> JSONResponse:
+    """401 with the challenge an MCP client needs: where the OAuth metadata is (RFC 9728),
+    and ``error="invalid_token"`` when a token was sent but refused."""
+    parts = []
+    if invalid:
+        parts.append('error="invalid_token"')
+    if resource_metadata:
+        parts.append(f'resource_metadata="{resource_metadata}"')
+    challenge = "Bearer" + (" " + ", ".join(parts) if parts else "")
     return JSONResponse(
         {"detail": detail},
         status_code=401,
-        headers={"WWW-Authenticate": "Bearer", "Cache-Control": "no-store"},
+        headers={"WWW-Authenticate": challenge, "Cache-Control": "no-store"},
     )

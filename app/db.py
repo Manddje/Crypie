@@ -314,6 +314,49 @@ class AuthUser(Base):
         return bool(self.totp_secret)
 
 
+class OAuthClient(Base):
+    """An app registered through OAuth dynamic client registration (RFC 7591), e.g. Claude's
+    custom connector. Public clients only: no secret, PKCE always (app/auth/oauth.py)."""
+
+    __tablename__ = "oauth_clients"
+
+    client_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    redirect_uris: Mapped[str] = mapped_column(Text)  # JSON list
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class OAuthCode(Base):
+    """A one-time authorization code, kept as its hash until it is exchanged or expires."""
+
+    __tablename__ = "oauth_codes"
+
+    code_hash: Mapped[str] = mapped_column(String(128), primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(64), index=True)
+    redirect_uri: Mapped[str] = mapped_column(Text)
+    code_challenge: Mapped[str] = mapped_column(String(128))
+    scope: Mapped[str] = mapped_column(String(256), default="")
+    resource: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class OAuthToken(Base):
+    """An access or refresh token, kept as its hash. ``family`` ties the tokens of one grant
+    together, so revoking (or a refresh) clears them all at once."""
+
+    __tablename__ = "oauth_tokens"
+
+    token_hash: Mapped[str] = mapped_column(String(128), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16))  # access | refresh
+    client_id: Mapped[str] = mapped_column(String(64), index=True)
+    family: Mapped[str] = mapped_column(String(64), index=True)
+    scope: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class AuthThrottle(Base):
     """Failed login attempts per client address or account, kept across restarts."""
 

@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from app.auth import api_token, totp
+from app.auth import api_token, oauth, totp
 from app.auth.passwords import hash_password, needs_rehash, verify_password
 from app.auth.service import (
     KNOWN_DEVICE_SECONDS,
@@ -41,8 +41,18 @@ log = logging.getLogger("crypie.auth")
 router = APIRouter()
 
 # Reachable without a session. Everything else needs a complete (password + code) login.
-PUBLIC_PATHS = {"/health", "/setup", "/login", "/login/mfa", "/logout"}
-PUBLIC_PREFIXES = ("/static/",)
+PUBLIC_PATHS = {
+    "/health",
+    "/setup",
+    "/login",
+    "/login/mfa",
+    "/logout",
+    # OAuth for the MCP endpoint (app/auth/oauth.py); /oauth/authorize stays behind the login.
+    "/oauth/register",
+    "/oauth/token",
+    "/oauth/revoke",
+}
+PUBLIC_PREFIXES = ("/static/", "/.well-known/")
 # Reachable with a password-only session, because they finish the login.
 STAGE_ONE_PATHS = {"/login/mfa", "/login/mfa/setup"}
 
@@ -308,28 +318,34 @@ async def require_login(request: Request, call_next):
 
 
 async def require_login_or_token(request: Request, call_next):
-    """``require_login`` with the API token (app/auth/api_token.py) as a second door.
+    """``require_login`` with a bearer token as a second door for ``/api/*`` and ``/mcp``.
 
-    With the login on: a valid bearer token opens ``/api/*`` and ``/mcp``; a wrong one answers
-    401 (and is logged); ``/mcp`` without a token answers 401 too, so the MCP endpoint never
-    works on a browser session. Everything else goes to ``require_login`` unchanged. With the
-    login off (AUTH_ENABLED=false) nothing is checked, as everywhere in the app.
+    With the login on: the API token (app/auth/api_token.py) or an OAuth access token
+    (app/auth/oauth.py) opens those paths; a wrong token answers 401 (and is logged); ``/mcp``
+    without a token answers 401 too, so the MCP endpoint never works on a browser session.
+    The 401 names the OAuth metadata (RFC 9728), which is how an MCP client finds the way to
+    sign in. Everything else goes to ``require_login`` unchanged. With the login off
+    (AUTH_ENABLED=false) nothing is checked, as everywhere in the app.
     """
     auth: AuthService | None = getattr(request.app.state, "auth", None)
     path = request.url.path
     if auth is not None and api_token.token_path(path):
         provided = api_token.bearer_token(request)
+        metadata = str(request.base_url).rstrip("/") + oauth.RESOURCE_METADATA_PATH + path
         if provided is not None:
             with SessionLocal() as db:
-                ok = api_token.token_valid(db, provided, request.app.state.env.api_token)
-            if ok:
-                request.state.user = "api-token"
+                if api_token.token_valid(db, provided, request.app.state.env.api_token):
+                    request.state.user = "api-token"
+                else:
+                    app = oauth.access_token_valid(db, provided)
+                    request.state.user = f"oauth:{app.name}" if app is not None else None
+            if request.state.user is not None:
                 request.state.api_token = True
                 return await call_next(request)
             log.warning("wrong API token on %s from %s", path, _client_key(request))
-            return api_token.unauthorized("API-token klopt niet")
+            return api_token.unauthorized("API-token klopt niet", metadata, invalid=True)
         if path == api_token.MCP_PATH:
-            return api_token.unauthorized("Niet ingelogd: /mcp vraagt een API-token")
+            return api_token.unauthorized("Niet ingelogd: /mcp vraagt een API-token", metadata)
     return await require_login(request, call_next)
 
 
@@ -910,6 +926,7 @@ def _account_page(
         status=status,
         user=auth.user(db),
         api_token=api_token.token_status(db, env_token),
+        oauth_apps=oauth.connected_apps(db),
         env_token=bool(env_token),
         mcp_url=str(request.base_url).rstrip("/") + api_token.MCP_PATH,
         codes_left=auth.recovery_codes_left(db),
@@ -948,6 +965,7 @@ async def account_action(
     code: str = Form(""),
     new_password: str = Form(""),
     new_password_repeat: str = Form(""),
+    client_id: str = Form("", max_length=64),
     auth: AuthService = Depends(get_auth),
     db: Session = Depends(get_session),
 ):
@@ -963,7 +981,7 @@ async def account_action(
             _clear_cookie(response, request, name)
         return response
     key = _client_key(request)
-    forms = ("recovery", "reenrol", "password", "api_token", "api_token_revoke")
+    forms = ("recovery", "reenrol", "password", "api_token", "api_token_revoke", "oauth_revoke")
     form = action if action in forms else None
 
     def failed(status: int, error: str, field: str = "password") -> HTMLResponse:
@@ -1045,6 +1063,14 @@ async def account_action(
         token = api_token.issue_token(db)
         log.warning("API token issued for %s from %s", user.username, key)
         return _account_page(request, auth, db, form="api_token", new_token=token)
+    if action == "oauth_revoke":
+        client = oauth.revoke_client(db, client_id)
+        if client is None:
+            return failed(404, "Deze app is al ontkoppeld.")
+        log.warning("OAuth app %s revoked by %s from %s", client.name, user.username, key)
+        return _account_page(
+            request, auth, db, message=f"{client.name} is ontkoppeld en kan niet meer verbinden."
+        )
     if action == "api_token_revoke":
         api_token.revoke_token(db)
         log.warning("API token revoked for %s from %s", user.username, key)

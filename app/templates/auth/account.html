@@ -130,8 +130,14 @@
           <p>Controleer met <code>claude mcp list</code>; daarna zie je in een gesprek de tools van <em>crypie</em>.</p>
         </li>
         <li>
-          <span class="guide-step-title">Claude Desktop <span class="guide-step-tag">via mcp-remote, vraagt Node.js</span></span>
-          <p>De app kent voor een eigen server met een token geen instelling (<em>Custom connectors</em> verwacht OAuth), dus gebruik je de brug <code>mcp-remote</code>. Open <code>claude_desktop_config.json</code> en voeg dit toe:</p>
+          <span class="guide-step-title">claude.ai en Claude Desktop <span class="guide-step-tag">custom connector, zonder token</span></span>
+          <p>Ga naar <em>Settings → Connectors → Add custom connector</em>, vul als naam <em>Crypie</em> in en als URL:</p>
+          {% call codeblock("MCP server URL", wrap=true) %}{{ mcp_url }}{% endcall %}
+          <p>Claude stuurt je dan naar deze site: log in, controleer de app en bevestig met je wachtwoord. De koppeling (OAuth) staat daarna hieronder bij <em>Gekoppeld via OAuth</em> en werkt ook in de browser en op je telefoon.</p>
+        </li>
+        <li>
+          <span class="guide-step-title">Claude Desktop met het token <span class="guide-step-tag">via mcp-remote, vraagt Node.js</span></span>
+          <p>Liever het token dan OAuth? Gebruik dan de brug <code>mcp-remote</code>. Open <code>claude_desktop_config.json</code> en voeg dit toe:</p>
           <dl class="guide-paths">
             <dt>macOS</dt><dd><code>~/Library/Application Support/Claude/</code></dd>
             <dt>Windows</dt><dd><code>%APPDATA%\Claude\</code></dd>
@@ -186,6 +192,27 @@
         <div class="actions"><button class="btn btn-danger" type="submit" data-busy="Bezig…">Token intrekken</button></div>
       </form>
     </details>
+    {% endif %}
+  </section>
+
+  <section class="card" aria-labelledby="account-oauth">
+    {{ ui.card_header("Gekoppeld via OAuth", 2, id="account-oauth") }}
+    <p class="card-desc">Apps die je via <em>Add custom connector</em> (claude.ai, Claude Desktop) hebt gekoppeld. Elke koppeling is volledige API-toegang, net als het token hierboven, en vervalt na 30 dagen zonder gebruik. Ontkoppelen vraagt je wachtwoord.</p>
+    {% if oauth_apps %}
+    {% for app in oauth_apps %}
+    <details class="account-action account-action--danger" id="oauth-{{ loop.index }}"{% if form == "oauth_revoke" %} open{% endif %}>
+      <summary><h3 class="account-action-title">{{ app.name }}</h3><span class="account-action-note">gekoppeld {{ app.since|dt(true) }}{% if app.last_used %} · laatst gebruikt {{ app.last_used|dt(true) }}{% endif %}{% if app.valid_until %} · geldig tot {{ app.valid_until|dt }}{% endif %}</span></summary>
+      {{ result("oauth_revoke") }}
+      <form method="post" action="/account#account-oauth" class="auth-form" data-confirm="{{ app.name }} ontkoppelen? De app kan daarna niet meer verbinden tot je hem opnieuw koppelt.">
+        <input type="hidden" name="action" value="oauth_revoke">
+        <input type="hidden" name="client_id" value="{{ app.client_id }}">
+        {{ field("oauth_revoke", "password", "Huidig wachtwoord") }}
+        <div class="actions"><button class="btn btn-danger" type="submit" data-busy="Bezig…">{{ app.name }} ontkoppelen</button></div>
+      </form>
+    </details>
+    {% endfor %}
+    {% else %}
+    <p class="small muted">Nog geen app gekoppeld. Voeg in claude.ai of Claude Desktop een custom connector toe met <code>{{ mcp_url }}</code>; je keurt de koppeling daarna hier in het portaal goed.</p>
     {% endif %}
   </section>
 

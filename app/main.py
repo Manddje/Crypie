@@ -33,6 +33,7 @@ from app.ai.evaluator import Evaluator
 from app.ai.news_analyst import NewsAnalyst
 from app.ai.strategy_assistant import StrategyAssistant
 from app.api_docs import redoc_page, swagger_page
+from app.auth.oauth_routes import router as oauth_router
 from app.auth.routes import (
     StepUpError,
     enrolment_unfinished,
@@ -758,6 +759,7 @@ app.add_middleware(Compression)
 errors.install(app)
 app.include_router(auth_router)
 app.include_router(mcp_router)
+app.include_router(oauth_router)
 
 
 def get_client(request: Request) -> BitvavoClient:
