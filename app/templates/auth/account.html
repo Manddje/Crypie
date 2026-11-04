@@ -99,6 +99,31 @@
     </div>
     {% endif %}
 
+    {%- set shown = new_token or "<token>" %}
+    <details class="account-action" id="api-token-uitleg"{% if new_token %} open{% endif %}>
+      <summary><h3 class="account-action-title">Zo gebruik je het</h3><span class="account-action-note">Claude Code, Claude Desktop, en wat je kunt vragen</span></summary>
+      <ol class="account-guide">
+        <li><strong>Maak een token</strong> (hieronder) en bewaar het meteen: het wordt één keer getoond. Kwijt of gelekt? Maak een nieuw token; het oude werkt dan niet meer.</li>
+        <li><strong>Claude Code</strong> (op je eigen computer): voer dit uit in een terminal.
+          <pre class="mono">claude mcp add --transport http crypie {{ mcp_url }} --header "Authorization: Bearer {{ shown }}"</pre>
+          Controleer met <span class="mono">claude mcp list</span>; daarna zie je in een gesprek de tools van <em>crypie</em>.</li>
+        <li><strong>Claude Desktop</strong>: de app kent voor een eigen server met een token geen instelling (<em>Custom connectors</em> verwacht OAuth). Gebruik de brug <span class="mono">mcp-remote</span> (vraagt Node.js). Open <span class="mono">claude_desktop_config.json</span> (macOS: <span class="mono">~/Library/Application Support/Claude/</span>, Windows: <span class="mono">%APPDATA%\Claude\</span>) en voeg toe:
+          <pre class="mono">{
+  "mcpServers": {
+    "crypie": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "{{ mcp_url }}", "--header", "Authorization:${CRYPIE_AUTH}"],
+      "env": { "CRYPIE_AUTH": "Bearer {{ shown }}" }
+    }
+  }
+}</pre>
+          Herstart Claude Desktop; onder het gereedschap-icoon staat dan <em>crypie</em>.</li>
+        <li><strong>Vraag Claude wat je wilt weten</strong>: "Hoe staat de bot ervoor?", "Waarom kocht hij gisteren niet?", "Hoe doen de open posities het?", "Wat zegt het nieuws over ETH?", "Vergelijk het evaluatievoorstel met de huidige strategie". Claude leest dezelfde gegevens als dit portaal: status, posities, beslissingen, orders, journaal, nieuws, evaluaties, strategie, plan, instellingen en Claude-kosten.</li>
+        <li><strong>Ingrijpen kan ook</strong>, maar alleen als jij erom vraagt: noodstop, Claude een markt laten beoordelen, een cyclus of evaluatie draaien, een order, de strategie, het plan, notities en instellingen. Gevoelige instellingen en live orders vragen je wachtwoord; Claude vraagt daar nooit zelf om. Geef het in het gesprek alleen als je die wijziging echt wilt.</li>
+      </ol>
+      <p class="small muted">Het token opent alleen de API en <span class="mono">/mcp</span>, nooit een pagina; in een browser is het nutteloos. Wil je het intrekken, dan staat dat hieronder.</p>
+    </details>
+
     <details class="account-action" id="api-token-nieuw"{% if form == "api_token" %} open{% endif %}>
       <summary><h3 class="account-action-title">Nieuw token maken</h3><span class="account-action-note">een eerder token werkt daarna niet meer, ook niet dat uit de omgeving</span></summary>
       {{ result("api_token") }}

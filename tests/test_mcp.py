@@ -397,6 +397,9 @@ async def test_portal_token_replaces_the_environment_token(web):  # noqa: F811
         page = await web.get("/account")
         assert "API-token voor Claude" in page.text and "uit de omgeving" in page.text
         assert "Token intrekken" not in page.text  # nothing to revoke yet
+        # The guide: both clients, with the placeholder until a token is made.
+        assert "Zo gebruik je het" in page.text and "mcp-remote" in page.text
+        assert 'crypie http://test/mcp --header "Authorization: Bearer &lt;token&gt;"' in page.text
 
         r = await _issue(web, "fout")
         assert r.status_code == 401 and "klopt niet" in r.text and 'id="api-token">' not in r.text
@@ -408,6 +411,7 @@ async def test_portal_token_replaces_the_environment_token(web):  # noqa: F811
             f'claude mcp add --transport http crypie http://test/mcp --header "Authorization: '
             f'Bearer {token}"'
         ) in r.text
+        assert f'"CRYPIE_AUTH": "Bearer {token}"' in r.text  # the guide fills in the token too
 
         # The new token opens /mcp and the API; the environment token no longer does.
         assert (await rpc(web, "ping", authorization=f"Bearer {token}")).status_code == 200

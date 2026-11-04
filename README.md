@@ -891,7 +891,8 @@ dat in het gesprek vraagt. Een backtest komt zonder de SVG-curve terug; `setting
    vervangt het vorige en *Token intrekken* wist het. Liever uit de omgeving? Zet dan `API_TOKEN` in
    Coolify (of `.env`), minstens 32 tekens (korter wordt met een waarschuwing genegeerd), bijvoorbeeld
    uit `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Zolang er een token uit het
-   portaal is, geldt alleen dat; na intrekken geldt de omgeving weer.
+   portaal is, geldt alleen dat; na intrekken geldt de omgeving weer. Het blok heeft een uitklapbare
+   uitleg *Zo gebruik je het* met de stappen hieronder, ingevuld voor jouw domein en token.
 
 2. Claude Code (op je eigen machine; vul je domein en token in):
 

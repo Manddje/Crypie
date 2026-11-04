@@ -1899,6 +1899,9 @@ input.code-input { height: 52px; }
 .account-action .notice { margin-bottom: 12px; }
 .account-action .auth-form { max-width: 420px; }
 .account-danger { box-shadow: inset 4px 0 0 var(--red-fill), var(--shadow-sm); }
+.account-guide { margin: 0 0 12px; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; font-size: var(--fs-help); }
+.account-guide pre { margin: 6px 0; padding: 8px 10px; border-radius: 6px; background: var(--fill); white-space: pre-wrap; overflow-wrap: anywhere; }
+.token-reveal code { display: block; padding: 8px 10px; border-radius: 6px; background: var(--fill); }
 
 /* Printing the recovery codes: only the codes and their title. */
 @media print {
