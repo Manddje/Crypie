@@ -19,6 +19,8 @@
  *                                           points into it or it holds an error
  *   <textarea maxlength="…" data-char-count="id">
  *                                           keeps '120 van 2.000 tekens' in #id up to date
+ *   [data-copy-box] with [data-copy-src] and <button data-copy-code hidden>
+ *                                           shows the button; it copies the text of the src
  *
  * While the tab is visible it asks /api/status every minute (light: no Bitvavo calls). When
  * the kill switch was switched elsewhere, the navigation pill, the tab title and the tab icon
@@ -445,6 +447,49 @@
     box.addEventListener("change", function () {
       var state = box.parentElement.querySelector(".state");
       if (state) state.textContent = box.checked ? "Aan" : "Uit";
+    });
+  });
+
+  // -- Copy buttons: [data-copy-box] holds [data-copy-src] and a hidden [data-copy-code] -------
+  each("[data-copy-code]", function (btn) {
+    var box = btn.closest("[data-copy-box]");
+    var src = box && box.querySelector("[data-copy-src]");
+    if (!src) return;
+    var status = box.querySelector("[data-copy-status]");
+    var idle = btn.textContent;
+    var timer = null;
+    btn.hidden = false;
+    function show(copied) {
+      btn.textContent = copied ? "Gekopieerd" : "Geselecteerd";
+      btn.classList.toggle("is-copied", copied);
+      if (status) {
+        status.textContent = "";
+        window.setTimeout(function () {
+          status.textContent = copied ? "Gekopieerd." : "Kopiëren lukt hier niet; de tekst is geselecteerd, kopieer met Ctrl+C of Cmd+C.";
+        }, 30);
+      }
+      window.clearTimeout(timer);
+      timer = window.setTimeout(function () {
+        btn.textContent = idle;
+        btn.classList.remove("is-copied");
+      }, 2000);
+    }
+    function fallback() {
+      var range = document.createRange();
+      range.selectNodeContents(src);
+      var selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      var copied = false;
+      try { copied = document.execCommand("copy"); } catch (e) { copied = false; }
+      show(copied);
+    }
+    btn.addEventListener("click", function () {
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(src.textContent).then(function () { show(true); }, fallback);
+      } else {
+        fallback();
+      }
     });
   });
 })();

@@ -360,7 +360,7 @@ async def test_step_up_through_the_mcp(web):  # noqa: F811
 
 # -- a token from the portal ---------------------------------------------------------------------
 
-TOKEN_RE = re.compile(r'<code id="api-token">([A-Za-z0-9_-]+)</code>')
+TOKEN_RE = re.compile(r'<code id="api-token"[^>]*>([A-Za-z0-9_-]+)</code>')
 
 
 def test_portal_token_storage():
@@ -402,7 +402,7 @@ async def test_portal_token_replaces_the_environment_token(web):  # noqa: F811
         assert 'crypie http://test/mcp --header "Authorization: Bearer &lt;token&gt;"' in page.text
 
         r = await _issue(web, "fout")
-        assert r.status_code == 401 and "klopt niet" in r.text and 'id="api-token">' not in r.text
+        assert r.status_code == 401 and "klopt niet" in r.text and 'id="api-token"' not in r.text
         r = await _issue(web)
         assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
         token = TOKEN_RE.search(r.text).group(1)

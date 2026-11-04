@@ -1899,9 +1899,46 @@ input.code-input { height: 52px; }
 .account-action .notice { margin-bottom: 12px; }
 .account-action .auth-form { max-width: 420px; }
 .account-danger { box-shadow: inset 4px 0 0 var(--red-fill), var(--shadow-sm); }
-.account-guide { margin: 0 0 12px; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; font-size: var(--fs-help); }
-.account-guide pre { margin: 6px 0; padding: 8px 10px; border-radius: 6px; background: var(--fill); white-space: pre-wrap; overflow-wrap: anywhere; }
-.token-reveal code { display: block; padding: 8px 10px; border-radius: 6px; background: var(--fill); }
+/* API-token: the new token once, in a box with a copy button. */
+.token-reveal { margin: 16px 0 12px; }
+.token-reveal .notice { margin-bottom: 10px; }
+.token-box { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; border-radius: var(--radius-sm); background: var(--fill); }
+.token-box code { flex: 1; min-width: 0; font-size: var(--fs-body); letter-spacing: 0.02em; user-select: all; overflow-wrap: anywhere; }
+.token-box .btn { flex: none; }
+.token-reveal-hint { margin-top: 8px; color: var(--text-2); font-size: var(--fs-detail); }
+
+/* API-token: 'Zo gebruik je het', numbered steps with code blocks you can copy. */
+.guide-steps { list-style: none; counter-reset: step; margin: 4px 0 8px; padding: 0; display: grid; gap: 20px; font-size: var(--fs-help); }
+.guide-steps > li { counter-increment: step; position: relative; padding-left: 40px; min-width: 0; }
+.guide-steps > li::before {
+  content: counter(step);
+  position: absolute; left: 0; top: -1px;
+  width: 26px; height: 26px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--accent-tint); color: var(--accent);
+  font-size: var(--fs-detail); font-weight: 600;
+}
+.guide-steps > li > * + * { margin-top: 8px; }
+.guide-step-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: var(--fs-body); font-weight: 600; }
+.guide-step-tag { color: var(--text-2); font-size: var(--fs-detail); font-weight: 400; }
+.guide-steps p code, .guide-paths code { padding: 1px 5px; border-radius: var(--radius-xs); background: var(--fill); font-size: 0.88em; }
+.guide-paths { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: var(--fs-detail); }
+.guide-paths dt { color: var(--text-2); }
+.guide-paths dd { margin: 0; min-width: 0; }
+.guide-questions { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.guide-questions li { padding: 5px 12px; border-radius: var(--radius-pill); background: var(--accent-tint); color: var(--accent); font-size: var(--fs-detail); }
+.guide-questions li::before { content: "“"; }
+.guide-questions li::after { content: "”"; }
+.guide-caution { padding: 10px 12px; border-radius: var(--radius-control); background: var(--fill); color: var(--text-2); font-size: var(--fs-detail); }
+
+.codeblock { min-width: 0; border-radius: var(--radius-control); background: var(--fill); overflow: hidden; }
+.codeblock-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 38px; padding: 3px 4px 3px 12px; border-bottom: 1px solid var(--hairline); }
+.codeblock-label { color: var(--text-2); font-family: var(--mono); font-size: var(--fs-caption); }
+.codeblock-copy { min-height: 30px; padding: 4px 12px; background: transparent; font-size: var(--fs-detail); }
+.codeblock-copy:hover { background: var(--fill-2); }
+.codeblock pre { margin: 0; padding: 12px 14px; font-family: var(--mono); font-size: 13px; line-height: 1.55; white-space: pre; overflow-x: auto; tab-size: 2; }
+.codeblock--wrap pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.btn.is-copied { background: var(--green-tint); color: var(--green); }
 
 /* Printing the recovery codes: only the codes and their title. */
 @media print {
