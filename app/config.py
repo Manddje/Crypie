@@ -17,6 +17,7 @@ log = logging.getLogger(__name__)
 
 AUTH_SESSION_HOURS_MAX = 168  # a week
 NEWS_MAX_AGE_HOURS_MAX = 720  # the portal's maximum, below the 30-day news retention
+API_TOKEN_MIN_LENGTH = 32  # shorter tokens are ignored (app/auth/api_token.py)
 
 
 class Settings(BaseSettings):
@@ -129,6 +130,9 @@ class Settings(BaseSettings):
     setup_token: str = ""
     trusted_origins: Annotated[list[str], NoDecode] = []
     api_docs_enabled: bool = False  # /docs, /redoc and /openapi.json (still behind the login)
+    # API_TOKEN: a bearer token (at least 32 characters) that opens /api/* and /mcp without the
+    # browser login, for Claude's MCP connection (app/mcp_server.py) and scripts. Empty = off.
+    api_token: str = ""
 
     # Notifications outside the app (app/notify.py), environment only. NOTIFY_URL: an ntfy topic
     # (https://ntfy.sh/<secret topic>) or a webhook; https, a public host name, no user:password.
@@ -174,6 +178,19 @@ class Settings(BaseSettings):
     @classmethod
     def _clamp_notify_exit_fail(cls, value: int) -> int:
         return min(max(int(value), 1), 1440)
+
+    @field_validator("api_token", mode="after")
+    @classmethod
+    def _check_api_token(cls, value: str) -> str:
+        # A short token would be guessable; better no token (and a warning) than a weak one.
+        # The token itself is a secret: never logged.
+        value = (value or "").strip()
+        if value and len(value) < API_TOKEN_MIN_LENGTH:
+            log.warning(
+                "API_TOKEN is ignored: it has fewer than %d characters", API_TOKEN_MIN_LENGTH
+            )
+            return ""
+        return value
 
     @field_validator("auth_session_hours", mode="after")
     @classmethod

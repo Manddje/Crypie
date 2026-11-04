@@ -33,11 +33,11 @@ from app.ai.evaluator import Evaluator
 from app.ai.news_analyst import NewsAnalyst
 from app.ai.strategy_assistant import StrategyAssistant
 from app.api_docs import redoc_page, swagger_page
+from app.auth.api_token import require_login_or_token
 from app.auth.routes import (
     StepUpError,
     enrolment_unfinished,
     require_current_password,
-    require_login,
     step_up_attempts_left,
     step_up_enabled,
 )
@@ -59,6 +59,7 @@ from app.bitvavo.client import BitvavoClient, BitvavoError, InvalidMarketError
 from app.config import Settings, get_settings
 from app.db import Evaluation, Order, Position, SessionLocal, Setting, get_session, init_db
 from app.labels import limit_pct
+from app.mcp_server import router as mcp_router
 from app.news.service import (
     FEAR_GREED_NL,
     NEWS_RETENTION_DAYS,
@@ -741,7 +742,8 @@ if _docs:
     app.get("/docs", include_in_schema=False)(lambda: swagger_page(app.title, app.openapi_url))
     app.get("/redoc", include_in_schema=False)(lambda: redoc_page(app.title, app.openapi_url))
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-app.middleware("http")(require_login)
+# The login check, with the API token (API_TOKEN) as a second door for /api/* and /mcp.
+app.middleware("http")(require_login_or_token)
 # Added last = runs first: compression around everything, headers on every response (also
 # the error pages), cache headers for /static, then the body limit and the origin check, all
 # before the login check and before any body is parsed. Inside those: the 500 page, and the
@@ -755,6 +757,7 @@ app.add_middleware(SecurityHeaders)
 app.add_middleware(Compression)
 errors.install(app)
 app.include_router(auth_router)
+app.include_router(mcp_router)
 
 
 def get_client(request: Request) -> BitvavoClient:

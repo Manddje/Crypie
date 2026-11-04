@@ -78,6 +78,8 @@ services:
       SETUP_TOKEN: ${SETUP_TOKEN:-}
       TRUSTED_ORIGINS: ${TRUSTED_ORIGINS:-}
       API_DOCS_ENABLED: ${API_DOCS_ENABLED:-false}
+      # Bearer token for /api/* and the MCP endpoint /mcp (Claude Desktop, Claude Code).
+      API_TOKEN: ${API_TOKEN:-}
       # Notifications to your phone (ntfy topic or webhook, https only); off when empty.
       NOTIFY_URL: ${NOTIFY_URL:-}
       NOTIFY_TOKEN: ${NOTIFY_TOKEN:-}
