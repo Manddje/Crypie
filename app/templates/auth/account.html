@@ -88,7 +88,7 @@
       <dt>Token</dt>
       <dd>{% if api_token.source == "portal" %}{{ ui.pill("Actief", "pill-green") }} gemaakt in het portaal{% if api_token.since %} op {{ api_token.since|dt(true) }}{% endif %}{% if env_token %} <span class="muted">(gaat voor het token uit de omgeving)</span>{% endif %}
       {%- elif api_token.source == "env" %}{{ ui.pill("Actief", "pill-green") }} uit de omgeving (<span class="mono">API_TOKEN</span>)
-      {%- else %}{{ ui.pill("Geen", "pill-orange") }} <span class="muted">maak er hieronder een, of zet <span class="mono">API_TOKEN</span> in de omgeving</span>{% endif %}</dd>
+      {%- else %}{{ ui.pill("Geen", "pill-orange") }} <span class="muted">genereer er hieronder een, of zet <span class="mono">API_TOKEN</span> in de omgeving</span>{% endif %}</dd>
     </dl>
     {% if new_token %}
     <div class="token-reveal" id="api-token-reveal">
@@ -103,7 +103,7 @@
     <details class="account-action" id="api-token-uitleg"{% if new_token %} open{% endif %}>
       <summary><h3 class="account-action-title">Zo gebruik je het</h3><span class="account-action-note">Claude Code, Claude Desktop, en wat je kunt vragen</span></summary>
       <ol class="account-guide">
-        <li><strong>Maak een token</strong> (hieronder) en bewaar het meteen: het wordt één keer getoond. Kwijt of gelekt? Maak een nieuw token; het oude werkt dan niet meer.</li>
+        <li><strong>Genereer een token</strong> (hieronder) en bewaar het meteen: het wordt één keer getoond. Kwijt of gelekt? Genereer een nieuw token; het oude werkt dan niet meer.</li>
         <li><strong>Claude Code</strong> (op je eigen computer): voer dit uit in een terminal.
           <pre class="mono">claude mcp add --transport http crypie {{ mcp_url }} --header "Authorization: Bearer {{ shown }}"</pre>
           Controleer met <span class="mono">claude mcp list</span>; daarna zie je in een gesprek de tools van <em>crypie</em>.</li>
@@ -125,12 +125,12 @@
     </details>
 
     <details class="account-action" id="api-token-nieuw"{% if form == "api_token" %} open{% endif %}>
-      <summary><h3 class="account-action-title">Nieuw token maken</h3><span class="account-action-note">een eerder token werkt daarna niet meer, ook niet dat uit de omgeving</span></summary>
+      <summary><h3 class="account-action-title">Nieuw token genereren</h3><span class="account-action-note">een eerder token werkt daarna niet meer, ook niet dat uit de omgeving</span></summary>
       {{ result("api_token") }}
-      <form method="post" action="/account#api-token-nieuw" class="auth-form"{% if api_token.source %} data-confirm="Nieuw token maken? Het huidige token werkt daarna niet meer; pas de configuratie van Claude aan."{% endif %}>
+      <form method="post" action="/account#api-token-nieuw" class="auth-form"{% if api_token.source %} data-confirm="Nieuw token genereren? Het huidige token werkt daarna niet meer; pas de configuratie van Claude aan."{% endif %}>
         <input type="hidden" name="action" value="api_token">
         {{ field("api_token", "password", "Huidig wachtwoord") }}
-        <div class="actions"><button class="btn btn-primary" type="submit" data-busy="Bezig…">Nieuw token maken</button></div>
+        <div class="actions"><button class="btn btn-primary" type="submit" data-busy="Bezig…">Nieuw token genereren</button></div>
       </form>
     </details>
 
@@ -138,7 +138,7 @@
     <details class="account-action account-action--danger" id="api-token-intrekken"{% if form == "api_token_revoke" %} open{% endif %}>
       <summary><h3 class="account-action-title">Token intrekken</h3><span class="account-action-note">Claude kan daarna niet meer verbinden{% if env_token %}; het token uit de omgeving geldt dan weer{% endif %}</span></summary>
       {{ result("api_token_revoke") }}
-      <form method="post" action="/account#api-token-intrekken" class="auth-form" data-confirm="Token intrekken? Claude kan daarna niet meer verbinden tot je een nieuw token maakt.">
+      <form method="post" action="/account#api-token-intrekken" class="auth-form" data-confirm="Token intrekken? Claude kan daarna niet meer verbinden tot je een nieuw token genereert.">
         <input type="hidden" name="action" value="api_token_revoke">
         {{ field("api_token_revoke", "password", "Huidig wachtwoord") }}
         <div class="actions"><button class="btn btn-danger" type="submit" data-busy="Bezig…">Token intrekken</button></div>

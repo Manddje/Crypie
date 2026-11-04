@@ -1053,7 +1053,7 @@ async def account_action(
             auth,
             db,
             message="Het API-token is ingetrokken. Claude kan niet meer verbinden tot je een "
-            "nieuw token maakt"
+            "nieuw token genereert"
             + (
                 "; het token uit de omgeving (API_TOKEN) geldt weer."
                 if request.app.state.env.api_token

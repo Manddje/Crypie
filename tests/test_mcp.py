@@ -449,12 +449,12 @@ async def test_without_any_token_the_page_says_so(web):  # noqa: F811
     await _setup(web)
     try:
         page = await web.get("/account")
-        assert "maak er hieronder een" in page.text
+        assert "genereer er hieronder een" in page.text
         assert (await rpc(web, "ping")).status_code == 401
         token = TOKEN_RE.search((await _issue(web)).text).group(1)
         assert (await rpc(web, "ping", authorization=f"Bearer {token}")).status_code == 200
         r = await web.post("/account", data={"action": "api_token_revoke", "password": PASSWORD})
-        assert r.status_code == 200 and "nieuw token maakt." in r.text
+        assert r.status_code == 200 and "nieuw token genereert." in r.text
         assert (await rpc(web, "ping", authorization=f"Bearer {token}")).status_code == 401
     finally:
         with SessionLocal() as db:

@@ -885,8 +885,8 @@ dat in het gesprek vraagt. Een backtest komt zonder de SVG-curve terug; `setting
 
 **Instellen.**
 
-1. Maak een token op de pagina **Account** (`/account`), blok *API-token voor Claude*: *Nieuw token
-   maken* vraagt je wachtwoord en toont het token één keer, met de `claude mcp add`-regel erbij. Alleen
+1. Genereer een token op de pagina **Account** (`/account`), blok *API-token voor Claude*: *Nieuw token
+   genereren* vraagt je wachtwoord en toont het token één keer, met de `claude mcp add`-regel erbij. Alleen
    de SHA-256 ervan wordt bewaard (tabel `settings`, sleutel `auth:api_token_hash`); een nieuw token
    vervangt het vorige en *Token intrekken* wist het. Liever uit de omgeving? Zet dan `API_TOKEN` in
    Coolify (of `.env`), minstens 32 tekens (korter wordt met een waarschuwing genegeerd), bijvoorbeeld
