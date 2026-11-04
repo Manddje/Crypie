@@ -279,6 +279,26 @@
           {% else %}
           <p class="small muted">Geen komende momenten in de agenda.</p>
           {% endif %}
+          <h4 class="context-title mt-3" id="shock-history-title">Nieuwsschokken, laatste 30 dagen</h4>
+          {% if agenda.shock_history %}
+          {% call ui.table_wrap("Nieuwsschokken") %}
+          <table class="small" aria-labelledby="shock-history-title">
+            <thead><tr><th scope="col">Vanaf</th><th scope="col">Gebeurtenis</th><th scope="col" class="num">Duur</th><th scope="col">Einde</th></tr></thead>
+            <tbody>
+            {% for s in agenda.shock_history %}
+            <tr>
+              <td class="nowrap">{{ s.started_at|isodt }}</td>
+              <td><strong>{{ s.event_key }}</strong><span class="sub">{{ s.coins_nl }}{% if s.assessments %} · {{ s.assessments }} {{ "beoordeling" if s.assessments == 1 else "beoordelingen" }}{% endif %}</span></td>
+              <td class="num nowrap">{{ s.duration_nl }}</td>
+              <td>{% if s.active %}<span class="pill pill-red"><span class="dot" aria-hidden="true"></span>loopt nog</span>{% else %}{{ s.ended_nl }}{% endif %}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          {% endcall %}
+          {% else %}
+          <p class="small muted">Geen schok-pauzes in de laatste 30 dagen. Beoordelingen zonder pauze (herhaling van oud nieuws) staan in het journaal.</p>
+          {% endif %}
         </section>
 
         <section class="span-all" id="blocked-review" aria-labelledby="blocked-review-title">

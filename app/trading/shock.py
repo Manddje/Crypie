@@ -53,6 +53,7 @@ log = logging.getLogger(__name__)
 
 # Articles older than this never trigger anything: they are not news any more.
 TRIGGER_WINDOW_H = 24
+HISTORY_DAYS = 30  # the shock list on the trading page and in the status
 MIN_HOURS_RANGE = (0.25, 12.0)
 MAX_HOURS_RANGE = (1.0, 72.0)
 RECHECK_RANGE = (15, 240)
@@ -88,6 +89,15 @@ def _iso(value: datetime | None) -> str | None:
 def _hours_text(hours: float) -> str:
     text = f"{hours:g}".replace(".", ",")
     return f"{text} uur"
+
+
+def _duration_text(delta: timedelta) -> str:
+    """'45 min', '2 uur' or '2 uur 15 min'."""
+    minutes = max(int(delta.total_seconds() // 60), 0)
+    hours, minutes = divmod(minutes, 60)
+    if hours == 0:
+        return f"{minutes} min"
+    return f"{hours} uur" if minutes == 0 else f"{hours} uur {minutes} min"
 
 
 def news_direction(items: list[NewsItem], now: datetime) -> str:
@@ -270,6 +280,61 @@ class ShockGuard:
         if not self.engine.risk_off_enabled:
             return []
         return [self.describe(p) for p in self.active_pauses(session, now)]
+
+    def history(
+        self, session: Session, now: datetime | None = None, days: int = HISTORY_DAYS
+    ) -> list[dict[str, Any]]:
+        """The pauses of the last ``days`` days, newest first: what, when, how long and how
+        they ended. A running pause is in it too, with its duration so far."""
+        now = now or datetime.now(UTC)
+        rows = session.scalars(
+            select(ShockPause)
+            .where(ShockPause.started_at >= now - timedelta(days=days))
+            .order_by(ShockPause.started_at.desc(), ShockPause.id.desc())
+        ).all()
+        out = []
+        for pause in rows:
+            start = aware(pause.started_at)
+            if start > now:
+                continue
+            active = pause.ended_at is None and self.is_active(pause, now)
+            end = aware(pause.ended_at) if pause.ended_at else None
+            if end is None and not active:  # ran out, not yet marked by the next tick
+                end = self.bounds(pause)["max_until"]
+            until = end or now
+            verdicts = pause.verdict_list()
+            out.append(
+                {
+                    "event_key": pause.event_key,
+                    "summary": pause.summary_nl,
+                    "mode": pause.mode,
+                    "scope": pause.scope,
+                    "coins": pause.coin_list(),
+                    "coins_nl": "hele markt"
+                    if pause.scope == "markt"
+                    else ", ".join(pause.coin_list()),
+                    "started_at": _iso(start),
+                    "ended_at": _iso(end),
+                    "active": active,
+                    "hours": round((until - start).total_seconds() / 3600, 2),
+                    "duration_nl": _duration_text(until - start),
+                    "end_reason": None if active else (pause.end_reason or "maximum"),
+                    "ended_nl": self._ended_text(pause, active),
+                    "assessments": len(verdicts),
+                    "last_reason": verdicts[-1].get("reason") if verdicts else None,
+                }
+            )
+        return out
+
+    def _ended_text(self, pause: ShockPause, active: bool) -> str:
+        if active:
+            return "loopt nog"
+        reason = pause.end_reason or "maximum"
+        if reason == "claude":
+            return "Claude zag de schok als voorbij"
+        if reason == "vast" or pause.mode == "fixed":
+            return f"vaste pauze van {_hours_text(self.fixed_hours)} om"
+        return f"maximum van {_hours_text(self.max_hours)} bereikt"
 
     def pause_markets(self, pause: ShockPause) -> list[str]:
         return [m for m in self.engine.markets if self._covers(pause, m.split("-")[0])]

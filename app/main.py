@@ -1882,6 +1882,8 @@ async def api_status(
         "unprotected_positions": engine.unprotected,
         # Running news-shock pauses: what, since when, the bounds and Claude's last judgement.
         "shock_pauses": engine.shock.status(session),
+        # The pauses of the last 30 days, running ones included: how long and how they ended.
+        "shock_history": engine.shock.history(session),
         "now": datetime.now(UTC),
     }
     return JSONResponse(jsonable_encoder(body), headers={"Cache-Control": "no-store"})

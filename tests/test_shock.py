@@ -865,6 +865,84 @@ async def test_cycle_text_names_the_event_and_the_next_check(session):
     assert status["shock_mode"] == "claude" and "shock_pauses" in status
 
 
+async def test_history_lists_the_pauses_with_duration_and_how_they_ended(session):
+    from app.trading.shock import _duration_text
+
+    assert _duration_text(timedelta(minutes=45)) == "45 min"
+    assert _duration_text(timedelta(hours=2)) == "2 uur"
+    assert _duration_text(timedelta(hours=2, minutes=15)) == "2 uur 15 min"
+
+    client = flat_client(NOW)
+    assessor = FakeAssessor(
+        a=lambda f: verdict_a("nieuw"), b=lambda f: verdict_b(False, reason="Volume normaal.")
+    )
+    engine = make_engine_(session, client, assessor)
+    # An old pause, outside the 30 days: not listed.
+    session.add(
+        ShockPause(
+            event_key="old-news",
+            mode="fixed",
+            scope="markt",
+            coins="ALL",
+            started_at=NOW - timedelta(days=31),
+            ended_at=NOW - timedelta(days=31) + timedelta(hours=2),
+            end_reason="vast",
+        )
+    )
+    # A fixed pause of last week that ran out: ended by the fixed duration.
+    session.add(
+        ShockPause(
+            event_key="exchange-hack",
+            mode="fixed",
+            scope="coin",
+            coins="SOL",
+            started_at=NOW - timedelta(days=7),
+            ended_at=NOW - timedelta(days=7) + timedelta(hours=2),
+            end_reason="vast",
+        )
+    )
+    session.commit()
+    new_shock(session, NOW)
+    await engine.shock.tick(session, NOW)
+
+    (running, fixed) = engine.shock.history(session, NOW + timedelta(minutes=30))
+    assert running["event_key"] == "exchange-collapse" and running["active"] is True
+    assert running["duration_nl"] == "30 min" and running["hours"] == 0.5
+    assert running["ended_at"] is None and running["end_reason"] is None
+    assert running["ended_nl"] == "loopt nog" and running["coins_nl"] == "hele markt"
+    assert running["assessments"] == 1 and running["last_reason"] == "Reden A."
+    assert fixed["event_key"] == "exchange-hack" and fixed["coins_nl"] == "SOL"
+    assert fixed["duration_nl"] == "2 uur" and fixed["ended_nl"] == "vaste pauze van 2 uur om"
+    assert fixed["end_reason"] == "vast" and fixed["active"] is False
+
+    # Claude ends the running one after 1 h 1 min.
+    when = NOW + timedelta(hours=1, minutes=1)
+    client.now = when
+    await engine.shock.tick(session, when)
+    (ended, _) = engine.shock.history(session, when)
+    assert ended["active"] is False and aw(datetime.fromisoformat(ended["ended_at"])) == when
+    assert ended["duration_nl"] == "1 uur 1 min" and ended["assessments"] == 2
+    assert ended["ended_nl"] == "Claude zag de schok als voorbij"
+    assert ended["end_reason"] == "claude" and ended["last_reason"] == "Volume normaal."
+    assert engine.events_status(session)["shock_history"][0]["event_key"] == "exchange-collapse"
+
+    # A pause that ran out but was not yet marked by a tick counts as ended at its maximum.
+    later = NOW + timedelta(days=3)
+    session.add(
+        ShockPause(
+            event_key="no-tick-yet",
+            mode="claude",
+            scope="markt",
+            coins="ALL",
+            started_at=later - timedelta(hours=50),
+        )
+    )
+    session.commit()
+    first = engine.shock.history(session, later)[0]
+    assert first["event_key"] == "no-tick-yet" and first["active"] is False
+    assert first["duration_nl"] == "48 uur" and first["ended_nl"] == "maximum van 48 uur bereikt"
+
+
 async def test_journal_rows_are_no_blocked_buys_and_show_as_shock_on_the_chart(session):
     client = flat_client(NOW)
     engine = make_engine_(session, client, FakeAssessor(a=lambda f: verdict_a("nieuw")))
@@ -968,7 +1046,39 @@ async def api():
 
 async def test_status_and_settings_show_the_new_fields(api):
     status = (await api.get("/api/status")).json()
-    assert status["shock_pauses"] == []
+    assert status["shock_pauses"] == [] and status["shock_history"] == []
+    page = (await api.get("/trading", headers={"accept": "text/html"})).text
+    assert "Nieuwsschokken, laatste 30 dagen" in page
+    assert "Geen schok-pauzes in de laatste 30 dagen" in page
+    from app.db import SessionLocal
+
+    started = datetime.now(UTC) - timedelta(hours=5)
+    with SessionLocal() as db:
+        db.add(
+            ShockPause(
+                event_key="exchange-hack",
+                mode="claude",
+                scope="coin",
+                coins="SOL",
+                started_at=started,
+                ended_at=started + timedelta(hours=3, minutes=20),
+                end_reason="claude",
+                verdicts=json.dumps([{"kind": "A", "verdict": "nieuw", "reason": "x"}]),
+            )
+        )
+        db.commit()
+    try:
+        status = (await api.get("/api/status")).json()
+        (row,) = status["shock_history"]
+        assert row["duration_nl"] == "3 uur 20 min" and row["active"] is False
+        page = (await api.get("/trading", headers={"accept": "text/html"})).text
+        assert "<strong>exchange-hack</strong>" in page and "SOL · 1 beoordeling" in page
+        assert "3 uur 20 min" in page and "Claude zag de schok als voorbij" in page
+    finally:
+        with SessionLocal() as db:
+            for p in db.scalars(select(ShockPause)):
+                db.delete(p)
+            db.commit()
     body = (await api.get("/api/settings")).json()
     values = body["values"]
     assert values["shock_mode"] == "claude" and values["shock_pause_hours"] == 2

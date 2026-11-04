@@ -928,6 +928,7 @@ class TradingEngine:
             "shock_min_hours": self.shock.min_hours,
             "shock_max_hours": self.shock.max_hours,
             "shock_pauses": self.shock.status(session, now),
+            "shock_history": self.shock.history(session, now),
         }
 
     async def run_market(
