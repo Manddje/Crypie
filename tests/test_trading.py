@@ -670,7 +670,30 @@ async def test_run_evaluation_stores_report_and_backtests_proposal(session):
     engine = make_engine_(
         session, {"BTC-EUR": series}, {"BTC-EUR": 5.0}, decider, evaluator=evaluator
     )
+    today = datetime.now(UTC).date()
+    save_etf_flows(
+        session,
+        {
+            "coin": "BTC",
+            "as_of": today.isoformat(),
+            "sum_5d_musd": -300.0,
+            "sum_30d_musd": 900.0,
+            "typical_day_musd": 40.0,
+            "days": 12,
+            "last_day_musd": -100.0,
+            "daily": [
+                {"date": (today - timedelta(days=i)).isoformat(), "flow_musd": float(-i)}
+                for i in range(11, -1, -1)
+            ],
+        },
+    )
     ev = await engine.run_evaluation(session, days=7)
+    # The ETF flows of the period: the summary plus the daily series cut to the last 7 days.
+    flows = evaluator.contexts[0]["etf_flows"]["BTC"]
+    assert flows["label"] == "strong_outflow" and flows["sum_30d_musd"] == 900.0
+    assert len(flows["daily_in_period"]) == 8  # today and the 7 days before
+    assert flows["daily_in_period"][-1]["flow_musd"] == 0.0
+    assert "daily" not in flows and "note" in flows
     assert "Goed gegaan" in ev.report_nl and "Minder verlies" in ev.report_nl
     assert ev.model == "claude-fable-5-1" and not ev.applied
     assert Strategy.model_validate_json(ev.proposed_strategy).stop_loss_pct == 5
@@ -679,6 +702,10 @@ async def test_run_evaluation_stores_report_and_backtests_proposal(session):
     bt = json.loads(ev.proposal_backtest)
     assert "return_pct" in bt["proposed"] and "return_pct" in bt["current"]
     assert evaluator.contexts[0]["strategy"]["name"] == "SMA cross"
+
+    engine.etf_flows_enabled = False
+    await engine.run_evaluation(session, days=7)
+    assert evaluator.contexts[1]["etf_flows"] is None
 
 
 async def test_long_term_trend_reaches_claude_when_enabled(session):

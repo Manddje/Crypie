@@ -30,6 +30,7 @@ from app.bitvavo.broker import Broker, OrderUncertain
 from app.bitvavo.client import BitvavoClient, BitvavoError
 from app.db import Decision, Evaluation, NewsItem, Order, Position, Setting
 from app.news.service import load_etf_flows, load_market_mood, market_sentiment, outlet_of
+from app.news.sources import ETF_ASSETS
 from app.strategy.describe import ConditionCheck, explain_signal, levels_summary, signal_reason_nl
 from app.strategy.engine import SOFT_FAIL_SIZE_FACTOR, backtest, compute_series, signal_at
 from app.strategy.model import LOOKBACK_OPS, Strategy
@@ -2348,6 +2349,41 @@ class TradingEngine:
     def evaluation_busy(self) -> bool:
         return self._evaluation_lock.locked()
 
+    def _etf_flows_for_evaluation(self, session: Session, days: int) -> dict[str, Any]:
+        """Per coin with ETFs: the stored summary, its daily series cut to the period."""
+        since = (datetime.now(UTC) - timedelta(days=days)).date().isoformat()
+        out: dict[str, Any] = {}
+        for market in self.markets:
+            coin = market.split("-")[0]
+            if coin in out:
+                continue
+            flows = load_etf_flows(session, coin)
+            if flows is None:
+                if coin in ETF_ASSETS:
+                    out[coin] = None
+                continue
+            daily = [d for d in flows.get("daily") or [] if str(d.get("date")) >= since]
+            out[coin] = {
+                k: flows.get(k)
+                for k in (
+                    "as_of",
+                    "last_day_musd",
+                    "sum_5d_musd",
+                    "sum_30d_musd",
+                    "typical_day_musd",
+                    "streak_days",
+                    "label",
+                    "label_nl",
+                    "source",
+                )
+            }
+            out[coin]["daily_in_period"] = daily
+            out[coin]["note"] = (
+                "dagelijkse nettostroom van de Amerikaanse spot-ETF's in miljoenen USD "
+                "(positief = geld erin); context, geen indicator van de strategie"
+            )
+        return out
+
     async def run_evaluation(self, session: Session, days: int = 7) -> Evaluation:
         """One evaluation at a time (button, API and scheduler); a second request while one
         runs raises EvaluationBusy instead of paying Claude twice."""
@@ -2405,6 +2441,11 @@ class TradingEngine:
             "owner_notes": notes_for_claude(
                 journal_entries(session, self.mode, JournalFilter(days=max(days, 30)))
             ),
+            # Net flows of the US spot ETFs per coin over the period (day figures, millions
+            # of USD), so the evaluation can relate decisions to institutional buying/selling.
+            "etf_flows": self._etf_flows_for_evaluation(session, days)
+            if self.etf_flows_enabled
+            else None,
         }
         result = await self.evaluator.evaluate(session, context)
         proposal_json = None

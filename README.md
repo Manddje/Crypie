@@ -437,7 +437,9 @@ Nieuws is onbetrouwbare invoer, dus:
   een mislukte ophaalronde laat de vorige cijfers staan tot dan; de bron uitzetten
   wist ze. Claude krijgt ze per beslissing mee als `etf_flows` (context, geen signaal: aanhoudende
   instroom maakt een dip eerder koopwaardig, aanhoudende uitstroom vraagt terughoudendheid) en bij de
-  schokbeoordeling als dagcijfers naast Fear & Greed (uitstroom maakt een schok geloofwaardiger); /news toont
+  schokbeoordeling als dagcijfers naast Fear & Greed (uitstroom maakt een schok geloofwaardiger), en bij de
+  zelfevaluatie als dagreeks over de periode, om te toetsen of beslissingen met of tegen de stroom in gingen;
+  /news toont
   ze onder *ETF-stromen*; API `GET /api/news/etf-flows`, MCP-tool `etf_flows`. De sleutel staat alleen
   in de omgeving en komt niet in de log.
 - Bewaartermijn: nieuws 30 dagen, Claude-gebruik 400 dagen (opgeruimd bij elke nieuwsronde).
@@ -567,7 +569,8 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    Posities staan in `positions` en vormen het trade-journaal op `/journal`. Deze uitkomsten gaan terug naar Claude bij de volgende beslissing: zo
    "leert" de bot zonder dat het model verandert.
 7. **Evaluatie**: elke `EVALUATION_INTERVAL_HOURS` (standaard wekelijks) schrijft `CLAUDE_MODEL_EVALUATION`
-   (Fable 5.1) een rapport over de resultaten en doet eventueel een strategievoorstel, inclusief backtest.
+   (Fable 5.1) een rapport over de resultaten en doet eventueel een strategievoorstel, inclusief backtest;
+   het rapport weegt ook het nieuws en de ETF-stromen van de periode mee.
    Een voorstel wordt pas actief als jij het op `/trading` toepast (zie
    [De pagina Handelen](#de-pagina-handelen)). Zonder `ANTHROPIC_API_KEY` staan *Nu evalueren* en de
    automatische evaluaties uit.

@@ -24,6 +24,14 @@ resultaten aan het plan: zijn de eigen regels gevolgd, en passen de resultaten b
 Neem de notities serieus als ervaring van de eigenaar en noem het als een les uit het journaal
 in de data bevestigd of weersproken wordt. Zijn beide leeg, sla dit over.
 
+etf_flows geeft per coin met een Amerikaanse spot-ETF de dagelijkse nettostroom van die ETF's
+in miljoenen USD (positief = geld erin): de reeks over de periode (daily_in_period), de sommen
+over 5 en 30 dagen en een label. Gebruik het om te toetsen of de beslissingen met of tegen de
+institutionele stroom in gingen: aankopen tijdens aanhoudende uitstroom die slecht afliepen,
+of afwachten tijdens instroom waardoor een stijging gemist werd. Het is context voor het
+rapport en voor het oordeel over veto's en nieuwsbeslissingen, geen indicator van de strategie:
+stel het niet voor als voorwaarde. Ontbreekt het (null of leeg), sla dit over.
+
 Schrijf een eerlijke evaluatie in het Nederlands (report_nl, markdown, maximaal ~500 woorden):
 1. Resultaat: rendement, winstpercentage, grootste winst en verlies, vergeleken met kopen-en-houden.
 2. Wat werkte en wat niet: welke signalen, welke nieuwssituaties, welke beslissingen van de bot
