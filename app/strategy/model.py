@@ -391,8 +391,8 @@ def use_problems(strategy: Strategy) -> list[str]:
       stop without trailing_start_pct, so a position never stays open without a stop price
       (a trailing stop that only starts after a rise leaves a falling position unprotected).
     - Its hard buy conditions must filter something. A condition like ``close > 0`` is
-      always true: the backtest (which counts the soft filters as hard) can look harmless
-      while live the buy signal fires every cycle.
+      always true: a strict backtest (soft filters counted as hard) can look harmless while
+      live the buy signal fires every cycle.
     """
     problems: list[str] = []
     if strategy.entry_stop_pct() is None:

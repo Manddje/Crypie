@@ -404,10 +404,15 @@ def test_backtest_reports_live_buy_signal_frequency():
         ],
         sell=[{"left": "rsi14", "op": ">", "right": 70}],
     )
-    summary = backtest(s, candles([100 + (i % 5) for i in range(100)]), 1000, 0).summary()
+    bars = candles([100 + (i % 5) for i in range(100)])
+    summary = backtest(s, bars, 1000, 0).summary()
     assert summary["warmup_candles"] == 15
     assert summary["live_buy_signal_pct"] == 100.0
-    assert summary["trades"] == 0  # the strict version never buys
+    # Like live: the hard condition alone buys, at half size because the soft filter fails.
+    assert summary["trades"] + summary["open_position"] >= 1
+    assert summary["half_size_trades"] >= 1
+    strict = backtest(s, bars, 1000, 0, soft_mode="strict").summary()
+    assert strict["trades"] == 0 and not strict["open_position"]  # the strict version never buys
 
 
 # -- F80: RSI on flat candles ---------------------------------------------------------------

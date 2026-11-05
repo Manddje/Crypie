@@ -409,7 +409,7 @@ def equity_curves(
         elif t < len(trades) and trades[t].entry_time == ts:
             holding = trades[t]
             t += 1
-            eur -= eur * position_size_pct / 100
+            eur -= eur * position_size_pct / 100 * holding.size_factor
             coin = holding.amount
         strategy_values.append(eur + coin * close)
         hold_values.append(result.start_eur * close / first_close if first_close else 0.0)

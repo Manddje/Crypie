@@ -1363,10 +1363,25 @@ async def _run_backtest(
     request: Request, client: BitvavoClient, strategy: Strategy, limit: int, start_eur: float
 ) -> dict:
     candles = await client.candles(strategy.market, strategy.interval, limit)
-    result = backtest(strategy, candles, start_eur, request.app.state.settings.backtest_fee_pct)
+    fee_pct = request.app.state.settings.backtest_fee_pct
+    result = backtest(strategy, candles, start_eur, fee_pct)
+    # The strict variant (soft filters as hard conditions) next to it, so the effect of the
+    # soft filters is visible: live the signal fires without them and the bot buys half.
+    strict = backtest(strategy, candles, start_eur, fee_pct, soft_mode="strict").summary()
     strategy_curve, hold_curve = equity_curves(candles, result, strategy.position_size_pct)
     return {
         **result.summary(),
+        "strict": {
+            k: strict[k]
+            for k in (
+                "final_eur",
+                "return_pct",
+                "max_drawdown_pct",
+                "trades",
+                "open_position",
+                "win_rate_pct",
+            )
+        },
         "market": strategy.market,
         "interval": strategy.interval,
         "first_time": int(candles[0][0]) if candles else None,
@@ -1386,6 +1401,8 @@ async def _run_backtest(
                 if (net := t.net_pnl_pct(result.fee_pct)) is not None
                 else None,
                 "reason": t.reason,
+                "size_pct": round(strategy.position_size_pct * t.size_factor, 1),
+                "soft_failed": t.soft_failed,
             }
             for t in result.trades[-20:]
         ],

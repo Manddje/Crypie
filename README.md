@@ -330,7 +330,11 @@ als de regels veranderen maar de omschrijving niet. De strategie geldt voor al j
   (ook het voorstel op Handelen).
 
 De backtest is long-only, rekent de kosten van Bitvavo mee (`BACKTEST_FEE_PCT`), vult stop-loss, trailing stop en
-take-profit op de drempelprijs en vergelijkt met kopen-en-houden. Hij toont ook **Koopsignaal live**: hoe
+take-profit op de drempelprijs en vergelijkt met kopen-en-houden. Hij rekent zoals de live bot: de harde
+koopvoorwaarden geven het signaal en bij een niet-gehaald zacht filter koopt hij met de halve inzet (dezelfde
+factor waarmee de code live zo'n order afkapt); `trade_log` noemt per trade `size_pct` en `soft_failed`.
+Het antwoord bevat onder `strict` dezelfde test met de zachte filters als harde voorwaarden, en de pagina toont
+die ernaast. Hij toont ook **Koopsignaal live**: hoe
 vaak de harde koopvoorwaarden alleen al zouden afgaan (`live_buy_signal_pct`). Boven ongeveer 20% waarschuwt
 de pagina.
 
@@ -509,7 +513,8 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    Een voorwaarde met `"soft": true` is een **zacht filter**: het signaal ontstaat ook als het niet geldt,
    Claude ziet dat in `signal_checks` en `soft_filters_failed` en koopt dan hoogstens de helft van
    `MAX_TRADE_EUR`. De standaardstrategie gebruikt dat voor de EMA200-trendfilter, zodat een RSI-dip in een
-   dalende markt wél aan Claude wordt voorgelegd. De backtest kent geen Claude en rekent zachte filters als hard.
+   dalende markt wél aan Claude wordt voorgelegd. De backtest kent geen Claude, maar volgt dezelfde mechaniek:
+   signaal op de harde voorwaarden, halve inzet als een zacht filter niet geldt.
    Elke cyclus komt per markt in het journaal: signaal, de uitkomst van iedere strategievoorwaarde met de
    echte waarden, nieuws, besluit en toelichting. De pagina's tonen dat met leesbare namen en eerst een
    samenvatting ("Afwachten · 1 van 2 koopvoorwaarden gehaald · 1 zacht filter niet gehaald"), dan de

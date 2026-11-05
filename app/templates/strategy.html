@@ -118,16 +118,19 @@
         {{ ui.stat("Rendement strategie", b.return_pct|pct, "netto, na kosten", b.return_pct|pnl_class(1) if not bt.no_trades else "") }}
         {{ ui.stat("Kopen en vasthouden", b.buy_hold_return_pct|pct, "koersverandering, ter vergelijking", b.buy_hold_return_pct|pnl_class(1)) }}
         {{ ui.stat("Grootste daling", b.max_drawdown_pct|pct(1, false), "van de hoogste naar de laagste stand van het testsaldo") }}
-        {{ ui.stat("Afgeronde trades", b.trades, "aankoop plus verkoop" ~ (" · nog 1 open" if b.open_position else "")) }}
+        {{ ui.stat("Afgeronde trades", b.trades, "aankoop plus verkoop" ~ (" · nog 1 open" if b.open_position else "") ~ ((" · " ~ b.half_size_trades ~ " op halve inzet") if b.half_size_trades else "")) }}
         {{ ui.stat("Winnende trades", (b.win_rate_pct|pct(0, false)) if b.win_rate_pct is not none else "–", (bt.wins ~ " van " ~ b.trades ~ " met netto winst") if b.trades else "nog geen afgeronde trades") }}
         {{ ui.stat("Signaal nu", b.latest.signal|nl, "op de laatste candle" ~ ((" · live koopsignaal op " ~ b.live_buy_signal_pct|pct(1, false) ~ " van de candles") if b.live_buy_signal_pct is not none else ""), "pos" if b.latest.signal == "buy" else ("neg" if b.latest.signal == "sell" else ""), "neg" if bt.loose else "") }}
       </div>
       {% if bt.no_trades %}{{ ui.notice("info", "Geen trades: niets getest. Test op meer candles (tot 1440), op een andere markt, of maak de koopregels ruimer.", live=false) }}
       {% elif bt.few_trades %}{{ ui.notice("warn", "Maar " ~ b.trades ~ (" afgeronde trade" if b.trades == 1 else " afgeronde trades") ~ " in deze periode: te weinig om op te bouwen. Eén trade meer of minder verandert de uitkomst sterk. Test op meer candles (tot 1440) of op een andere markt.", live=false) }}{% endif %}
-      {% if bt.loose %}{{ ui.notice("warn", "Live geven de harde koopvoorwaarden op " ~ b.live_buy_signal_pct|pct(1, false) ~ " van de candles een koopsignaal. Dat betekent bijna elke cyclus een Claude-aanroep en een aankoop die vooral op Claude's oordeel leunt; de backtest hierboven rekent strenger (met de zachte filters als harde voorwaarden).", live=false) }}{% endif %}
+      {% if bt.loose %}{{ ui.notice("warn", "Live geven de harde koopvoorwaarden op " ~ b.live_buy_signal_pct|pct(1, false) ~ " van de candles een koopsignaal. Dat betekent bijna elke cyclus een Claude-aanroep en een aankoop die vooral op Claude's oordeel leunt.", live=false) }}{% endif %}
       <details class="advanced">
         <summary>Hoe de backtest rekent</summary>
-        <p class="form-help">De backtest rekent zonder Claude en telt zachte filters daarom als harde voorwaarden. Live ontstaat het signaal ook als een zacht filter niet geldt; Claude weegt dat dan mee met het nieuws en koopt kleiner. Kosten zijn meegerekend ({{ b.fee_pct|num }}% per order), slippage niet. Een backtest zegt iets over het verleden, niet over de toekomst.</p>
+        <p class="form-help">De backtest rekent zoals de live bot: de harde koopvoorwaarden geven het signaal, en geldt een zacht filter niet, dan koopt hij met de halve inzet (live kapt de code zo'n order af op de helft van het maximum). Wat hij niet kan nabootsen is Claude's oordeel over het nieuws. Kosten zijn meegerekend ({{ b.fee_pct|num }}% per order), slippage niet. Een backtest zegt iets over het verleden, niet over de toekomst.</p>
+        {% if b.strict is defined and b.strict %}{% set st = b.strict %}
+        <p class="form-help">Met de zachte filters als harde voorwaarden (alleen kopen als álle filters gelden): <strong class="{{ st.return_pct|pnl_class(1) }}">{{ st.return_pct|pct }}</strong> rendement, {{ st.trades }} {{ "afgeronde trade" if st.trades == 1 else "afgeronde trades" }}{{ " (nog 1 open)" if st.open_position else "" }}, grootste daling {{ st.max_drawdown_pct|pct(1, false) }}.</p>
+        {% endif %}
       </details>
       <details class="advanced">
         <summary>Indicatorwaarden van de laatste candle</summary>
@@ -138,11 +141,12 @@
         <summary>Laatste {{ b.trade_log|length }} trades in de test</summary>
         {% call ui.table_wrap("Laatste trades in de test") %}
         <table class="table-stack">
-          <tr><th scope="col">Instap</th><th scope="col" class="num">Instapkoers</th><th scope="col">Uitstap</th><th scope="col" class="num">Uitstapkoers</th><th scope="col" class="num">Resultaat (netto)</th><th scope="col">Reden</th></tr>
+          <tr><th scope="col">Instap</th><th scope="col" class="num">Instapkoers</th><th scope="col" class="num">Inzet</th><th scope="col">Uitstap</th><th scope="col" class="num">Uitstapkoers</th><th scope="col" class="num">Resultaat (netto)</th><th scope="col">Reden</th></tr>
           {% for t in b.trade_log %}
           <tr>
             <td class="nowrap">{{ (t.entry_time // 1000)|int|ts }}</td>
             <td class="num">{{ t.entry_price|price_eur }}</td>
+            <td class="num">{% if t.size_pct is defined %}{{ t.size_pct|pct(0, false) }}{% if t.soft_failed %} <span class="muted" title="zacht filter niet gehaald: {{ t.soft_failed|join(', ') }}">(halve inzet)</span>{% endif %}{% else %}–{% endif %}</td>
             <td class="nowrap">{{ (t.exit_time // 1000)|int|ts if t.exit_time else "nog open" }}</td>
             <td class="num">{{ t.exit_price|price_eur if t.exit_price else "–" }}</td>
             {%- set net = t.net_pnl_pct if t.net_pnl_pct is defined else t.pnl_pct %}

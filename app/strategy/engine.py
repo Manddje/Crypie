@@ -20,6 +20,11 @@ from app.strategy.model import LOOKBACK_OPS, Condition, Strategy
 
 Candle = list[float]  # [timestamp_ms, open, high, low, close, volume]
 Signal = Literal["buy", "sell", "hold"]
+SoftMode = Literal["live", "strict"]
+
+# A buy with a soft filter that does not hold gets at most half the budget, live (the trading
+# engine caps the order at this share of the maximum) and in a "live" backtest alike.
+SOFT_FAIL_SIZE_FACTOR = 0.5
 
 
 def compute_series(strategy: Strategy, candles: list[Candle]) -> dict[str, Series]:
@@ -105,6 +110,25 @@ def hard_conditions(conditions: list[Condition]) -> list[Condition]:
     return hard or list(conditions)
 
 
+def soft_conditions(conditions: list[Condition]) -> list[Condition]:
+    """The soft filters, or none when every condition is soft (they then count as hard)."""
+    soft = [c for c in conditions if c.soft]
+    return soft if len(soft) < len(conditions) else []
+
+
+def condition_key(cond: Condition) -> str:
+    """Compact ``left op right`` for logs (the Dutch text lives in describe.py)."""
+    right = cond.right if isinstance(cond.right, str) else f"{cond.right:g}"
+    return f"{cond.left} {cond.op} {right}"
+
+
+def failed_soft(conditions: list[Condition], series: dict[str, Series], i: int) -> list[str]:
+    """Keys of the soft filters that do not hold on candle ``i``."""
+    return [
+        condition_key(c) for c in soft_conditions(conditions) if not check_condition(c, series, i)
+    ]
+
+
 def signal_at(
     strategy: Strategy,
     series: dict[str, Series],
@@ -114,8 +138,9 @@ def signal_at(
 ) -> Signal:
     """Strategy signal on candle ``i``.
 
-    Live, soft conditions do not block the signal (Claude weighs them). A backtest has no
-    Claude, so it passes ``soft_as_hard=True`` and simulates the strict version.
+    Live, soft conditions do not block the signal (Claude weighs them and buys smaller). A
+    backtest in "strict" mode passes ``soft_as_hard=True`` and simulates the version where
+    every soft filter must hold as well.
 
     With an open position (``has_position``) the sell side is checked first: a buy signal on
     the same candle must not hide the sell signal for the position that is already open.
@@ -165,6 +190,8 @@ class Trade:
     exit_price: float | None = None
     amount: float = 0.0
     reason: str = ""
+    size_factor: float = 1.0  # share of the normal position size (0.5 when a soft filter failed)
+    soft_failed: list[str] = field(default_factory=list)  # soft filters that did not hold at entry
 
     @property
     def pnl_pct(self) -> float | None:
@@ -193,6 +220,7 @@ class BacktestResult:
     fee_pct: float = 0.0
     warmup: int = 0
     live_buy_signal_pct: float | None = None
+    soft_mode: SoftMode = "live"
 
     @property
     def closed_trades(self) -> list[Trade]:
@@ -226,6 +254,8 @@ class BacktestResult:
             "live_buy_signal_pct": round(self.live_buy_signal_pct, 1)
             if self.live_buy_signal_pct is not None
             else None,
+            "soft_mode": self.soft_mode,
+            "half_size_trades": sum(1 for t in self.trades if t.size_factor < 1),
         }
 
 
@@ -234,10 +264,15 @@ def backtest(
     candles: list[Candle],
     start_eur: float = 1000.0,
     fee_pct: float = 0.25,
+    soft_mode: SoftMode = "live",
 ) -> BacktestResult:
     """Long-only backtest. Signals on bar i are executed at the close of bar i.
 
-    Soft conditions count as hard here: without Claude the strict rules are simulated.
+    ``soft_mode="live"`` (default) follows the live bot's mechanics: the hard conditions make
+    the signal, and a buy on which a soft filter does not hold gets ``SOFT_FAIL_SIZE_FACTOR``
+    of the normal position size (the trading engine caps such an order at half the maximum).
+    What it cannot replay is Claude's judgement on the news. ``soft_mode="strict"`` counts the
+    soft filters as hard conditions: the signal only fires when every filter holds.
 
     Stop-loss, trailing stop and take-profit are checked against the bar's low/high and filled
     at the threshold price; the trailing stop follows the highest high of earlier bars. Fees
@@ -245,10 +280,11 @@ def backtest(
     as live.
 
     ``live_buy_signal_pct`` in the result is how often the live buy signal (hard conditions
-    only) fired after the warm-up: the backtest itself trades the stricter version.
+    only) fired after the warm-up, in both modes.
     """
     if len(candles) < 2:
         raise ValueError("need at least 2 candles")
+    strict = soft_mode == "strict"
     series = compute_series(strategy, candles)
     fee = fee_pct / 100.0
     eur = start_eur
@@ -281,7 +317,7 @@ def backtest(
                     exit_price, reason = target, "take_profit"
             if (
                 exit_price is None
-                and signal_at(strategy, series, i, soft_as_hard=True, has_position=True) == "sell"
+                and signal_at(strategy, series, i, soft_as_hard=strict, has_position=True) == "sell"
             ):
                 exit_price, reason = close, "signal"
             if exit_price is not None:
@@ -290,12 +326,20 @@ def backtest(
                 open_trade.exit_time, open_trade.exit_price = int(ts), exit_price
                 open_trade.reason = reason
                 open_trade = None
-        elif signal_at(strategy, series, i, soft_as_hard=True) == "buy":
-            spend = eur * strategy.position_size_pct / 100
+        elif signal_at(strategy, series, i, soft_as_hard=strict) == "buy":
+            soft_failed = [] if strict else failed_soft(strategy.buy, series, i)
+            size_factor = SOFT_FAIL_SIZE_FACTOR if soft_failed else 1.0
+            spend = eur * strategy.position_size_pct / 100 * size_factor
             if spend > 0:
                 coin = spend * (1 - fee) / close
                 eur -= spend
-                open_trade = Trade(entry_time=int(ts), entry_price=close, amount=coin)
+                open_trade = Trade(
+                    entry_time=int(ts),
+                    entry_price=close,
+                    amount=coin,
+                    size_factor=size_factor,
+                    soft_failed=soft_failed,
+                )
                 trades.append(open_trade)
                 peak_price = close
 
@@ -316,4 +360,5 @@ def backtest(
         fee_pct=fee_pct,
         warmup=strategy.warmup(),
         live_buy_signal_pct=buy_signal_pct(strategy, series, strategy.warmup()),
+        soft_mode=soft_mode,
     )

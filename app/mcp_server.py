@@ -643,7 +643,10 @@ TOOLS: tuple[Tool, ...] = (
         "backtest",
         "Backtest",
         "Test een strategie (of de actieve) op recente candles: rendement, drawdown, trades, "
-        "netto na kosten, tegenover kopen-en-houden.",
+        "netto na kosten, tegenover kopen-en-houden. Rekent zoals de live bot: harde "
+        "voorwaarden geven het signaal, bij een niet-gehaald zacht filter de halve inzet "
+        "(trade_log noemt per trade size_pct en soft_failed). `strict` ernaast: dezelfde test "
+        "met de zachte filters als harde voorwaarden.",
         "POST",
         "/api/backtest",
         BacktestIn,

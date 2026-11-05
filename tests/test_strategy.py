@@ -2,7 +2,13 @@ import pytest
 from pydantic import ValidationError
 
 from app.strategy.describe import explain_signal, signal_reason_nl
-from app.strategy.engine import backtest, compute_series, latest_snapshot, signal_at
+from app.strategy.engine import (
+    SOFT_FAIL_SIZE_FACTOR,
+    backtest,
+    compute_series,
+    latest_snapshot,
+    signal_at,
+)
 from app.strategy.model import DEFAULT_STRATEGY, Strategy
 
 
@@ -112,25 +118,49 @@ def test_backtest_needs_candles():
         backtest(crossover_strategy(), make_candles([1]))
 
 
-def test_soft_condition_does_not_block_the_live_signal_but_does_in_backtest():
-    closes = [10, 9, 8, 7, 6, 9, 12, 15, 18, 15, 12, 9, 6, 5]
-    candles = make_candles(closes)
-    strict = crossover_strategy()
-    # A trend filter nothing in this series satisfies: close above a very high constant.
-    soft = Strategy.model_validate(
+def _with_soft_filter(strict: Strategy, right: float) -> Strategy:
+    """``strict`` plus a soft trend filter: close above ``right``."""
+    return Strategy.model_validate(
         {
             **strict.model_dump(),
             "buy": [
                 *(c.model_dump() for c in strict.buy),
-                {"left": "close", "op": ">", "right": 1000, "soft": True},
+                {"left": "close", "op": ">", "right": right, "soft": True},
             ],
         }
     )
+
+
+def test_soft_condition_does_not_block_the_signal_but_halves_the_backtest_position():
+    closes = [10, 9, 8, 7, 6, 9, 12, 15, 18, 15, 12, 9, 6, 5]
+    candles = make_candles(closes)
+    strict = crossover_strategy()
+    # A trend filter nothing in this series satisfies: close above a very high constant.
+    soft = _with_soft_filter(strict, 1000)
     series = compute_series(soft, candles)
     live = [signal_at(soft, series, i) for i in range(len(closes))]
     strict_signals = [signal_at(soft, series, i, soft_as_hard=True) for i in range(len(closes))]
     assert "buy" in live and "buy" not in strict_signals
-    assert backtest(soft, candles, fee_pct=0.0).summary()["trades"] == 0
+
+    # Like the live bot: the signal fires on the hard condition, the buy gets half the size.
+    plain = backtest(strict, candles, fee_pct=0.0)
+    halved = backtest(soft, candles, fee_pct=0.0)
+    assert len(halved.trades) == len(plain.trades) >= 1
+    assert all(t.size_factor == SOFT_FAIL_SIZE_FACTOR for t in halved.trades)
+    assert halved.trades[0].soft_failed == ["close > 1000"]
+    assert halved.trades[0].amount == pytest.approx(plain.trades[0].amount / 2)
+    assert halved.return_pct == pytest.approx(plain.return_pct / 2)
+    assert halved.summary()["soft_mode"] == "live"
+    assert halved.summary()["half_size_trades"] == len(halved.trades)
+
+    # The strict variant counts the filter as a hard condition: no trade at all.
+    strict_result = backtest(soft, candles, fee_pct=0.0, soft_mode="strict")
+    assert strict_result.summary()["trades"] == 0 and strict_result.soft_mode == "strict"
+
+    # A soft filter that holds changes nothing.
+    held = backtest(_with_soft_filter(strict, 0), candles, fee_pct=0.0)
+    assert [t.size_factor for t in held.trades] == [1.0] * len(plain.trades)
+    assert held.return_pct == pytest.approx(plain.return_pct)
 
     i = live.index("buy")
     checks = explain_signal(soft, series, i)

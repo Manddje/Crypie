@@ -31,7 +31,7 @@ from app.bitvavo.client import BitvavoClient, BitvavoError
 from app.db import Decision, Evaluation, NewsItem, Order, Position, Setting
 from app.news.service import load_market_mood, market_sentiment, outlet_of
 from app.strategy.describe import ConditionCheck, explain_signal, levels_summary, signal_reason_nl
-from app.strategy.engine import backtest, compute_series, signal_at
+from app.strategy.engine import SOFT_FAIL_SIZE_FACTOR, backtest, compute_series, signal_at
 from app.strategy.model import LOOKBACK_OPS, Strategy
 from app.strategy.store import load_strategy, load_strategy_checked
 from app.trading import risk
@@ -56,7 +56,8 @@ def plain_number(value: float) -> str:
 # (smaller) position, a strongly negative one can close it. Scores run from -1 to 1.
 NEWS_ENTRY_MIN_SCORE = 0.4
 NEWS_EXIT_MAX_SCORE = -0.3
-NEWS_ENTRY_SIZE_FACTOR = 0.5  # also used when a soft strategy filter does not hold
+# Also used when a soft strategy filter does not hold; the backtest applies the same factor.
+NEWS_ENTRY_SIZE_FACTOR = SOFT_FAIL_SIZE_FACTOR
 # News alone only counts when the news fact is reported by this many different outlets.
 NEWS_MIN_SOURCES = 2
 NEWS_HIGH_IMPACT = 2

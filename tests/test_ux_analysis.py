@@ -803,3 +803,20 @@ def test_equity_curve_rebuilds_the_backtest():
     assert hold[-1] == pytest.approx(1000 * (1 + result.buy_hold_return_pct / 100), rel=1e-9)
     curve = curve_svg(values, hold)
     assert len(curve["strategy"].split()) == 160 and curve["low"] <= min(values)
+
+    # With a soft filter that never holds every buy is halved; the curve still ends where the
+    # backtest ends.
+    soft = Strategy.model_validate(
+        {
+            **strategy.model_dump(),
+            "buy": [
+                *(c.model_dump() for c in strategy.buy),
+                {"left": "close", "op": ">", "right": 1e9, "soft": True},
+            ],
+        }
+    )
+    halved = backtest(soft, candles, 1000.0, 0.25)
+    assert len(halved.closed_trades) == len(result.closed_trades)
+    assert {t.size_factor for t in halved.trades} == {0.5}
+    values, _ = equity_curves(candles, halved, soft.position_size_pct)
+    assert values[-1] == pytest.approx(halved.final_eur, rel=1e-9)
