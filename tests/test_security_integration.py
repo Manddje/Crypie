@@ -20,7 +20,7 @@ from sqlalchemy.orm import sessionmaker
 from app import settings_store as cfg
 from app.db import Base, NewsItem, Order, SessionLocal, Setting, init_db, make_engine
 from app.main import app
-from app.news.service import MARKET_MOOD_KEY
+from app.news.service import ETF_FLOWS_KEY_PREFIX, MARKET_MOOD_KEY
 from app.strategy.store import STRATEGY_KEY
 from app.trading import risk
 from app.trading.engine import EvaluationBusy, news_sources
@@ -295,6 +295,17 @@ async def test_disabling_fear_greed_drops_the_stored_value(api):
         assert s.get(Setting, MARKET_MOOD_KEY) is None
 
 
+async def test_disabling_etf_flows_drops_the_stored_values(api):
+    with SessionLocal() as s:
+        s.merge(Setting(key=ETF_FLOWS_KEY_PREFIX + "BTC", value='{"coin": "BTC"}'))
+        s.commit()
+    r = await api.put("/api/settings", json={"etf_flows_enabled": False})
+    assert r.status_code == 200, r.text
+    with SessionLocal() as s:
+        assert s.get(Setting, ETF_FLOWS_KEY_PREFIX + "BTC") is None
+    assert (await api.get("/api/news/etf-flows")).json() == {}
+
+
 # -- deployment: settings added by the packages reach the container -----------------------------
 
 ROOT = TEMPLATES.parent.parent
@@ -315,6 +326,8 @@ ROOT = TEMPLATES.parent.parent
         "NOTIFY_TOKEN",
         "NOTIFY_FORMAT",
         "NOTIFY_EXIT_FAIL_MIN",
+        "ETF_FLOWS_ENABLED",
+        "COINGLASS_API_KEY",
     ],
 )
 def test_new_settings_are_passed_through_compose_and_documented(var):

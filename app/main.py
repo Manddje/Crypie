@@ -66,18 +66,21 @@ from app.labels import limit_pct
 from app.mcp_server import router as mcp_router
 from app.news.registry import backfill_events
 from app.news.service import (
+    ETF_FLOW_NL,
     FEAR_GREED_NL,
     NEWS_RETENTION_DAYS,
     SENTIMENT_WINDOW_H,
     NewsService,
     annotate_groups,
     clamp_future_items,
+    clear_etf_flows,
     clear_market_mood,
     count_items,
     count_status,
     event_key_for,
     fact_anchor,
     group_items,
+    load_all_etf_flows,
     load_market_mood,
     market_sentiment,
     recent_items,
@@ -294,6 +297,7 @@ def apply_settings(app: FastAPI, new: Settings) -> None:
     engine.watch_max_min = new.watch_max_min
     engine.trend_context = new.trend_context_enabled
     engine.market_mood_enabled = new.fear_greed_enabled
+    engine.etf_flows_enabled = new.etf_flows_enabled
     engine.live_capital_eur = new.live_capital_eur
     _apply_risk_off(engine, new)
     if new.watch_interval_min <= 0:
@@ -317,6 +321,7 @@ def apply_settings(app: FastAPI, new: Settings) -> None:
     fetcher.cryptocv_enabled = new.cryptocv_enabled
     fetcher.google_news_enabled = new.google_news_enabled
     fetcher.fear_greed_enabled = new.fear_greed_enabled
+    fetcher.etf_flows_enabled = new.etf_flows_enabled
 
 
 def _apply_risk_off(engine: TradingEngine, settings: Settings) -> None:
@@ -407,6 +412,8 @@ async def lifespan(app: FastAPI):
         cryptocv_enabled=settings.cryptocv_enabled,
         google_news_enabled=settings.google_news_enabled,
         fear_greed_enabled=settings.fear_greed_enabled,
+        coinglass_api_key=settings.coinglass_api_key,
+        etf_flows_enabled=settings.etf_flows_enabled,
     )
     app.state.news = NewsService(
         fetcher,
@@ -440,6 +447,7 @@ async def lifespan(app: FastAPI):
     engine: TradingEngine = app.state.engine
     engine.trend_context = settings.trend_context_enabled
     engine.market_mood_enabled = settings.fear_greed_enabled
+    engine.etf_flows_enabled = settings.etf_flows_enabled
     engine.live_capital_eur = settings.live_capital_eur
     engine.broker_for_mode = lambda mode: exit_broker(app, mode)
     _apply_risk_off(engine, settings)
@@ -1860,6 +1868,18 @@ async def news_sentiment(
     }
 
 
+@app.get("/api/news/etf-flows")
+async def news_etf_flows(request: Request, session: Session = Depends(get_session)):
+    """Daily net flows of the US spot ETFs per configured coin that has them (CoinGlass).
+
+    A coin maps to null when nothing (fresh) is stored; coins without ETFs are left out.
+    """
+    settings: Settings = request.app.state.settings
+    if not settings.etf_flows_enabled:
+        return {}
+    return load_all_etf_flows(session, settings.coins)
+
+
 # The news page groups every article of the chosen period (no silent cap): 30 news facts per
 # page, counted over the whole period. Only a period with more articles than this is cut, and
 # the page then says so.
@@ -1985,6 +2005,11 @@ async def news_page(
             "sentiment_hours": SENTIMENT_WINDOW_H,
             "market_mood": load_market_mood(session) if settings.fear_greed_enabled else None,
             "fear_greed_nl": FEAR_GREED_NL,
+            "etf_flows": load_all_etf_flows(session, settings.coins)
+            if settings.etf_flows_enabled
+            else {},
+            "etf_flows_key": bool(settings.coinglass_api_key),
+            "etf_flow_nl": ETF_FLOW_NL,
             "last_run": news.last_run,
             "last_error": news.last_error,
             "assessing": news.analyst.available,
@@ -3431,9 +3456,12 @@ def _sensitive_changes(session: Session, state, candidate: Settings) -> list[str
 
 
 def _drop_disabled_mood(session: Session, settings: Settings) -> None:
-    """With the Fear & Greed feed off, Claude must not keep getting its last stored value."""
+    """With the Fear & Greed feed or the ETF flows off, Claude must not keep getting the last
+    stored value."""
     if not settings.fear_greed_enabled:
         clear_market_mood(session)
+    if not settings.etf_flows_enabled:
+        clear_etf_flows(session)
 
 
 def _log_setting_changes(old: Settings, new: Settings) -> None:
@@ -3780,6 +3808,12 @@ def _settings_context(
     if plan is not None and not env.cryptopanic_token:
         plan["dep_off"] = True
         plan["depends_text"] = "Geldt alleen met een CryptoPanic-token op de server; nu is er geen."
+    flows = fields_by_key.get("etf_flows_enabled")
+    if flows is not None and not env.coinglass_api_key:
+        flows["dep_off"] = True
+        flows["depends_text"] = (
+            "Geldt alleen met een CoinGlass-sleutel op de server; nu is er geen."
+        )
     for group in payload["groups"]:
         group["changed"] = [f for f in group["fields"] if f["overridden"]]
         group["resettable"] = [f for f in group["changed"] if f["key"] != "trading_mode"]
@@ -3840,6 +3874,7 @@ def _settings_context(
             "bitvavo_key": env.has_bitvavo_credentials,
             "anthropic_key": bool(env.anthropic_api_key),
             "cryptopanic_token": bool(env.cryptopanic_token),
+            "coinglass_key": bool(env.coinglass_api_key),
             "live_ack": env.live_trading_ack,
             "auth": env.auth_enabled,
             "database": env.database_url.split(":", 1)[0],

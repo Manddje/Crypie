@@ -24,12 +24,14 @@ from app.ai.news_analyst import NewsAnalyst, apply_assessments, normalize_key
 from app.db import NewsItem, Setting
 from app.news.registry import register_items
 from app.news.sources import (
+    ETF_ASSETS,
     MAX_VOTES_JSON,
     NewsFetcher,
     RawItem,
     aware,
     clean_tickers,
     describe_error,
+    etf_flow_label,
     fear_greed_label,
     published_at,
     safe_url,
@@ -263,6 +265,84 @@ def load_market_mood_previous(session: Session, now: datetime | None = None) -> 
         return None
     value = int(min(max(round(raw), 0), 100))
     return {"value": value, "label": fear_greed_label(value), "at": prev["at"]}
+
+
+ETF_FLOWS_KEY_PREFIX = "etf_flows:"
+# Flows are published once per US trading day; Friday's figure must still count on Monday
+# (a long weekend included), and a value older than that says nothing about now.
+ETF_FLOWS_MAX_AGE = timedelta(days=5)
+
+# The labels of parse_etf_flows, as the news page says them (stored and in the API in English,
+# like the Fear & Greed label).
+ETF_FLOW_NL = {
+    "strong_inflow": "sterke instroom",
+    "inflow": "instroom",
+    "mixed": "gemengd",
+    "outflow": "uitstroom",
+    "strong_outflow": "sterke uitstroom",
+    "unknown": "onbekend",
+}
+
+
+def save_etf_flows(session: Session, flows: dict) -> None:
+    """Store the ETF-flow summary of one coin (``flows["coin"]``), replacing the previous one."""
+    key = ETF_FLOWS_KEY_PREFIX + str(flows["coin"]).upper()
+    row = session.get(Setting, key)
+    payload = json.dumps(flows)
+    if row is None:
+        session.add(Setting(key=key, value=payload))
+    else:
+        row.value = payload
+        row.updated_at = datetime.now(UTC)
+    session.commit()
+
+
+def clear_etf_flows(session: Session, coins: list[str] | None = None) -> None:
+    """Forget the stored flows of ``coins`` (None: every coin)."""
+    rows = session.execute(
+        select(Setting).where(Setting.key.like(ETF_FLOWS_KEY_PREFIX + "%"))
+    ).scalars()
+    wanted = None if coins is None else {c.upper() for c in coins}
+    for row in rows:
+        if wanted is None or row.key[len(ETF_FLOWS_KEY_PREFIX) :] in wanted:
+            session.delete(row)
+    session.commit()
+
+
+def load_etf_flows(session: Session, coin: str, now: datetime | None = None) -> dict | None:
+    """The stored ETF-flow summary of ``coin``, or None when there is none, it is unreadable
+    or its last trading day is more than ETF_FLOWS_MAX_AGE ago. The label is derived again
+    from the figures, never trusted from the store."""
+    row = session.get(Setting, ETF_FLOWS_KEY_PREFIX + coin.upper())
+    if row is None:
+        return None
+    try:
+        data = json.loads(row.value)
+        as_of = datetime.fromisoformat(str(data["as_of"])).replace(tzinfo=UTC)
+        sum_recent = float(data["sum_5d_musd"])
+        typical = float(data["typical_day_musd"])
+        days = int(data.get("days") or 0)
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return None
+    if not (math.isfinite(sum_recent) and math.isfinite(typical)):
+        return None
+    now = now or datetime.now(UTC)
+    if now - as_of > ETF_FLOWS_MAX_AGE:
+        return None
+    data["label"] = etf_flow_label(sum_recent, typical, min(days, 5))
+    data["label_nl"] = ETF_FLOW_NL[data["label"]]
+    data["note"] = (
+        "dagelijkse nettostroom van de Amerikaanse spot-ETF's in miljoenen USD (positief = "
+        "geld erin); context, geen signaal"
+    )
+    return data
+
+
+def load_all_etf_flows(
+    session: Session, coins: list[str], now: datetime | None = None
+) -> dict[str, dict | None]:
+    """Per coin with an ETF: its stored summary (or None); coins without an ETF are left out."""
+    return {c: load_etf_flows(session, c, now) for c in coins if c.upper() in ETF_ASSETS}
 
 
 # alternative.me's bands, as the news page says them (the stored label stays English: Claude
@@ -860,6 +940,19 @@ class NewsService:
             except Exception:  # noqa: BLE001
                 session.rollback()
                 log.exception("Fear & Greed update failed")
+        fetch_flows = getattr(self.fetcher, "fetch_etf_flows", None)
+        if fetch_flows is not None:
+            try:
+                flows = await fetch_flows()
+                if not flows:  # switched off or no key: nothing stale for Claude
+                    clear_etf_flows(session)
+                for summary in flows.values():
+                    if summary:
+                        save_etf_flows(session, summary)
+                    # A failed coin keeps its stored value until load_etf_flows finds it old.
+            except Exception:  # noqa: BLE001
+                session.rollback()
+                log.exception("ETF flows update failed")
         assessed = 0
         scored: list[NewsItem] = []
         since = now - timedelta(hours=self.max_age_hours)

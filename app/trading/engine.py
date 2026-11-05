@@ -29,7 +29,7 @@ from app.ai.evaluator import Evaluator
 from app.bitvavo.broker import Broker, OrderUncertain
 from app.bitvavo.client import BitvavoClient, BitvavoError
 from app.db import Decision, Evaluation, NewsItem, Order, Position, Setting
-from app.news.service import load_market_mood, market_sentiment, outlet_of
+from app.news.service import load_etf_flows, load_market_mood, market_sentiment, outlet_of
 from app.strategy.describe import ConditionCheck, explain_signal, levels_summary, signal_reason_nl
 from app.strategy.engine import SOFT_FAIL_SIZE_FACTOR, backtest, compute_series, signal_at
 from app.strategy.model import LOOKBACK_OPS, Strategy
@@ -380,6 +380,7 @@ class TradingEngine:
         self.fee_pct = fee_pct  # per side; what a round trip must beat to break even is 2x
         self.trend_context = True  # pass the long-term trend (PlanB-style) to Claude
         self.market_mood_enabled = True  # FEAR_GREED_ENABLED: pass the stored index to Claude
+        self.etf_flows_enabled = True  # ETF_FLOWS_ENABLED: pass the stored ETF flows to Claude
         # Live only: EUR the bot manages (0 = the whole account), see portfolio().
         self.live_capital_eur = 0.0
         # Risk-off: no new buys around calendar events and after a news shock.
@@ -1369,6 +1370,10 @@ class TradingEngine:
             # Fear & Greed index, market-wide; nothing once the feed is switched off.
             "market_mood": load_market_mood(session) if self.market_mood_enabled else None,
             "long_term_trend": load_trend(session, market) if self.trend_context else None,
+            # Net flows of the US spot ETFs of this coin; None for a coin without ETFs.
+            "etf_flows": load_etf_flows(session, market.split("-")[0])
+            if self.etf_flows_enabled
+            else None,
             "market_events": self.events_context(session, market, datetime.now(UTC)),
             "position": None
             if position is None

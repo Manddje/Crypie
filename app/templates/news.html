@@ -4,6 +4,8 @@
 {# '+0,60' / '-0,32' / '0,00': a sentiment score with its sign. #}
 {% macro signed(x) %}{{ "+" if x > 0.005 else "" }}{{ x|num }}{% endmacro %}
 {# Width class for a score bar: 0-50 % of the bar in steps of 5. #}
+{# '+123,4' / '-56,0': millions of dollars with the sign of the flow. #}
+{% macro musd(x) %}{{ "+" if x > 0.05 else "" }}{{ x|num(1) }}{% endmacro %}
 {% macro bar_width(pct) %}w-{{ ((pct / 5)|round|int * 5) if pct < 50 else 50 }}{% endmacro %}
 {% macro external(url, text, lang=none, cls="") -%}
 <a{% if cls %} class="{{ cls }}"{% endif %} href="{{ url }}" target="_blank" rel="noopener noreferrer"{% if lang and lang != "nl" %} lang="{{ lang }}"{% endif %}>{{ text }}<span class="visually-hidden"> (opent in nieuw tabblad)</span>{{ ui.icon("external", "ext-icon") }}</a>
@@ -26,7 +28,7 @@
     <p>Claude beoordeelt per bericht of het de koers raakt, hoe sterk (impact klein, middel of groot) en hoe lang (uren, dagen of weken). De bot weegt dat mee bij elke beslissing.</p>
     <p>Het sentiment rekent altijd met de laatste {{ sentiment_hours }} uur, wat je hieronder ook kiest. Berichten over hetzelfde nieuwsfeit staan bij elkaar: het sentiment is dan het gemiddelde van die bronnen (één stem per bron), de impact de hoogste. Meldt maar één bron een feit, dan telt het hooguit als impact middel, en marktbreed nieuws telt pas mee als een tweede bron het meldt.</p>
     <p>Bij elk nieuwsfeit staat of het nu meetelt voor jouw coins en zo niet, waarom: niet beoordeeld, niet koersrelevant, ouder dan {{ sentiment_hours }} uur, over andere coins, of impact 0.</p>
-    <p>Bronnen: {{ settings.news_rss_feeds|length }} RSS-feeds{% if settings.gdelt_enabled %}, GDELT (wereldnieuws){% endif %}{% if settings.cryptopanic_token %}, CryptoPanic{% endif %}{% if settings.fear_greed_enabled %}, en de Fear &amp; Greed-index van alternative.me{% endif %}.</p>
+    <p>Bronnen: {{ settings.news_rss_feeds|length }} RSS-feeds{% if settings.gdelt_enabled %}, GDELT (wereldnieuws){% endif %}{% if settings.cryptopanic_token %}, CryptoPanic{% endif %}{% if settings.fear_greed_enabled %}, de Fear &amp; Greed-index van alternative.me{% endif %}{% if settings.etf_flows_enabled and etf_flows_key %}, en de ETF-stromen van CoinGlass{% endif %}.</p>
   </details>
   </div>
 </div>
@@ -109,6 +111,50 @@
     </details>
     {% endif %}
   </section>
+
+  {% if settings.etf_flows_enabled and (etf_flows or not etf_flows_key) %}
+  {#- Net flows of the US spot ETFs per coin that has them: context for Claude, like Fear &
+      Greed. A fetch that is off or failing shows nothing stale: the figures carry their own
+      date, and load_etf_flows drops them after 5 days. -#}
+  <section class="news-sentiment" aria-labelledby="etf-title">
+    <div class="news-section-head">
+      <h2 id="etf-title">ETF-stromen</h2>
+      <span class="card-meta">Amerikaanse spot-ETF's · nettostroom per handelsdag, in miljoenen dollars</span>
+    </div>
+    {% if not etf_flows_key %}
+    {% call ui.notice("info", "ETF-stromen staan aan, maar er is geen CoinGlass-sleutel op de server: zonder sleutel worden ze niet opgehaald. Een gratis Hobbyist-sleutel volstaat.", live=false) %}
+    <span class="mono">COINGLASS_API_KEY</span>
+    {% endcall %}
+    {% else %}
+    <div class="grid">
+      {% for coin, f in etf_flows.items() %}
+      <section class="card news-coin" aria-labelledby="etf-{{ coin }}">
+        <div class="card-header">
+          <h3 class="card-title" id="etf-{{ coin }}">{{ coin }}</h3>
+          {% if f %}<span class="pill {{ 'pill-green' if f.label in ('inflow', 'strong_inflow') else ('pill-red' if f.label in ('outflow', 'strong_outflow') else '') }}">{{ etf_flow_nl.get(f.label, f.label) }}</span>{% else %}<span class="pill">geen gegevens</span>{% endif %}
+        </div>
+        {% if f %}
+        {% set scale = [f.typical_day_musd * 5, 1]|max %}
+        <div class="score-bar" aria-hidden="true">
+          {% if f.sum_5d_musd > 0 %}<div class="fill pos {{ bar_width([f.sum_5d_musd / scale, 1]|min * 50) }}"></div>
+          {% elif f.sum_5d_musd < 0 %}<div class="fill neg {{ bar_width([-f.sum_5d_musd / scale, 1]|min * 50) }}"></div>{% endif %}
+        </div>
+        <p class="small muted">Laatste dag {{ musd(f.last_day_musd) }} · 5 dagen {{ musd(f.sum_5d_musd) }} · 30 dagen {{ musd(f.sum_30d_musd) }} mln{% if f.streak_days|abs > 1 %} · {{ f.streak_days|abs }} dagen op rij {{ "instroom" if f.streak_days > 0 else "uitstroom" }}{% endif %}</p>
+        {% if f.last_day_funds %}
+        <p class="small muted">Grootste op {{ f.as_of }}: {% for fund in f.last_day_funds[:3] %}{{ fund.ticker }} {{ musd(fund.flow_musd) }}{{ ", " if not loop.last }}{% endfor %}</p>
+        {% else %}
+        <p class="small muted">Stand van {{ f.as_of }}.</p>
+        {% endif %}
+        {% else %}
+        <p class="small muted">Nog niet opgehaald, of de laatste cijfers zijn ouder dan 5 dagen.</p>
+        {% endif %}
+      </section>
+      {% endfor %}
+    </div>
+    <p class="small muted">Bron: CoinGlass, één keer per uur opgehaald; nieuwe cijfers komen na het slot van de Amerikaanse beurs. Context voor Claude, geen koop- of verkoopsignaal.</p>
+    {% endif %}
+  </section>
+  {% endif %}
 
   <section class="card" id="berichten" aria-labelledby="berichten-title">
     {{ ui.card_header("Berichten", 2, meta=(n_total ~ (" nieuwsfeit" if n_total == 1 else " nieuwsfeiten") ~ " uit " ~ n_articles ~ (" bericht" if n_articles == 1 else " berichten") ~ " · laatste " ~ (hours ~ " uur" if hours != 72 else "3 dagen")), id="berichten-title") }}

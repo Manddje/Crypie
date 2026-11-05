@@ -8,6 +8,7 @@ from app.ai.decision_maker import DecisionMaker, TradeDecision
 from app.ai.evaluator import EvaluationResult, Evaluator
 from app.bitvavo.broker import PaperBroker
 from app.db import Base, Decision, NewsItem, Order, Position, make_engine
+from app.news.service import save_etf_flows
 from app.strategy.model import Strategy
 from app.strategy.store import save_strategy
 from app.trading import risk
@@ -692,6 +693,31 @@ async def test_long_term_trend_reaches_claude_when_enabled(session):
     engine.trend_context = False
     await engine.run_cycle(session)
     assert decider.contexts[1]["long_term_trend"] is None
+
+
+async def test_etf_flows_reach_claude_when_enabled(session):
+    save_etf_flows(
+        session,
+        {
+            "coin": "BTC",
+            "as_of": datetime.now(UTC).date().isoformat(),
+            "sum_5d_musd": -300.0,
+            "typical_day_musd": 40.0,
+            "days": 5,
+            "last_day_musd": -100.0,
+        },
+    )
+    decider = FakeDecider(
+        TradeDecision(action="hold", confidence=0.5, amount_quote=0, reasoning_nl="Wacht.")
+    )
+    engine = make_engine_(session, {"BTC-EUR": candles(BUY_SERIES)}, {"BTC-EUR": 12.0}, decider)
+    await engine.run_cycle(session)
+    flows = decider.contexts[0]["etf_flows"]
+    assert flows["label"] == "strong_outflow" and flows["sum_5d_musd"] == -300.0
+
+    engine.etf_flows_enabled = False
+    await engine.run_cycle(session)
+    assert decider.contexts[1]["etf_flows"] is None
 
 
 async def test_risk_off_window_blocks_buys_without_asking_claude(session):

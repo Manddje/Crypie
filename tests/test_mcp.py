@@ -63,7 +63,7 @@ def test_token_helpers():
 
 def test_every_tool_is_consistent():
     names = [t.name for t in TOOLS]
-    assert len(names) == len(set(names)) == 33
+    assert len(names) == len(set(names)) == 34
     for tool in TOOLS:
         assert tool.read_only == (tool.method == "GET"), tool.name
         assert tool.description and tool.title

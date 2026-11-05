@@ -36,14 +36,17 @@ from app.ai.news_analyst import (
 from app.db import Base, ClaudeUsage, NewsItem, Setting, make_engine
 from app.news import sources
 from app.news.service import (
+    ETF_FLOWS_KEY_PREFIX,
     MARKET_MOOD_KEY,
     NewsService,
     clamp_future_items,
     group_items,
+    load_etf_flows,
     load_market_mood,
     market_sentiment,
     pending_items,
     prune_old_news,
+    save_etf_flows,
     save_market_mood,
     store_items,
 )
@@ -70,6 +73,7 @@ def session():
         s.execute(delete(NewsItem))
         s.execute(delete(ClaudeUsage))
         s.execute(delete(Setting).where(Setting.key == MARKET_MOOD_KEY))
+        s.execute(delete(Setting).where(Setting.key.like(ETF_FLOWS_KEY_PREFIX + "%")))
         s.commit()
 
     with sessionmaker(bind=engine, expire_on_commit=False)() as s:
@@ -268,6 +272,44 @@ async def test_cryptopanic_token_never_logged(caplog):
     assert "CryptoPanic fetch failed" in caplog.text
     assert "tok-secret-123" not in caplog.text
     assert "auth_token=***" in sources.redact("https://x/?auth_token=abc&public=true")
+
+
+async def test_coinglass_key_never_logged(caplog):
+    import app.main  # noqa: F401  # configures the httpx loggers
+
+    def handler(request):
+        assert request.headers["CG-API-KEY"] == "cg-secret-123"
+        return httpx.Response(500, request=request)
+
+    f = fetcher_with(handler, coinglass_api_key="cg-secret-123")
+    f.coins = ["BTC"]
+    caplog.set_level(logging.DEBUG)
+    try:
+        assert await f.fetch_etf_flows() == {"BTC": None}
+    finally:
+        await f.aclose()
+    assert "ETF flows for BTC failed" in caplog.text
+    assert "cg-secret-123" not in caplog.text
+
+
+async def test_etf_flow_key_does_not_follow_a_redirect(caplog):
+    """A redirect to another host must not take the CoinGlass key along."""
+    seen = {}
+
+    def handler(request):
+        seen[str(request.url.host)] = request.headers.get("CG-API-KEY")
+        if request.url.host == "open-api-v4.coinglass.com":
+            return httpx.Response(302, headers={"location": "https://evil.example/x"})
+        return httpx.Response(200, json={"code": "0", "data": []})
+
+    f = fetcher_with(handler, coinglass_api_key="cg-secret-123")
+    f.coins = ["BTC"]
+    try:
+        await f.fetch_etf_flows()
+    finally:
+        await f.aclose()
+    assert seen["open-api-v4.coinglass.com"] == "cg-secret-123"
+    assert seen["evil.example"] is None
 
 
 # -- F61: linear tag stripping ---------------------------------------------------------------
@@ -725,6 +767,83 @@ async def test_failed_or_disabled_fear_greed_clears_the_value(session):
         f.fear_greed_enabled = False
         await service.refresh(session)
         assert session.get(Setting, MARKET_MOOD_KEY) is None
+    finally:
+        await f.aclose()
+
+
+def _flows(coin="BTC", as_of=None, sum_5d=200.0, typical=50.0, days=5):
+    as_of = as_of or datetime.now(UTC).date().isoformat()
+    return {
+        "coin": coin,
+        "as_of": as_of,
+        "last_day_musd": 80.0,
+        "last_day_funds": [],
+        "sum_5d_musd": sum_5d,
+        "sum_30d_musd": 300.0,
+        "typical_day_musd": typical,
+        "streak_days": 2,
+        "days": days,
+        "label": "whatever the store says",
+        "daily": [],
+        "price_usd": 1.0,
+        "source": "coinglass",
+    }
+
+
+def test_etf_flows_are_dropped_when_old_and_relabelled_from_the_figures(session):
+    save_etf_flows(session, _flows())
+    loaded = load_etf_flows(session, "btc")
+    assert loaded["label"] == "strong_inflow" and loaded["label_nl"] == "sterke instroom"
+    assert "note" in loaded and loaded["sum_5d_musd"] == 200.0
+
+    # Friday's figure still counts on Monday (and a long weekend), not a week later.
+    friday = (datetime.now(UTC) - timedelta(days=4)).date().isoformat()
+    save_etf_flows(session, _flows(as_of=friday))
+    assert load_etf_flows(session, "BTC") is not None
+    week_ago = (datetime.now(UTC) - timedelta(days=6)).date().isoformat()
+    save_etf_flows(session, _flows(as_of=week_ago))
+    assert load_etf_flows(session, "BTC") is None
+
+    save_etf_flows(session, _flows(sum_5d=float("nan")))
+    assert load_etf_flows(session, "BTC") is None
+    session.merge(Setting(key=ETF_FLOWS_KEY_PREFIX + "BTC", value="not json"))
+    session.commit()
+    assert load_etf_flows(session, "BTC") is None
+    assert load_etf_flows(session, "ETH") is None
+
+
+async def test_etf_flows_refresh_keeps_a_failed_coin_and_clears_when_off(session):
+    save_etf_flows(session, _flows("BTC"))
+    save_etf_flows(session, _flows("ETH", sum_5d=-200.0))
+
+    def handler(request):
+        if "ethereum" in str(request.url):
+            return httpx.Response(503, request=request)
+        payload = {
+            "code": "0",
+            "data": [{"timestamp": int(datetime.now(UTC).timestamp() * 1000), "flow_usd": -5e8}],
+        }
+        return httpx.Response(200, json=payload, request=request)
+
+    f = fetcher_with(
+        handler, cryptocv_enabled=False, google_news_enabled=False, coinglass_api_key="k"
+    )
+    f.coins = ["BTC", "ETH"]
+    service = NewsService(f, NewsAnalyst("", "m", BudgetGuard(1)), ["BTC", "ETH"], 48, 10)
+    try:
+        await service.refresh(session)
+        # BTC got today's figure; ETH failed and keeps its stored (still fresh) value.
+        assert load_etf_flows(session, "BTC")["last_day_musd"] == -500.0
+        assert load_etf_flows(session, "ETH")["sum_5d_musd"] == -200.0
+
+        f.etf_flows_enabled = False
+        await service.refresh(session)
+        assert load_etf_flows(session, "BTC") is None and load_etf_flows(session, "ETH") is None
+
+        save_etf_flows(session, _flows("BTC"))
+        f.etf_flows_enabled, f.coinglass_api_key = True, ""
+        await service.refresh(session)
+        assert load_etf_flows(session, "BTC") is None  # no key: nothing stale for Claude
     finally:
         await f.aclose()
 

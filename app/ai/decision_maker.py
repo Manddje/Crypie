@@ -65,6 +65,15 @@ Spelregels:
   neerwaarts (onder het 200-weeks gemiddelde én maand-RSI onder 50), dan lopen dipaankopen
   vaker door naar beneden: wees terughoudender en kies een kleiner bedrag. Het is context, geen
   signaal; ontbreekt het (null of onbekend), dan negeer je het.
+- etf_flows is de dagelijkse nettostroom van de Amerikaanse spot-ETF's van deze coin, in
+  miljoenen USD (positief = geld erin): last_day_musd de laatste handelsdag, sum_5d_musd de
+  laatste vijf, sum_30d_musd de laatste dertig, streak_days het aantal dagen op rij met dezelfde
+  richting (negatief = uitstroom) en label de samenvatting. Aanhoudende instroom betekent
+  institutionele vraag en maakt een dip eerder koopwaardig; aanhoudende of sterke uitstroom
+  betekent dat grote partijen verkopen: wees dan terughoudender met een koopsignaal en kies
+  een kleiner bedrag, en weeg het met een open positie mee bij tegenzittend nieuws. Eén dag
+  zegt weinig; kijk naar de reeks. Het is context, geen signaal; ontbreekt het (null, of een
+  coin zonder ETF), dan negeer je het.
 - support_levels staat gevuld als de strategie Fibonacci- of EMA-steunindicatoren heeft. Bij
   Fibonacci: in een opwaartse swing is een koers die 38,2% tot 61,8% van de stijging heeft
   teruggegeven (in_golden_pocket) de klassieke koopzone, mits de draai zichtbaar is; is meer

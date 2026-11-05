@@ -53,6 +53,8 @@ services:
       GDELT_ENABLED: ${GDELT_ENABLED:-true}
       CRYPTOPANIC_TOKEN: ${CRYPTOPANIC_TOKEN:-}
       CRYPTOPANIC_PLAN: ${CRYPTOPANIC_PLAN:-growth}
+      ETF_FLOWS_ENABLED: ${ETF_FLOWS_ENABLED:-true}
+      COINGLASS_API_KEY: ${COINGLASS_API_KEY:-}
       # Trading limits (hard limits, enforced in code)
       TRADING_ENABLED: ${TRADING_ENABLED:-true}
       TRADE_INTERVAL_MIN: ${TRADE_INTERVAL_MIN:-60}

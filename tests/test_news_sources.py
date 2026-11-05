@@ -11,6 +11,7 @@ from app.news.sources import (
     coin_search_term,
     parse_cryptocv,
     parse_cryptopanic,
+    parse_etf_flows,
     parse_fear_greed,
     parse_gdelt,
     parse_google_news,
@@ -166,3 +167,115 @@ async def test_fetcher_free_sources_per_coin():
         assert await off.fetch_cryptocv() == [] and await off.fetch_google_news() == []
     finally:
         await off.aclose()
+
+
+# -- ETF flows (CoinGlass) --------------------------------------------------------------------
+
+
+def _etf_payload(flows_musd, start_ms=int(datetime(2026, 11, 1, tzinfo=UTC).timestamp() * 1000)):
+    """A CoinGlass flow-history answer: one row per day (oldest first), flows in millions."""
+    return {
+        "code": "0",
+        "data": [
+            {
+                "timestamp": start_ms + i * 86_400_000,
+                "flow_usd": f * 1e6,
+                "price_usd": 100_000 + i,
+                "etf_flows": [
+                    {"etf_ticker": "IBIT", "flow_usd": f * 1e6 * 0.7},
+                    {"etf_ticker": "FBTC", "flow_usd": f * 1e6 * 0.3},
+                ],
+            }
+            for i, f in enumerate(flows_musd)
+        ],
+    }
+
+
+def test_parse_etf_flows_summarises_the_last_days():
+    now = datetime(2026, 11, 5, 12, tzinfo=UTC)
+    payload = _etf_payload([50, -20, 10, 100, 120, 80])  # 2026-11-01 .. 2026-11-06 (future)
+    flows = parse_etf_flows(payload, "btc", now)
+    assert flows["coin"] == "BTC" and flows["as_of"] == "2026-11-05"  # the future row is dropped
+    assert flows["days"] == 5 and flows["last_day_musd"] == 120.0
+    assert flows["sum_5d_musd"] == 260.0 and flows["sum_30d_musd"] == 260.0
+    assert flows["typical_day_musd"] == 60.0  # (50+20+10+100+120)/5
+    assert flows["streak_days"] == 3  # 10, 100, 120 after the -20
+    assert flows["label"] == "strong_inflow"  # 260 / (5 * 60) = 0.87
+    assert flows["last_day_funds"][0] == {"ticker": "IBIT", "flow_musd": 84.0}
+    assert flows["price_usd"] == 100_004.0 and flows["source"] == "coinglass"
+    assert [d["flow_musd"] for d in flows["daily"]] == [50.0, -20.0, 10.0, 100.0, 120.0]
+
+
+def test_parse_etf_flows_labels_and_streaks():
+    now = datetime(2026, 11, 5, 12, tzinfo=UTC)
+    now = datetime(2026, 11, 9, 12, tzinfo=UTC)
+    out = parse_etf_flows(_etf_payload([100, 100, 100, -10, -40, -50, -20, -10]), "ETH", now)
+    # The last 5 days: -130 against 5 x 53.75 typical = -0.48, five days of outflow in a row.
+    assert out["streak_days"] == -5 and out["label"] == "outflow"
+    out = parse_etf_flows(_etf_payload([100, 100, 100, -30, -40, -50, -20, -10]), "ETH", now)
+    assert out["label"] == "strong_outflow"  # -150 / (5 x 56.25) = -0.53
+    mixed = parse_etf_flows(_etf_payload([100, -100, 100, -100, 10]), "ETH", now)
+    assert mixed["label"] == "mixed" and mixed["streak_days"] == 1
+    assert parse_etf_flows(_etf_payload([0, 0, 0]), "ETH", now)["label"] == "unknown"
+    assert parse_etf_flows({"code": "0", "data": []}, "ETH", now) is None
+    assert parse_etf_flows({"data": [{"timestamp": "x", "flow_usd": 1}]}, "ETH", now) is None
+    assert parse_etf_flows("nope", "ETH", now) is None
+
+
+def test_parse_etf_flows_reads_the_openapi_field_names_too():
+    now = datetime(2026, 11, 5, 12, tzinfo=UTC)
+    payload = {
+        "data": [
+            {
+                "timestamp": int(datetime(2026, 11, 5, tzinfo=UTC).timestamp()),  # seconds
+                "change_usd": "-250000000",
+                "close_price": "3200.5",
+                "etf_flows": [
+                    {"ticker": "etha", "change_usd": -2.5e8},
+                    {"ticker": "x", "change_usd": "nan"},
+                ],
+            },
+            {  # the same day again: the later record wins
+                "timestamp": int(datetime(2026, 11, 5, tzinfo=UTC).timestamp()),
+                "change_usd": "-300000000",
+            },
+        ]
+    }
+    out = parse_etf_flows(payload, "ETH", now)
+    assert out["as_of"] == "2026-11-05" and out["last_day_musd"] == -300.0
+    assert out["price_usd"] is None and out["last_day_funds"] == []
+    assert out["days"] == 1 and out["label"] == "strong_outflow"
+
+
+@respx.mock
+async def test_fetcher_etf_flows_per_coin_with_the_key_in_a_header():
+    btc = respx.get(NewsFetcher.ETF_FLOW_URL.format(asset="bitcoin")).mock(
+        return_value=Response(200, json=_etf_payload([10, 20, 30]))
+    )
+    eth = respx.get(NewsFetcher.ETF_FLOW_URL.format(asset="ethereum")).mock(
+        return_value=Response(200, json={"code": "401", "msg": "API key missing."})
+    )
+    f = NewsFetcher([], None, coins=["BTC", "ETH", "PEPE"], coinglass_api_key="cg-key")
+    try:
+        flows = await f.fetch_etf_flows()
+        assert set(flows) == {"BTC", "ETH"}  # PEPE has no ETF
+        assert flows["BTC"]["coin"] == "BTC" and flows["BTC"]["days"] == 3
+        assert flows["ETH"] is None  # CoinGlass' own error code counts as a failure
+        assert btc.calls.last.request.headers["CG-API-KEY"] == "cg-key"
+        assert eth.call_count == 1
+        # The figures change once a trading day: a second call within the hour is answered
+        # from memory.
+        assert await f.fetch_etf_flows() is flows
+        assert btc.call_count == 1
+    finally:
+        await f.aclose()
+
+    for off in (
+        NewsFetcher([], None, coins=["BTC"], coinglass_api_key=""),
+        NewsFetcher([], None, coins=["BTC"], coinglass_api_key="k", etf_flows_enabled=False),
+    ):
+        try:
+            assert await off.fetch_etf_flows() == {}
+        finally:
+            await off.aclose()
+    assert btc.call_count == 1

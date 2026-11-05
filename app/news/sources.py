@@ -529,6 +529,135 @@ def parse_fear_greed(payload: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+# -- ETF flows (CoinGlass) --------------------------------------------------------------------
+
+# Coins with US spot ETFs, as CoinGlass names them in the path of its flow-history endpoint.
+ETF_ASSETS = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "xrp"}
+ETF_FLOW_DAYS = 30  # the daily net flows kept per coin (the summary uses them all)
+ETF_FLOW_RECENT_DAYS = 5  # the window of the label (about one trading week)
+ETF_FLOW_MIN_INTERVAL_S = 3600  # the data changes once a trading day; ask at most hourly
+# The label compares the net flow of the last 5 days with what a day typically moves: a week
+# of net inflow equal to half the usual daily movement is "strong".
+ETF_FLOW_STRONG = 0.5
+ETF_FLOW_MILD = 0.15
+
+
+def etf_flow_label(sum_recent: float, typical_abs_day: float, days: int) -> str:
+    """strong_inflow | inflow | mixed | outflow | strong_outflow, or unknown without data."""
+    if days <= 0 or not typical_abs_day > 0:
+        return "unknown"
+    ratio = sum_recent / (days * typical_abs_day)
+    if ratio >= ETF_FLOW_STRONG:
+        return "strong_inflow"
+    if ratio >= ETF_FLOW_MILD:
+        return "inflow"
+    if ratio <= -ETF_FLOW_STRONG:
+        return "strong_outflow"
+    if ratio <= -ETF_FLOW_MILD:
+        return "outflow"
+    return "mixed"
+
+
+def _etf_day(row: dict[str, Any], now: datetime) -> dict[str, Any] | None:
+    """One CoinGlass record as {"date", "flow_musd", "price_usd", "funds"}; None when unusable.
+
+    CoinGlass' docs show ``flow_usd``/``price_usd``/``etf_flows[].etf_ticker``; its OpenAPI
+    file names them ``change_usd``/``price``/``ticker``. Both are read.
+    """
+    try:
+        stamp = float(str(row.get("timestamp")))
+        flow = float(str(row.get("flow_usd", row.get("change_usd"))))
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(stamp) and math.isfinite(flow)):
+        return None
+    if stamp > 1e11:  # milliseconds
+        stamp /= 1000
+    try:
+        when = datetime.fromtimestamp(stamp, UTC)
+    except (ValueError, OverflowError, OSError):
+        return None
+    if when > now:
+        return None
+    price = None
+    for key in ("price_usd", "price", "close_price"):
+        try:
+            price = float(str(row[key]))
+            break
+        except (KeyError, TypeError, ValueError):
+            continue
+    if price is not None and not math.isfinite(price):
+        price = None
+    funds: list[dict[str, Any]] = []
+    for fund in (row.get("etf_flows") or [])[:MAX_ITEMS_PER_RESPONSE]:
+        if not isinstance(fund, dict):
+            continue
+        ticker = _str(fund.get("etf_ticker") or fund.get("ticker"))
+        try:
+            fund_flow = float(str(fund.get("flow_usd", fund.get("change_usd"))))
+        except (TypeError, ValueError):
+            continue
+        if ticker and math.isfinite(fund_flow) and fund_flow != 0:
+            funds.append(
+                {
+                    "ticker": re.sub(r"[^A-Z0-9.]", "", ticker.upper())[:12],
+                    "flow_musd": round(fund_flow / 1e6, 1),
+                }
+            )
+    funds.sort(key=lambda f: -abs(f["flow_musd"]))
+    return {
+        "date": when.date().isoformat(),
+        "flow_musd": round(flow / 1e6, 1),
+        "price_usd": None if price is None else round(price, 2),
+        "funds": funds[:5],
+    }
+
+
+def parse_etf_flows(
+    payload: dict[str, Any], coin: str, now: datetime | None = None
+) -> dict[str, Any] | None:
+    """CoinGlass ETF flow history for one coin as a compact summary, or None without data.
+
+    Daily net flows in millions of USD (positive = money into the ETFs), the last
+    ETF_FLOW_DAYS days, newest last; the label follows from the last ETF_FLOW_RECENT_DAYS days
+    against the typical daily movement over the whole window.
+    """
+    now = now or datetime.now(UTC)
+    by_date: dict[str, dict[str, Any]] = {}
+    for row in _records(payload, "data"):
+        day = _etf_day(row, now)
+        if day is not None:
+            by_date[day["date"]] = day  # a later record for the same day replaces the earlier
+    if not by_date:
+        return None
+    days = [by_date[d] for d in sorted(by_date)][-ETF_FLOW_DAYS:]
+    recent = days[-ETF_FLOW_RECENT_DAYS:]
+    flows = [d["flow_musd"] for d in days]
+    typical = sum(abs(f) for f in flows) / len(flows)
+    sum_recent = sum(d["flow_musd"] for d in recent)
+    streak = 0
+    for d in reversed(days):
+        if d["flow_musd"] == 0 or (streak and (d["flow_musd"] > 0) != (streak > 0)):
+            break
+        streak += 1 if d["flow_musd"] > 0 else -1
+    last = days[-1]
+    return {
+        "coin": coin.upper(),
+        "as_of": last["date"],
+        "last_day_musd": last["flow_musd"],
+        "last_day_funds": last["funds"],
+        "sum_5d_musd": round(sum_recent, 1),
+        "sum_30d_musd": round(sum(flows), 1),
+        "typical_day_musd": round(typical, 1),
+        "streak_days": streak,
+        "days": len(days),
+        "label": etf_flow_label(sum_recent, typical, len(recent)),
+        "daily": [{"date": d["date"], "flow_musd": d["flow_musd"]} for d in days],
+        "price_usd": last["price_usd"],
+        "source": "coinglass",
+    }
+
+
 # -- fetcher ------------------------------------------------------------------------------
 
 
@@ -539,6 +668,7 @@ class NewsFetcher:
     CRYPTOCV_NEWS_URL = "https://cryptocurrency.cv/api/news"
     GOOGLE_NEWS_URL = "https://news.google.com/rss/search"
     FEAR_GREED_URL = "https://api.alternative.me/fng/"
+    ETF_FLOW_URL = "https://open-api-v4.coinglass.com/api/etf/{asset}/flow-history"
 
     def __init__(
         self,
@@ -551,6 +681,8 @@ class NewsFetcher:
         cryptocv_enabled: bool = True,
         google_news_enabled: bool = True,
         fear_greed_enabled: bool = True,
+        coinglass_api_key: str = "",
+        etf_flows_enabled: bool = True,
     ):
         self.rss_feeds = rss_feeds
         self.gdelt_query = gdelt_query
@@ -561,6 +693,11 @@ class NewsFetcher:
         self.google_news_enabled = google_news_enabled
         self.fear_greed_enabled = fear_greed_enabled
         self.fear_greed: dict[str, Any] | None = None
+        self.coinglass_api_key = coinglass_api_key
+        self.etf_flows_enabled = etf_flows_enabled
+        # ETF flows per coin from the last fetch, and when; see fetch_etf_flows.
+        self.etf_flows: dict[str, dict[str, Any] | None] = {}
+        self._etf_flows_at: float | None = None
         self._plain_http_warned: set[str] = set()
         # Redirects are followed by hand in _get, so every hop is checked.
         self._http = httpx.AsyncClient(
@@ -573,13 +710,19 @@ class NewsFetcher:
     async def aclose(self) -> None:
         await self._http.aclose()
 
-    async def _get(self, url: str, params: dict[str, Any] | None = None) -> httpx.Response:
+    async def _get(
+        self,
+        url: str,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
         """GET with the SSRF guard per redirect hop, a byte cap and a total deadline.
 
         Returns a fully read response (status not checked; call ``raise_for_status``).
+        ``headers`` (an API key) go to the first hop only, never along a redirect.
         """
         async with asyncio.timeout(REQUEST_DEADLINE_S):
-            request = self._http.build_request("GET", url, params=params)
+            request = self._http.build_request("GET", url, params=params, headers=headers)
             for _ in range(MAX_REDIRECTS + 1):
                 await check_public_url(str(request.url))
                 resp = await self._http.send(request, stream=True)
@@ -611,8 +754,13 @@ class NewsFetcher:
                     await resp.aclose()
             raise UnsafeURLError(f"meer dan {MAX_REDIRECTS} redirects")
 
-    async def _get_json(self, url: str, params: dict[str, Any] | None = None) -> Any:
-        resp = await self._get(url, params)
+    async def _get_json(
+        self,
+        url: str,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> Any:
+        resp = await self._get(url, params, headers)
         resp.raise_for_status()
         return await asyncio.to_thread(json.loads, resp.content)
 
@@ -735,6 +883,43 @@ class NewsFetcher:
             log.warning("Fear & Greed fetch failed: %s", describe_error(exc))
             self.fear_greed = None
         return self.fear_greed
+
+    async def _etf_flows_for(self, coin: str, now: datetime) -> dict[str, Any] | None:
+        url = self.ETF_FLOW_URL.format(asset=ETF_ASSETS[coin])
+        try:
+            payload = await self._get_json(url, headers={"CG-API-KEY": self.coinglass_api_key})
+            if isinstance(payload, dict) and str(payload.get("code", "0")) != "0":
+                # CoinGlass answers 200 with its own code on a bad key or an exhausted plan.
+                raise RuntimeError(f"CoinGlass code {_str(payload.get('code'))[:20]}")
+            return await asyncio.to_thread(parse_etf_flows, payload, coin, now)
+        except Exception as exc:  # noqa: BLE001  # never log the headers: they carry the key
+            log.warning("ETF flows for %s failed: %s", coin, describe_error(exc))
+            return None
+
+    async def fetch_etf_flows(self) -> dict[str, dict[str, Any] | None]:
+        """Daily net flows of the US spot ETFs per configured coin that has them (CoinGlass).
+
+        {} when the source is off or there is no key. A coin maps to None when its fetch
+        failed (the stored value then stays until it is too old). Asked at most once an hour:
+        the figures change once a trading day, and the free plan is rate-limited.
+        """
+        if not self.etf_flows_enabled or not self.coinglass_api_key:
+            self.etf_flows = {}
+            self._etf_flows_at = None
+            return {}
+        coins = [c for c in self.coins if c in ETF_ASSETS]
+        now = datetime.now(UTC)
+        fresh = (
+            self._etf_flows_at is not None
+            and now.timestamp() - self._etf_flows_at < ETF_FLOW_MIN_INTERVAL_S
+            and set(self.etf_flows) == set(coins)
+        )
+        if fresh:
+            return self.etf_flows
+        results = await asyncio.gather(*(self._etf_flows_for(c, now) for c in coins))
+        self.etf_flows = dict(zip(coins, results, strict=True))
+        self._etf_flows_at = now.timestamp()
+        return self.etf_flows
 
     async def _bounded(self, name: str, job) -> list[RawItem]:
         try:
