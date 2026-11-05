@@ -529,10 +529,10 @@ def parse_fear_greed(payload: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-# -- ETF flows (CoinGlass) --------------------------------------------------------------------
+# -- ETF flows (TFTC, cryptoetf.today) ---------------------------------------------------------
 
-# Coins with US spot ETFs, as CoinGlass names them in the path of its flow-history endpoint.
-ETF_ASSETS = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "xrp"}
+# Coins with US spot ETFs, as cryptoetf.today names them in its path (/flows/<asset>).
+ETF_ASSETS = {"BTC": "btc", "ETH": "eth", "SOL": "sol", "XRP": "xrp"}
 ETF_FLOW_DAYS = 30  # the daily net flows kept per coin (the summary uses them all)
 ETF_FLOW_RECENT_DAYS = 5  # the window of the label (about one trading week)
 ETF_FLOW_MIN_INTERVAL_S = 3600  # the data changes once a trading day; ask at most hourly
@@ -558,89 +558,81 @@ def etf_flow_label(sum_recent: float, typical_abs_day: float, days: int) -> str:
     return "mixed"
 
 
-def _etf_day(row: dict[str, Any], now: datetime) -> dict[str, Any] | None:
-    """One CoinGlass record as {"date", "flow_musd", "price_usd", "funds"}; None when unusable.
-
-    CoinGlass' docs show ``flow_usd``/``price_usd``/``etf_flows[].etf_ticker``; its OpenAPI
-    file names them ``change_usd``/``price``/``ticker``. Both are read.
-    """
+def _etf_date(value: Any, now: datetime) -> str | None:
+    """An ISO date (YYYY-MM-DD) that is not in the future, else None."""
+    text = _str(value)
+    if not text:
+        return None
     try:
-        stamp = float(str(row.get("timestamp")))
-        flow = float(str(row.get("flow_usd", row.get("change_usd"))))
+        day = datetime.fromisoformat(text[:10]).date()
+    except ValueError:
+        return None
+    return day.isoformat() if day <= now.date() else None
+
+
+def _musd(value: Any, scale: float = 1e6) -> float | None:
+    """A finite amount as millions of USD, rounded to 0.1; None when unusable."""
+    try:
+        amount = float(str(value))
     except (TypeError, ValueError):
         return None
-    if not (math.isfinite(stamp) and math.isfinite(flow)):
+    if not math.isfinite(amount):
         return None
-    if stamp > 1e11:  # milliseconds
-        stamp /= 1000
-    try:
-        when = datetime.fromtimestamp(stamp, UTC)
-    except (ValueError, OverflowError, OSError):
+    return round(amount / scale, 1)
+
+
+def _tftc_day(row: dict[str, Any], now: datetime) -> dict[str, Any] | None:
+    """One TFTC session: {"date": "2026-11-04", "netFlowUsd": ..., "perEtfUsd": {...}}."""
+    date = _etf_date(row.get("date"), now)
+    flow = _musd(row.get("netFlowUsd", row.get("vendorNetFlowUsd")))
+    if date is None or flow is None:
         return None
-    if when > now:
-        return None
-    price = None
-    for key in ("price_usd", "price", "close_price"):
-        try:
-            price = float(str(row[key]))
-            break
-        except (KeyError, TypeError, ValueError):
-            continue
-    if price is not None and not math.isfinite(price):
-        price = None
     funds: list[dict[str, Any]] = []
-    for fund in (row.get("etf_flows") or [])[:MAX_ITEMS_PER_RESPONSE]:
-        if not isinstance(fund, dict):
-            continue
-        ticker = _str(fund.get("etf_ticker") or fund.get("ticker"))
-        try:
-            fund_flow = float(str(fund.get("flow_usd", fund.get("change_usd"))))
-        except (TypeError, ValueError):
-            continue
-        if ticker and math.isfinite(fund_flow) and fund_flow != 0:
-            funds.append(
-                {
-                    "ticker": re.sub(r"[^A-Z0-9.]", "", ticker.upper())[:12],
-                    "flow_musd": round(fund_flow / 1e6, 1),
-                }
-            )
+    per_fund = row.get("perEtfUsd")
+    if isinstance(per_fund, dict):
+        for ticker, amount in list(per_fund.items())[:MAX_ITEMS_PER_RESPONSE]:
+            fund_flow = _musd(amount)
+            if fund_flow and isinstance(ticker, str) and ticker.strip():
+                clean = re.sub(r"[^A-Z0-9.]", "", ticker.upper())[:12]
+                if clean:
+                    funds.append({"ticker": clean, "flow_musd": fund_flow})
     funds.sort(key=lambda f: -abs(f["flow_musd"]))
-    return {
-        "date": when.date().isoformat(),
-        "flow_musd": round(flow / 1e6, 1),
-        "price_usd": None if price is None else round(price, 2),
-        "funds": funds[:5],
-    }
+    price = _musd(row.get("btcCloseUsd"), scale=1)
+    return {"date": date, "flow_musd": flow, "price_usd": price, "funds": funds[:5]}
 
 
-def parse_etf_flows(
-    payload: dict[str, Any], coin: str, now: datetime | None = None
+def _cryptoetf_day(row: dict[str, Any], now: datetime) -> dict[str, Any] | None:
+    """One cryptoetf.today day: {"date": "2026-11-04", "netFlowUsdM": 74.6} (millions)."""
+    date = _etf_date(row.get("date"), now)
+    flow = _musd(row.get("netFlowUsdM"), scale=1)
+    if date is None or flow is None:
+        return None
+    return {"date": date, "flow_musd": flow, "price_usd": None, "funds": []}
+
+
+def summarise_etf_flows(
+    days: list[dict[str, Any]], coin: str, source: str
 ) -> dict[str, Any] | None:
-    """CoinGlass ETF flow history for one coin as a compact summary, or None without data.
+    """The compact summary Claude and the page get, from normalised day rows (any order).
 
-    Daily net flows in millions of USD (positive = money into the ETFs), the last
-    ETF_FLOW_DAYS days, newest last; the label follows from the last ETF_FLOW_RECENT_DAYS days
-    against the typical daily movement over the whole window.
+    Net flows in millions of USD (positive = money into the ETFs) over the last ETF_FLOW_DAYS
+    days, newest last; the label follows from the last ETF_FLOW_RECENT_DAYS days against the
+    typical daily movement over the whole window.
     """
-    now = now or datetime.now(UTC)
-    by_date: dict[str, dict[str, Any]] = {}
-    for row in _records(payload, "data"):
-        day = _etf_day(row, now)
-        if day is not None:
-            by_date[day["date"]] = day  # a later record for the same day replaces the earlier
+    by_date = {d["date"]: d for d in days}  # a later row for the same day replaces the earlier
     if not by_date:
         return None
-    days = [by_date[d] for d in sorted(by_date)][-ETF_FLOW_DAYS:]
-    recent = days[-ETF_FLOW_RECENT_DAYS:]
-    flows = [d["flow_musd"] for d in days]
+    kept = [by_date[d] for d in sorted(by_date)][-ETF_FLOW_DAYS:]
+    recent = kept[-ETF_FLOW_RECENT_DAYS:]
+    flows = [d["flow_musd"] for d in kept]
     typical = sum(abs(f) for f in flows) / len(flows)
     sum_recent = sum(d["flow_musd"] for d in recent)
     streak = 0
-    for d in reversed(days):
+    for d in reversed(kept):
         if d["flow_musd"] == 0 or (streak and (d["flow_musd"] > 0) != (streak > 0)):
             break
         streak += 1 if d["flow_musd"] > 0 else -1
-    last = days[-1]
+    last = kept[-1]
     return {
         "coin": coin.upper(),
         "as_of": last["date"],
@@ -650,12 +642,28 @@ def parse_etf_flows(
         "sum_30d_musd": round(sum(flows), 1),
         "typical_day_musd": round(typical, 1),
         "streak_days": streak,
-        "days": len(days),
+        "days": len(kept),
         "label": etf_flow_label(sum_recent, typical, len(recent)),
-        "daily": [{"date": d["date"], "flow_musd": d["flow_musd"]} for d in days],
+        "daily": [{"date": d["date"], "flow_musd": d["flow_musd"]} for d in kept],
         "price_usd": last["price_usd"],
-        "source": "coinglass",
+        "source": source,
     }
+
+
+def parse_etf_flows_tftc(payload: Any, now: datetime | None = None) -> dict[str, Any] | None:
+    """TFTC's open Bitcoin ETF series (data.json, CC BY 4.0): per-fund flows in USD."""
+    now = now or datetime.now(UTC)
+    rows = [_tftc_day(r, now) for r in _records(payload, "days")]
+    return summarise_etf_flows([r for r in rows if r], "BTC", "tftc")
+
+
+def parse_etf_flows_cryptoetf(
+    payload: Any, coin: str, now: datetime | None = None
+) -> dict[str, Any] | None:
+    """cryptoetf.today's /flows/<asset>: 30 days of net flows in millions, no fund breakdown."""
+    now = now or datetime.now(UTC)
+    rows = [_cryptoetf_day(r, now) for r in _records(payload, "days")]
+    return summarise_etf_flows([r for r in rows if r], coin, "cryptoetf.today")
 
 
 # -- fetcher ------------------------------------------------------------------------------
@@ -668,7 +676,10 @@ class NewsFetcher:
     CRYPTOCV_NEWS_URL = "https://cryptocurrency.cv/api/news"
     GOOGLE_NEWS_URL = "https://news.google.com/rss/search"
     FEAR_GREED_URL = "https://api.alternative.me/fng/"
-    ETF_FLOW_URL = "https://open-api-v4.coinglass.com/api/etf/{asset}/flow-history"
+    # The last 30 days per coin, with a free key (no card); 60 requests a minute.
+    CRYPTOETF_URL = "https://api.cryptoetf.today/api/v1/flows/{asset}"
+    # Bitcoin only, no key: the full daily series since launch (about 200 kB), CC BY 4.0.
+    TFTC_URL = "https://www.tftc.io/bitcoin-etf-flows/data.json"
 
     def __init__(
         self,
@@ -681,7 +692,7 @@ class NewsFetcher:
         cryptocv_enabled: bool = True,
         google_news_enabled: bool = True,
         fear_greed_enabled: bool = True,
-        coinglass_api_key: str = "",
+        cryptoetf_api_key: str = "",
         etf_flows_enabled: bool = True,
     ):
         self.rss_feeds = rss_feeds
@@ -693,7 +704,7 @@ class NewsFetcher:
         self.google_news_enabled = google_news_enabled
         self.fear_greed_enabled = fear_greed_enabled
         self.fear_greed: dict[str, Any] | None = None
-        self.coinglass_api_key = coinglass_api_key
+        self.cryptoetf_api_key = cryptoetf_api_key
         self.etf_flows_enabled = etf_flows_enabled
         # ETF flows per coin from the last fetch, and when; see fetch_etf_flows.
         self.etf_flows: dict[str, dict[str, Any] | None] = {}
@@ -885,29 +896,41 @@ class NewsFetcher:
         return self.fear_greed
 
     async def _etf_flows_for(self, coin: str, now: datetime) -> dict[str, Any] | None:
-        url = self.ETF_FLOW_URL.format(asset=ETF_ASSETS[coin])
+        """One coin: cryptoetf.today with a key, else TFTC for bitcoin; None when it fails."""
         try:
-            payload = await self._get_json(url, headers={"CG-API-KEY": self.coinglass_api_key})
-            if isinstance(payload, dict) and str(payload.get("code", "0")) != "0":
-                # CoinGlass answers 200 with its own code on a bad key or an exhausted plan.
-                raise RuntimeError(f"CoinGlass code {_str(payload.get('code'))[:20]}")
-            return await asyncio.to_thread(parse_etf_flows, payload, coin, now)
+            if self.cryptoetf_api_key:
+                payload = await self._get_json(
+                    self.CRYPTOETF_URL.format(asset=ETF_ASSETS[coin]),
+                    headers={"Authorization": f"Bearer {self.cryptoetf_api_key}"},
+                )
+                return await asyncio.to_thread(parse_etf_flows_cryptoetf, payload, coin, now)
+            payload = await self._get_json(self.TFTC_URL)
+            return await asyncio.to_thread(parse_etf_flows_tftc, payload, now)
         except Exception as exc:  # noqa: BLE001  # never log the headers: they carry the key
             log.warning("ETF flows for %s failed: %s", coin, describe_error(exc))
             return None
 
-    async def fetch_etf_flows(self) -> dict[str, dict[str, Any] | None]:
-        """Daily net flows of the US spot ETFs per configured coin that has them (CoinGlass).
+    def etf_flow_coins(self) -> list[str]:
+        """The configured coins the flows can be fetched for: every coin with a US spot ETF
+        with a cryptoetf.today key, only bitcoin (TFTC) without one."""
+        if not self.etf_flows_enabled:
+            return []
+        if self.cryptoetf_api_key:
+            return [c for c in self.coins if c in ETF_ASSETS]
+        return [c for c in self.coins if c == "BTC"]
 
-        {} when the source is off or there is no key. A coin maps to None when its fetch
-        failed (the stored value then stays until it is too old). Asked at most once an hour:
-        the figures change once a trading day, and the free plan is rate-limited.
+    async def fetch_etf_flows(self) -> dict[str, dict[str, Any] | None]:
+        """Daily net flows of the US spot ETFs per configured coin that has them.
+
+        {} when the source is off (or no coin can be served). A coin maps to None when its
+        fetch failed (the stored value then stays until it is too old). Asked at most once an
+        hour: the figures change once a trading day.
         """
-        if not self.etf_flows_enabled or not self.coinglass_api_key:
+        coins = self.etf_flow_coins()
+        if not coins:
             self.etf_flows = {}
             self._etf_flows_at = None
             return {}
-        coins = [c for c in self.coins if c in ETF_ASSETS]
         now = datetime.now(UTC)
         fresh = (
             self._etf_flows_at is not None

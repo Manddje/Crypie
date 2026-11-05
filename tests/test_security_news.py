@@ -274,14 +274,14 @@ async def test_cryptopanic_token_never_logged(caplog):
     assert "auth_token=***" in sources.redact("https://x/?auth_token=abc&public=true")
 
 
-async def test_coinglass_key_never_logged(caplog):
+async def test_cryptoetf_key_never_logged(caplog):
     import app.main  # noqa: F401  # configures the httpx loggers
 
     def handler(request):
-        assert request.headers["CG-API-KEY"] == "cg-secret-123"
+        assert request.headers["Authorization"] == "Bearer cetf_secret_123"
         return httpx.Response(500, request=request)
 
-    f = fetcher_with(handler, coinglass_api_key="cg-secret-123")
+    f = fetcher_with(handler, cryptoetf_api_key="cetf_secret_123")
     f.coins = ["BTC"]
     caplog.set_level(logging.DEBUG)
     try:
@@ -289,26 +289,26 @@ async def test_coinglass_key_never_logged(caplog):
     finally:
         await f.aclose()
     assert "ETF flows for BTC failed" in caplog.text
-    assert "cg-secret-123" not in caplog.text
+    assert "cetf_secret_123" not in caplog.text
 
 
-async def test_etf_flow_key_does_not_follow_a_redirect(caplog):
-    """A redirect to another host must not take the CoinGlass key along."""
+async def test_etf_flow_key_does_not_follow_a_redirect():
+    """A redirect to another host must not take the cryptoetf.today key along."""
     seen = {}
 
     def handler(request):
-        seen[str(request.url.host)] = request.headers.get("CG-API-KEY")
-        if request.url.host == "open-api-v4.coinglass.com":
+        seen[str(request.url.host)] = request.headers.get("Authorization")
+        if request.url.host == "api.cryptoetf.today":
             return httpx.Response(302, headers={"location": "https://evil.example/x"})
-        return httpx.Response(200, json={"code": "0", "data": []})
+        return httpx.Response(200, json={"days": []})
 
-    f = fetcher_with(handler, coinglass_api_key="cg-secret-123")
+    f = fetcher_with(handler, cryptoetf_api_key="cetf_secret_123")
     f.coins = ["BTC"]
     try:
         await f.fetch_etf_flows()
     finally:
         await f.aclose()
-    assert seen["open-api-v4.coinglass.com"] == "cg-secret-123"
+    assert seen["api.cryptoetf.today"] == "Bearer cetf_secret_123"
     assert seen["evil.example"] is None
 
 
@@ -786,7 +786,7 @@ def _flows(coin="BTC", as_of=None, sum_5d=200.0, typical=50.0, days=5):
         "label": "whatever the store says",
         "daily": [],
         "price_usd": 1.0,
-        "source": "coinglass",
+        "source": "tftc",
     }
 
 
@@ -817,16 +817,17 @@ async def test_etf_flows_refresh_keeps_a_failed_coin_and_clears_when_off(session
     save_etf_flows(session, _flows("ETH", sum_5d=-200.0))
 
     def handler(request):
-        if "ethereum" in str(request.url):
+        if str(request.url).endswith("/flows/eth"):
             return httpx.Response(503, request=request)
-        payload = {
-            "code": "0",
-            "data": [{"timestamp": int(datetime.now(UTC).timestamp() * 1000), "flow_usd": -5e8}],
-        }
+        today = datetime.now(UTC).date().isoformat()
+        if request.url.host == "www.tftc.io":
+            payload = {"days": [{"date": today, "netFlowUsd": -5e8}]}
+        else:
+            payload = {"days": [{"date": today, "netFlowUsdM": -500}]}
         return httpx.Response(200, json=payload, request=request)
 
     f = fetcher_with(
-        handler, cryptocv_enabled=False, google_news_enabled=False, coinglass_api_key="k"
+        handler, cryptocv_enabled=False, google_news_enabled=False, cryptoetf_api_key="k"
     )
     f.coins = ["BTC", "ETH"]
     service = NewsService(f, NewsAnalyst("", "m", BudgetGuard(1)), ["BTC", "ETH"], 48, 10)
@@ -840,10 +841,17 @@ async def test_etf_flows_refresh_keeps_a_failed_coin_and_clears_when_off(session
         await service.refresh(session)
         assert load_etf_flows(session, "BTC") is None and load_etf_flows(session, "ETH") is None
 
-        save_etf_flows(session, _flows("BTC"))
-        f.etf_flows_enabled, f.coinglass_api_key = True, ""
+        # Without a key bitcoin still comes in (TFTC); the other coins are not fetched, and a
+        # stored value of theirs stays until it is old. No coin to serve at all clears.
+        save_etf_flows(session, _flows("ETH", sum_5d=-200.0))
+        f.etf_flows_enabled, f.cryptoetf_api_key = True, ""
+        f.etf_flows, f._etf_flows_at = {}, None
         await service.refresh(session)
-        assert load_etf_flows(session, "BTC") is None  # no key: nothing stale for Claude
+        assert load_etf_flows(session, "BTC")["last_day_musd"] == -500.0  # the TFTC stub
+        assert load_etf_flows(session, "ETH")["sum_5d_musd"] == -200.0
+        f.coins = ["ETH"]
+        await service.refresh(session)
+        assert load_etf_flows(session, "BTC") is None and load_etf_flows(session, "ETH") is None
     finally:
         await f.aclose()
 

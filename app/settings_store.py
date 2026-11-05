@@ -663,8 +663,8 @@ SPECS: tuple[Spec, ...] = (
     Spec(
         "etf_flows_enabled",
         "news",
-        "ETF-stromen (CoinGlass)",
-        "In- en uitstroom van Amerikaanse spot-ETF's (COINGLASS_API_KEY).",
+        "ETF-stromen",
+        "Nettostroom van Amerikaanse spot-ETF's (bitcoin zonder sleutel).",
         kind="bool",
         section="bronnen",
     ),

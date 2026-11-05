@@ -350,8 +350,8 @@ id="row-{{ f.key }}" data-setting="{{ f.key }}"{% if f.sensitive and step_up %} 
         <dd>{% if environment.anthropic_key %}<span class="pill pill-green">ingesteld</span>{% else %}<span class="pill">niet ingesteld</span> <span class="env-text">Zonder sleutel beslist de bot volgens 'Als Claude niet beschikbaar is'.</span>{% endif %} <span class="mono env-name">ANTHROPIC_API_KEY</span></dd>
         <dt>CryptoPanic-token</dt>
         <dd>{% if environment.cryptopanic_token %}<span class="pill pill-green">ingesteld</span>{% else %}<span class="pill">niet ingesteld</span> <span class="env-text">Optioneel.</span>{% endif %} <span class="mono env-name">CRYPTOPANIC_TOKEN</span></dd>
-        <dt>CoinGlass-sleutel</dt>
-        <dd>{% if environment.coinglass_key %}<span class="pill pill-green">ingesteld</span>{% else %}<span class="pill">niet ingesteld</span> <span class="env-text">Optioneel; nodig voor de ETF-stromen (gratis Hobbyist-plan volstaat).</span>{% endif %} <span class="mono env-name">COINGLASS_API_KEY</span></dd>
+        <dt>cryptoetf.today-sleutel</dt>
+        <dd>{% if environment.cryptoetf_key %}<span class="pill pill-green">ingesteld</span>{% else %}<span class="pill">niet ingesteld</span> <span class="env-text">Optioneel: gratis sleutel (zonder kaart) voor de ETF-stromen van ETH, SOL en XRP; bitcoin komt ook zonder sleutel binnen.</span>{% endif %} <span class="mono env-name">CRYPTOETF_API_KEY</span></dd>
         <dt>Meldingen</dt>
         <dd>
           {% if environment.notify %}

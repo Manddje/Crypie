@@ -208,7 +208,7 @@ Wat je opslaat:
   kent of een onbekend model, met een link die het blok bij dat veld opent.
 
 Niet in het portaal, met opzet: de sleutels (`BITVAVO_API_KEY`, `BITVAVO_API_SECRET`,
-`ANTHROPIC_API_KEY`, `CRYPTOPANIC_TOKEN`, `COINGLASS_API_KEY`), `DATABASE_URL`, `LIVE_TRADING_ACK` en de plafonds van de
+`ANTHROPIC_API_KEY`, `CRYPTOPANIC_TOKEN`, `CRYPTOETF_API_KEY`), `DATABASE_URL`, `LIVE_TRADING_ACK` en de plafonds van de
 limieten. Live-modus kun je in het portaal pas kiezen als de omgeving `LIVE_TRADING_ACK=true`,
 `AUTH_ENABLED=true` én een Bitvavo-sleutel heeft; anders weigert de app de wijziging en blijft hij in
 oefenmodus. Dezelfde instellingen zijn er als API: `GET /api/settings`, `PATCH /api/settings` (alleen
@@ -280,7 +280,7 @@ Grenzen bij het opslaan:
 
 **Uit de omgeving** toont wat alleen op de server staat: de Bitvavo-sleutel (niet ingesteld, ingesteld,
 werkt, geweigerd door Bitvavo of mag niet handelen, met de reden en de code van Bitvavo), de
-Claude-sleutel, de CryptoPanic-token, de CoinGlass-sleutel, het meldingskanaal (zie [Meldingen](#meldingen)), de login en de
+Claude-sleutel, de CryptoPanic-token, de cryptoetf.today-sleutel, het meldingskanaal (zie [Meldingen](#meldingen)), de login en de
 live-bevestiging. *Verbinding testen* doet één gesigneerd verzoek bij Bitvavo en toont je tarief;
 Crypie kan de rechten van een sleutel niet zien. Weigert Bitvavo de sleutel, dan staat dat met de reden
 ook in rood in de voettekst van elke pagina en in de saldomelding op het overzicht. *Testmelding sturen*
@@ -371,7 +371,7 @@ Een achtergrondtaak haalt elke `NEWS_FETCH_INTERVAL_MIN` minuten nieuws op en la
 | cryptocurrency.cv (300+ bronnen, archief per coin, berichten komen met coin-tag) | gratis, geen sleutel; hobbyproject zonder garanties | `CRYPTOCV_ENABLED` |
 | Google News zoekfeed per coin (laatste 24 uur) | gratis | `GOOGLE_NEWS_ENABLED` |
 | Fear & Greed-index (alternative.me), marktbreed, als context voor Claude | gratis | `FEAR_GREED_ENABLED` |
-| ETF-stromen (CoinGlass): dagelijkse netto in- en uitstroom van de Amerikaanse spot-ETF's per coin (BTC, ETH, SOL, XRP), als context voor Claude | gratis Hobbyist-sleutel; zonder sleutel overgeslagen | `ETF_FLOWS_ENABLED`, `COINGLASS_API_KEY` |
+| ETF-stromen: dagelijkse netto in- en uitstroom van de Amerikaanse spot-ETF's per coin, als context voor Claude. Bitcoin uit de open reeks van TFTC; ETH, SOL en XRP via cryptoetf.today | gratis, geen sleutel (bitcoin); gratis sleutel zonder kaart (de andere coins) | `ETF_FLOWS_ENABLED`, `CRYPTOETF_API_KEY` |
 | GDELT DOC API (wereldnieuws, elke 15 min bijgewerkt) | gratis, max. 1 verzoek per 5 s per IP | `GDELT_ENABLED`, `GDELT_QUERY` |
 | CryptoPanic v2 | betaald (Growth-plan); zonder token overgeslagen | `CRYPTOPANIC_TOKEN`, `CRYPTOPANIC_PLAN` |
 
@@ -422,15 +422,19 @@ Nieuws is onbetrouwbare invoer, dus:
 - Fear & Greed wordt genegeerd als de waarde ouder is dan 48 uur, het ophalen mislukt of de bron uit
   staat. Het label volgt uit de waarde (0-24 Extreme Fear, 25-46 Fear, 47-54 Neutral, 55-75 Greed,
   76-100 Extreme Greed).
-- ETF-stromen komen van CoinGlass (`/api/etf/<coin>/flow-history`, sleutel in de header
-  `CG-API-KEY`), hoogstens één keer per uur, alleen voor ingestelde coins met een Amerikaanse spot-ETF.
+- ETF-stromen komen hoogstens één keer per uur binnen, alleen voor ingestelde coins met een
+  Amerikaanse spot-ETF. Voor bitcoin is de bron zonder sleutel de open dagreeks van
+  [The Commoner Bitcoin ETF Tracker by TFTC](https://www.tftc.io/bitcoin-etf-flows) (`data.json`,
+  CC BY 4.0, met uitsplitsing per fonds); met `CRYPTOETF_API_KEY` (gratis sleutel van
+  [cryptoetf.today](https://cryptoetf.today/en/api), zonder kaart, `Authorization: Bearer`) komen
+  BTC, ETH, SOL en XRP van `api.cryptoetf.today/api/v1/flows/<coin>` (30 dagen, zonder fondsen).
   Per coin bewaart de bot de laatste 30 handelsdagen (nettostroom in miljoenen dollars, positief = geld
   erin) en rekent daaruit: laatste dag, som over 5 en 30 dagen, de reeks dagen op rij in dezelfde
   richting en een label (`strong_inflow`, `inflow`, `mixed`, `outflow`, `strong_outflow`): de som van
   de laatste 5 dagen gedeeld door 5 keer de gemiddelde dagbeweging over 30 dagen, boven 0,5 sterk, boven
   0,15 in- of uitstroom. Het label wordt bij het lezen opnieuw uit de cijfers berekend. Cijfers waarvan
   de laatste handelsdag meer dan 5 dagen terug ligt tellen niet meer (een weekend of lange weekend wel);
-  een mislukte ophaalronde laat de vorige cijfers staan tot dan, de bron uitzetten of de sleutel weghalen
+  een mislukte ophaalronde laat de vorige cijfers staan tot dan; de bron uitzetten
   wist ze. Claude krijgt ze per beslissing mee als `etf_flows` (context, geen signaal: aanhoudende
   instroom maakt een dip eerder koopwaardig, aanhoudende uitstroom vraagt terughoudendheid); /news toont
   ze onder *ETF-stromen*; API `GET /api/news/etf-flows`, MCP-tool `etf_flows`. De sleutel staat alleen

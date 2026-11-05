@@ -1628,7 +1628,7 @@ footer.site .footer-alert { color: var(--red); font-weight: 500; }
 .news-actions .page-help[open] { flex-basis: 100%; }
 .news-section-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin-bottom: 12px; }
 .news-section-head h2 { font-size: var(--fs-card-title); line-height: 1.3; }
-.news-coin .card-header { margin-bottom: 6px; }
+.news-coin .card-header, .news-etf .card-header { margin-bottom: 6px; }
 .news-more-coins { margin-top: var(--space-4); }
 .news-more-coins > summary { font-weight: 600; }
 .news-more-coins .table-wrap { margin-top: var(--space-3); }
@@ -1676,9 +1676,9 @@ footer.site .footer-alert { color: var(--red); font-weight: 500; }
   .news-item { grid-template-columns: minmax(0, 1fr); }
   .news-item .side { flex-direction: row; align-items: center; flex-wrap: wrap; white-space: normal; text-align: left; }
   /* Compact coin cards on a phone: the messages start sooner (UX-107). */
-  .news-coin { padding: 12px 14px; }
-  .news-coin .card-header { margin-bottom: 2px; }
-  .news-coin .score-bar { margin: 6px 0; }
+  .news-coin, .news-etf { padding: 12px 14px; }
+  .news-coin .card-header, .news-etf .card-header { margin-bottom: 2px; }
+  .news-coin .score-bar, .news-etf .score-bar { margin: 6px 0; }
   .news-coin .news-top-box { margin-top: 4px; }
   .news-sentiment .grid { gap: 10px; }
   .news-top li { padding: 6px 0; }

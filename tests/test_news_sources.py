@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -11,7 +11,8 @@ from app.news.sources import (
     coin_search_term,
     parse_cryptocv,
     parse_cryptopanic,
-    parse_etf_flows,
+    parse_etf_flows_cryptoetf,
+    parse_etf_flows_tftc,
     parse_fear_greed,
     parse_gdelt,
     parse_google_news,
@@ -169,100 +170,109 @@ async def test_fetcher_free_sources_per_coin():
         await off.aclose()
 
 
-# -- ETF flows (CoinGlass) --------------------------------------------------------------------
+# -- ETF flows (TFTC, cryptoetf.today) ---------------------------------------------------------
 
 
-def _etf_payload(flows_musd, start_ms=int(datetime(2026, 11, 1, tzinfo=UTC).timestamp() * 1000)):
-    """A CoinGlass flow-history answer: one row per day (oldest first), flows in millions."""
+def _day(i: int, start=datetime(2026, 11, 1, tzinfo=UTC)) -> str:
+    return (start + timedelta(days=i)).date().isoformat()
+
+
+def _tftc_payload(flows_musd, funds=(("IBIT", 0.7), ("FBTC", 0.3), ("GBTC", 0.0))):
+    """TFTC's data.json: one session per day (oldest first), flows in USD, per fund."""
     return {
-        "code": "0",
-        "data": [
+        "name": "US Spot Bitcoin ETF Daily Flows",
+        "days": [
             {
-                "timestamp": start_ms + i * 86_400_000,
-                "flow_usd": f * 1e6,
-                "price_usd": 100_000 + i,
-                "etf_flows": [
-                    {"etf_ticker": "IBIT", "flow_usd": f * 1e6 * 0.7},
-                    {"etf_ticker": "FBTC", "flow_usd": f * 1e6 * 0.3},
-                ],
+                "date": _day(i),
+                "netFlowUsd": f * 1e6,
+                "vendorNetFlowUsd": f * 1e6,
+                "btcCloseUsd": 100_000 + i,
+                "perEtfUsd": {t: f * 1e6 * w for t, w in funds},
             }
             for i, f in enumerate(flows_musd)
         ],
     }
 
 
-def test_parse_etf_flows_summarises_the_last_days():
+def _cryptoetf_payload(flows_musd, symbol="ETH"):
+    """cryptoetf.today's /flows/<asset>: 30 days of net flows in millions, oldest first."""
+    return {
+        "symbol": symbol,
+        "windowDays": 30,
+        "days": [{"date": _day(i), "netFlowUsdM": f} for i, f in enumerate(flows_musd)],
+    }
+
+
+def test_parse_tftc_flows_summarises_the_last_days():
     now = datetime(2026, 11, 5, 12, tzinfo=UTC)
-    payload = _etf_payload([50, -20, 10, 100, 120, 80])  # 2026-11-01 .. 2026-11-06 (future)
-    flows = parse_etf_flows(payload, "btc", now)
+    payload = _tftc_payload([50, -20, 10, 100, 120, 80])  # 2026-11-01 .. 2026-11-06 (future)
+    flows = parse_etf_flows_tftc(payload, now)
     assert flows["coin"] == "BTC" and flows["as_of"] == "2026-11-05"  # the future row is dropped
     assert flows["days"] == 5 and flows["last_day_musd"] == 120.0
     assert flows["sum_5d_musd"] == 260.0 and flows["sum_30d_musd"] == 260.0
     assert flows["typical_day_musd"] == 60.0  # (50+20+10+100+120)/5
     assert flows["streak_days"] == 3  # 10, 100, 120 after the -20
     assert flows["label"] == "strong_inflow"  # 260 / (5 * 60) = 0.87
-    assert flows["last_day_funds"][0] == {"ticker": "IBIT", "flow_musd": 84.0}
-    assert flows["price_usd"] == 100_004.0 and flows["source"] == "coinglass"
+    # Funds by size, zero flows left out.
+    assert flows["last_day_funds"] == [
+        {"ticker": "IBIT", "flow_musd": 84.0},
+        {"ticker": "FBTC", "flow_musd": 36.0},
+    ]
+    assert flows["price_usd"] == 100_004.0 and flows["source"] == "tftc"
     assert [d["flow_musd"] for d in flows["daily"]] == [50.0, -20.0, 10.0, 100.0, 120.0]
+    assert parse_etf_flows_tftc({"days": []}, now) is None
+    assert parse_etf_flows_tftc({"days": [{"date": "x", "netFlowUsd": 1}]}, now) is None
+    assert parse_etf_flows_tftc("nope", now) is None
 
 
-def test_parse_etf_flows_labels_and_streaks():
-    now = datetime(2026, 11, 5, 12, tzinfo=UTC)
+def test_parse_cryptoetf_flows_labels_and_streaks():
     now = datetime(2026, 11, 9, 12, tzinfo=UTC)
-    out = parse_etf_flows(_etf_payload([100, 100, 100, -10, -40, -50, -20, -10]), "ETH", now)
+    out = parse_etf_flows_cryptoetf(
+        _cryptoetf_payload([100, 100, 100, -10, -40, -50, -20, -10]), "eth", now
+    )
     # The last 5 days: -130 against 5 x 53.75 typical = -0.48, five days of outflow in a row.
-    assert out["streak_days"] == -5 and out["label"] == "outflow"
-    out = parse_etf_flows(_etf_payload([100, 100, 100, -30, -40, -50, -20, -10]), "ETH", now)
+    assert out["coin"] == "ETH" and out["streak_days"] == -5 and out["label"] == "outflow"
+    assert out["last_day_funds"] == [] and out["price_usd"] is None
+    assert out["source"] == "cryptoetf.today"
+    out = parse_etf_flows_cryptoetf(
+        _cryptoetf_payload([100, 100, 100, -30, -40, -50, -20, -10]), "ETH", now
+    )
     assert out["label"] == "strong_outflow"  # -150 / (5 x 56.25) = -0.53
-    mixed = parse_etf_flows(_etf_payload([100, -100, 100, -100, 10]), "ETH", now)
+    mixed = parse_etf_flows_cryptoetf(_cryptoetf_payload([100, -100, 100, -100, 10]), "ETH", now)
     assert mixed["label"] == "mixed" and mixed["streak_days"] == 1
-    assert parse_etf_flows(_etf_payload([0, 0, 0]), "ETH", now)["label"] == "unknown"
-    assert parse_etf_flows({"code": "0", "data": []}, "ETH", now) is None
-    assert parse_etf_flows({"data": [{"timestamp": "x", "flow_usd": 1}]}, "ETH", now) is None
-    assert parse_etf_flows("nope", "ETH", now) is None
-
-
-def test_parse_etf_flows_reads_the_openapi_field_names_too():
-    now = datetime(2026, 11, 5, 12, tzinfo=UTC)
+    assert (
+        parse_etf_flows_cryptoetf(_cryptoetf_payload([0, 0, 0]), "ETH", now)["label"] == "unknown"
+    )
+    # The same day twice: the later row wins; a day without a usable flow is skipped.
     payload = {
-        "data": [
-            {
-                "timestamp": int(datetime(2026, 11, 5, tzinfo=UTC).timestamp()),  # seconds
-                "change_usd": "-250000000",
-                "close_price": "3200.5",
-                "etf_flows": [
-                    {"ticker": "etha", "change_usd": -2.5e8},
-                    {"ticker": "x", "change_usd": "nan"},
-                ],
-            },
-            {  # the same day again: the later record wins
-                "timestamp": int(datetime(2026, 11, 5, tzinfo=UTC).timestamp()),
-                "change_usd": "-300000000",
-            },
+        "days": [
+            {"date": "2026-11-05", "netFlowUsdM": "-250"},
+            {"date": "2026-11-05T00:00:00Z", "netFlowUsdM": -300},
+            {"date": "2026-11-04", "netFlowUsdM": "nan"},
         ]
     }
-    out = parse_etf_flows(payload, "ETH", now)
-    assert out["as_of"] == "2026-11-05" and out["last_day_musd"] == -300.0
-    assert out["price_usd"] is None and out["last_day_funds"] == []
-    assert out["days"] == 1 and out["label"] == "strong_outflow"
+    out = parse_etf_flows_cryptoetf(payload, "SOL", now)
+    assert out["as_of"] == "2026-11-05" and out["last_day_musd"] == -300.0 and out["days"] == 1
+    assert parse_etf_flows_cryptoetf({"days": "x"}, "ETH", now) is None
 
 
 @respx.mock
-async def test_fetcher_etf_flows_per_coin_with_the_key_in_a_header():
-    btc = respx.get(NewsFetcher.ETF_FLOW_URL.format(asset="bitcoin")).mock(
-        return_value=Response(200, json=_etf_payload([10, 20, 30]))
+async def test_fetcher_etf_flows_with_a_key_asks_cryptoetf_per_coin():
+    btc = respx.get(NewsFetcher.CRYPTOETF_URL.format(asset="btc")).mock(
+        return_value=Response(200, json=_cryptoetf_payload([10, 20, 30], "BTC"))
     )
-    eth = respx.get(NewsFetcher.ETF_FLOW_URL.format(asset="ethereum")).mock(
-        return_value=Response(200, json={"code": "401", "msg": "API key missing."})
+    eth = respx.get(NewsFetcher.CRYPTOETF_URL.format(asset="eth")).mock(
+        return_value=Response(401, json={"message": "API key required", "statusCode": 401})
     )
-    f = NewsFetcher([], None, coins=["BTC", "ETH", "PEPE"], coinglass_api_key="cg-key")
+    tftc = respx.get(NewsFetcher.TFTC_URL).mock(return_value=Response(500))
+    f = NewsFetcher([], None, coins=["BTC", "ETH", "PEPE"], cryptoetf_api_key="cetf_live_x")
     try:
         flows = await f.fetch_etf_flows()
         assert set(flows) == {"BTC", "ETH"}  # PEPE has no ETF
         assert flows["BTC"]["coin"] == "BTC" and flows["BTC"]["days"] == 3
-        assert flows["ETH"] is None  # CoinGlass' own error code counts as a failure
-        assert btc.calls.last.request.headers["CG-API-KEY"] == "cg-key"
-        assert eth.call_count == 1
+        assert flows["ETH"] is None  # a refused key counts as a failure, nothing else breaks
+        assert btc.calls.last.request.headers["Authorization"] == "Bearer cetf_live_x"
+        assert eth.call_count == 1 and tftc.call_count == 0
         # The figures change once a trading day: a second call within the hour is answered
         # from memory.
         assert await f.fetch_etf_flows() is flows
@@ -270,12 +280,31 @@ async def test_fetcher_etf_flows_per_coin_with_the_key_in_a_header():
     finally:
         await f.aclose()
 
+
+@respx.mock
+async def test_fetcher_etf_flows_without_a_key_reads_tftc_for_bitcoin_only():
+    tftc = respx.get(NewsFetcher.TFTC_URL).mock(
+        return_value=Response(200, json=_tftc_payload([10, 20, 30]))
+    )
+    cetf = respx.get(url__startswith="https://api.cryptoetf.today/").mock(
+        return_value=Response(200, json=_cryptoetf_payload([1]))
+    )
+    f = NewsFetcher([], None, coins=["ETH", "BTC"])
+    try:
+        assert f.etf_flow_coins() == ["BTC"]
+        flows = await f.fetch_etf_flows()
+        assert set(flows) == {"BTC"} and flows["BTC"]["source"] == "tftc"
+        assert "Authorization" not in tftc.calls.last.request.headers
+        assert cetf.call_count == 0
+    finally:
+        await f.aclose()
+
     for off in (
-        NewsFetcher([], None, coins=["BTC"], coinglass_api_key=""),
-        NewsFetcher([], None, coins=["BTC"], coinglass_api_key="k", etf_flows_enabled=False),
+        NewsFetcher([], None, coins=["ETH"]),  # no key and no bitcoin: nothing to fetch
+        NewsFetcher([], None, coins=["BTC"], cryptoetf_api_key="k", etf_flows_enabled=False),
     ):
         try:
-            assert await off.fetch_etf_flows() == {}
+            assert off.etf_flow_coins() == [] and await off.fetch_etf_flows() == {}
         finally:
             await off.aclose()
-    assert btc.call_count == 1
+    assert tftc.call_count == 1 and cetf.call_count == 0

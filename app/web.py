@@ -33,7 +33,7 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 # Bumped whenever app.css or a script in /static changes so browsers pick up the new file.
-ASSET_VERSION = "17"
+ASSET_VERSION = "18"
 
 NBSP = " "  # between the euro sign and the amount, so '€ 1.000,00' never breaks
 

@@ -28,7 +28,7 @@
     <p>Claude beoordeelt per bericht of het de koers raakt, hoe sterk (impact klein, middel of groot) en hoe lang (uren, dagen of weken). De bot weegt dat mee bij elke beslissing.</p>
     <p>Het sentiment rekent altijd met de laatste {{ sentiment_hours }} uur, wat je hieronder ook kiest. Berichten over hetzelfde nieuwsfeit staan bij elkaar: het sentiment is dan het gemiddelde van die bronnen (één stem per bron), de impact de hoogste. Meldt maar één bron een feit, dan telt het hooguit als impact middel, en marktbreed nieuws telt pas mee als een tweede bron het meldt.</p>
     <p>Bij elk nieuwsfeit staat of het nu meetelt voor jouw coins en zo niet, waarom: niet beoordeeld, niet koersrelevant, ouder dan {{ sentiment_hours }} uur, over andere coins, of impact 0.</p>
-    <p>Bronnen: {{ settings.news_rss_feeds|length }} RSS-feeds{% if settings.gdelt_enabled %}, GDELT (wereldnieuws){% endif %}{% if settings.cryptopanic_token %}, CryptoPanic{% endif %}{% if settings.fear_greed_enabled %}, de Fear &amp; Greed-index van alternative.me{% endif %}{% if settings.etf_flows_enabled and etf_flows_key %}, en de ETF-stromen van CoinGlass{% endif %}.</p>
+    <p>Bronnen: {{ settings.news_rss_feeds|length }} RSS-feeds{% if settings.gdelt_enabled %}, GDELT (wereldnieuws){% endif %}{% if settings.cryptopanic_token %}, CryptoPanic{% endif %}{% if settings.fear_greed_enabled %}, de Fear &amp; Greed-index van alternative.me{% endif %}{% if settings.etf_flows_enabled %}, en de ETF-stromen van TFTC{% if etf_flows_key %} en cryptoetf.today{% endif %}{% endif %}.</p>
   </details>
   </div>
 </div>
@@ -112,7 +112,7 @@
     {% endif %}
   </section>
 
-  {% if settings.etf_flows_enabled and (etf_flows or not etf_flows_key) %}
+  {% if settings.etf_flows_enabled and etf_flows %}
   {#- Net flows of the US spot ETFs per coin that has them: context for Claude, like Fear &
       Greed. A fetch that is off or failing shows nothing stale: the figures carry their own
       date, and load_etf_flows drops them after 5 days. -#}
@@ -121,14 +121,14 @@
       <h2 id="etf-title">ETF-stromen</h2>
       <span class="card-meta">Amerikaanse spot-ETF's · nettostroom per handelsdag, in miljoenen dollars</span>
     </div>
-    {% if not etf_flows_key %}
-    {% call ui.notice("info", "ETF-stromen staan aan, maar er is geen CoinGlass-sleutel op de server: zonder sleutel worden ze niet opgehaald. Een gratis Hobbyist-sleutel volstaat.", live=false) %}
-    <span class="mono">COINGLASS_API_KEY</span>
+    {% if not etf_flows_key and etf_flows|length > 1 %}
+    {% call ui.notice("info", "Zonder sleutel komen alleen de bitcoin-ETF's binnen (TFTC). Een gratis sleutel van cryptoetf.today (zonder kaart) geeft ook de andere coins.", live=false) %}
+    <span class="mono">CRYPTOETF_API_KEY</span>
     {% endcall %}
-    {% else %}
+    {% endif %}
     <div class="grid">
       {% for coin, f in etf_flows.items() %}
-      <section class="card news-coin" aria-labelledby="etf-{{ coin }}">
+      <section class="card news-etf" aria-labelledby="etf-{{ coin }}">
         <div class="card-header">
           <h3 class="card-title" id="etf-{{ coin }}">{{ coin }}</h3>
           {% if f %}<span class="pill {{ 'pill-green' if f.label in ('inflow', 'strong_inflow') else ('pill-red' if f.label in ('outflow', 'strong_outflow') else '') }}">{{ etf_flow_nl.get(f.label, f.label) }}</span>{% else %}<span class="pill">geen gegevens</span>{% endif %}
@@ -146,13 +146,12 @@
         <p class="small muted">Stand van {{ f.as_of }}.</p>
         {% endif %}
         {% else %}
-        <p class="small muted">Nog niet opgehaald, of de laatste cijfers zijn ouder dan 5 dagen.</p>
+        <p class="small muted">{% if etf_flows_key or coin == "BTC" %}Nog niet opgehaald, of de laatste cijfers zijn ouder dan 5 dagen.{% else %}Alleen met een sleutel van cryptoetf.today.{% endif %}</p>
         {% endif %}
       </section>
       {% endfor %}
     </div>
-    <p class="small muted">Bron: CoinGlass, één keer per uur opgehaald; nieuwe cijfers komen na het slot van de Amerikaanse beurs. Context voor Claude, geen koop- of verkoopsignaal.</p>
-    {% endif %}
+    <p class="small muted">Bron: {% if etf_flows_key %}cryptoetf.today en {% endif %}<a href="https://www.tftc.io/bitcoin-etf-flows" rel="noopener noreferrer" target="_blank">The Commoner Bitcoin ETF Tracker by TFTC</a> (CC BY 4.0); één keer per uur opgehaald, nieuwe cijfers komen na het slot van de Amerikaanse beurs. Context voor Claude, geen koop- of verkoopsignaal.</p>
   </section>
   {% endif %}
 

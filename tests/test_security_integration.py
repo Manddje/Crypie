@@ -327,7 +327,7 @@ ROOT = TEMPLATES.parent.parent
         "NOTIFY_FORMAT",
         "NOTIFY_EXIT_FAIL_MIN",
         "ETF_FLOWS_ENABLED",
-        "COINGLASS_API_KEY",
+        "CRYPTOETF_API_KEY",
     ],
 )
 def test_new_settings_are_passed_through_compose_and_documented(var):

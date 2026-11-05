@@ -397,44 +397,59 @@ async def test_number_fields_accept_any_decimal(api):
 
 @respx.mock
 async def test_etf_flows_endpoint_and_page(api):
-    from datetime import UTC, datetime
+    from datetime import UTC, datetime, timedelta
 
     from app.news.sources import NewsFetcher
 
-    today_ms = int(datetime.now(UTC).timestamp() * 1000)
-    rows = [
-        {"timestamp": today_ms - (4 - i) * 86_400_000, "flow_usd": f * 1e6}
+    def day(i):
+        return (datetime.now(UTC) - timedelta(days=4 - i)).date().isoformat()
+
+    btc_days = [
+        {"date": day(i), "netFlowUsd": f * 1e6, "perEtfUsd": {"IBIT": f * 1e6 * 0.6}}
         for i, f in enumerate([120, 90, 150, 200, 310])
     ]
-    respx.get(NewsFetcher.ETF_FLOW_URL.format(asset="bitcoin")).mock(
-        return_value=Response(200, json={"code": "0", "data": rows})
+    tftc = respx.get(NewsFetcher.TFTC_URL).mock(return_value=Response(200, json={"days": btc_days}))
+    eth_days = [{"date": day(i), "netFlowUsdM": f} for i, f in enumerate([-40, -60, -20, -90, -80])]
+    respx.get(NewsFetcher.CRYPTOETF_URL.format(asset="eth")).mock(
+        return_value=Response(200, json={"symbol": "ETH", "days": eth_days})
     )
-    respx.get(NewsFetcher.ETF_FLOW_URL.format(asset="ethereum")).mock(return_value=Response(503))
+    respx.get(NewsFetcher.CRYPTOETF_URL.format(asset="btc")).mock(return_value=Response(503))
     for url in app.state.settings.news_rss_feeds:
         respx.get(url).mock(return_value=Response(503))
     respx.get(url__startswith="https://").mock(return_value=Response(503))
 
     fetcher = app.state.news.fetcher
     assert (await api.get("/api/news/etf-flows")).json() == {"BTC": None, "ETH": None}
-    r = await api.get("/news")
-    assert r.status_code == 200 and "COINGLASS_API_KEY" in r.text  # on, but no key yet
 
-    fetcher.coinglass_api_key = "test-key"
-    app.state.settings.coinglass_api_key = "test-key"  # the page reads the environment's key
+    # Without a key: bitcoin from TFTC, the page says a free key adds the other coins.
+    assert (await api.post("/api/news/refresh")).status_code == 200
+    body = (await api.get("/api/news/etf-flows")).json()
+    assert body["BTC"]["label"] == "strong_inflow" and body["BTC"]["sum_5d_musd"] == 870.0
+    assert body["BTC"]["source"] == "tftc" and body["ETH"] is None
+    r = await api.get("/news")
+    assert r.status_code == 200 and "ETF-stromen" in r.text and "+870,0" in r.text
+    assert "IBIT +186,0" in r.text and "CRYPTOETF_API_KEY" in r.text
+    assert "Alleen met een sleutel van cryptoetf.today" in r.text
+    assert "tftc.io/bitcoin-etf-flows" in r.text  # CC BY 4.0: the source is credited
+
+    fetcher.cryptoetf_api_key = "test-key"
+    app.state.settings.cryptoetf_api_key = "test-key"  # the page reads the environment's key
+    fetcher.etf_flows, fetcher._etf_flows_at = {}, None
     try:
         assert (await api.post("/api/news/refresh")).status_code == 200
         body = (await api.get("/api/news/etf-flows")).json()
-        assert body["BTC"]["label"] == "strong_inflow" and body["BTC"]["sum_5d_musd"] == 870.0
-        assert body["ETH"] is None  # the fetch failed and nothing was stored before
+        assert body["ETH"]["label"] == "strong_outflow" and body["ETH"]["sum_5d_musd"] == -290.0
+        assert body["BTC"]["source"] == "tftc"  # the key's fetch failed: the stored value stays
         r = await api.get("/news")
-        assert r.status_code == 200 and "ETF-stromen" in r.text
-        assert "sterke instroom" in r.text and "+870,0" in r.text and "geen gegevens" in r.text
+        assert r.status_code == 200 and "sterke uitstroom" in r.text and "-290,0" in r.text
+        assert "CRYPTOETF_API_KEY" not in r.text
+        assert tftc.call_count == 1
         # The flows reach the MCP as their own tool, through the same endpoint.
         from app.mcp_server import TOOLS
 
         assert next(t for t in TOOLS if t.name == "etf_flows").path == "/api/news/etf-flows"
     finally:
-        fetcher.coinglass_api_key = ""
-        app.state.settings.coinglass_api_key = ""
+        fetcher.cryptoetf_api_key = ""
+        app.state.settings.cryptoetf_api_key = ""
         fetcher.etf_flows = {}
         fetcher._etf_flows_at = None

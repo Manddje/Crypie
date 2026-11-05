@@ -71,10 +71,10 @@ class Settings(BaseSettings):
     cryptocv_enabled: bool = True  # free aggregator with per-coin archive, no key
     google_news_enabled: bool = True  # one Google News search feed per coin
     fear_greed_enabled: bool = True  # alternative.me index as market-wide context
-    # Daily net flows of the US spot ETFs (BTC, ETH, SOL, XRP) from CoinGlass, as context for
-    # Claude. Needs a CoinGlass API key (the free Hobbyist plan suffices); without it skipped.
+    # Daily net flows of the US spot ETFs as context for Claude. Without a key: bitcoin only,
+    # from TFTC's open series. A free cryptoetf.today key (no card) adds ETH, SOL and XRP.
     etf_flows_enabled: bool = True
-    coinglass_api_key: str = ""
+    cryptoetf_api_key: str = ""
     gdelt_enabled: bool = True
     gdelt_query: str = (
         '(bitcoin OR ethereum OR crypto OR stablecoin OR "central bank" OR "interest rate" '

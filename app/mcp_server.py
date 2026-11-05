@@ -506,8 +506,8 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         "etf_flows",
         "ETF-stromen",
-        "Dagelijkse in- en uitstroom van de Amerikaanse spot-ETF's per coin (CoinGlass): "
-        "laatste handelsdag, 5 en 30 dagen, reeks en label. Leeg zonder CoinGlass-sleutel.",
+        "Dagelijkse in- en uitstroom van de Amerikaanse spot-ETF's per coin: laatste "
+        "handelsdag, 5 en 30 dagen, reeks en label. Zonder cryptoetf.today-sleutel alleen BTC.",
         "GET",
         "/api/news/etf-flows",
         read_only=True,

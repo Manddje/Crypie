@@ -412,7 +412,7 @@ async def lifespan(app: FastAPI):
         cryptocv_enabled=settings.cryptocv_enabled,
         google_news_enabled=settings.google_news_enabled,
         fear_greed_enabled=settings.fear_greed_enabled,
-        coinglass_api_key=settings.coinglass_api_key,
+        cryptoetf_api_key=settings.cryptoetf_api_key,
         etf_flows_enabled=settings.etf_flows_enabled,
     )
     app.state.news = NewsService(
@@ -1870,7 +1870,7 @@ async def news_sentiment(
 
 @app.get("/api/news/etf-flows")
 async def news_etf_flows(request: Request, session: Session = Depends(get_session)):
-    """Daily net flows of the US spot ETFs per configured coin that has them (CoinGlass).
+    """Daily net flows of the US spot ETFs per configured coin that has them.
 
     A coin maps to null when nothing (fresh) is stored; coins without ETFs are left out.
     """
@@ -2008,7 +2008,7 @@ async def news_page(
             "etf_flows": load_all_etf_flows(session, settings.coins)
             if settings.etf_flows_enabled
             else {},
-            "etf_flows_key": bool(settings.coinglass_api_key),
+            "etf_flows_key": bool(settings.cryptoetf_api_key),
             "etf_flow_nl": ETF_FLOW_NL,
             "last_run": news.last_run,
             "last_error": news.last_error,
@@ -3808,12 +3808,6 @@ def _settings_context(
     if plan is not None and not env.cryptopanic_token:
         plan["dep_off"] = True
         plan["depends_text"] = "Geldt alleen met een CryptoPanic-token op de server; nu is er geen."
-    flows = fields_by_key.get("etf_flows_enabled")
-    if flows is not None and not env.coinglass_api_key:
-        flows["dep_off"] = True
-        flows["depends_text"] = (
-            "Geldt alleen met een CoinGlass-sleutel op de server; nu is er geen."
-        )
     for group in payload["groups"]:
         group["changed"] = [f for f in group["fields"] if f["overridden"]]
         group["resettable"] = [f for f in group["changed"] if f["key"] != "trading_mode"]
@@ -3874,7 +3868,7 @@ def _settings_context(
             "bitvavo_key": env.has_bitvavo_credentials,
             "anthropic_key": bool(env.anthropic_api_key),
             "cryptopanic_token": bool(env.cryptopanic_token),
-            "coinglass_key": bool(env.coinglass_api_key),
+            "cryptoetf_key": bool(env.cryptoetf_api_key),
             "live_ack": env.live_trading_ack,
             "auth": env.auth_enabled,
             "database": env.database_url.split(":", 1)[0],
