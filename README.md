@@ -436,7 +436,8 @@ Nieuws is onbetrouwbare invoer, dus:
   de laatste handelsdag meer dan 5 dagen terug ligt tellen niet meer (een weekend of lange weekend wel);
   een mislukte ophaalronde laat de vorige cijfers staan tot dan; de bron uitzetten
   wist ze. Claude krijgt ze per beslissing mee als `etf_flows` (context, geen signaal: aanhoudende
-  instroom maakt een dip eerder koopwaardig, aanhoudende uitstroom vraagt terughoudendheid); /news toont
+  instroom maakt een dip eerder koopwaardig, aanhoudende uitstroom vraagt terughoudendheid) en bij de
+  schokbeoordeling als dagcijfers naast Fear & Greed (uitstroom maakt een schok geloofwaardiger); /news toont
   ze onder *ETF-stromen*; API `GET /api/news/etf-flows`, MCP-tool `etf_flows`. De sleutel staat alleen
   in de omgeving en komt niet in de log.
 - Bewaartermijn: nieuws 30 dagen, Claude-gebruik 400 dagen (opgeruimd bij elke nieuwsronde).
@@ -515,7 +516,8 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    een hack of een beurs in problemen, gemeld door minstens twee bronnen (één bron die een hack meldt doet dus
    niets; zo kan één vijandige feed niet alle aankopen stilzetten). Met `SHOCK_MODE=claude` (standaard) bepaalt
    Claude (`CLAUDE_MODEL_SHOCK`) aan de hand van een feitenblok dat de bot berekent (eerste melding van het
-   event, koers sindsdien, uurbeweging en uurvolume t.o.v. de 7-daagse mediaan, Fear & Greed) of het een nieuwe
+   event, koers sindsdien, uurbeweging en uurvolume t.o.v. de 7-daagse mediaan, Fear & Greed, ETF-stromen van
+   de geraakte coins) of het een nieuwe
    schok is, een nieuwe ontwikkeling of een herhaling. Bij een herhaling komt er geen pauze. Anders koopt de bot
    minstens `SHOCK_MIN_HOURS` (1) en hooguit `SHOCK_MAX_HOURS` (48) uur niet in de geraakte coins (bij een
    marktbrede schok in geen enkele); vanaf het minimum vraagt de bot Claude om de 30 tot 180 minuten of de

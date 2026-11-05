@@ -38,6 +38,7 @@ from app.db import Decision, NewsEvent, NewsItem, Position, ShockPause, clip
 from app.news.registry import MARKET_WIDE, members_of, merge_coins, related_events, upsert_event
 from app.news.service import (
     event_key_for,
+    load_all_etf_flows,
     load_market_mood,
     load_market_mood_previous,
 )
@@ -831,6 +832,10 @@ class ShockGuard:
             "fear_greed": load_market_mood(session, now)
             if self.engine.market_mood_enabled
             else None,
+            # Net flows of the US spot ETFs of the coins this news is about (day figures).
+            "etf_flows": load_all_etf_flows(session, self._coins_for_facts(coins), now)
+            if self.engine.etf_flows_enabled
+            else {},
             "untrusted": {
                 "bericht": {
                     "titel": untrusted_text(lead.title),
@@ -902,6 +907,9 @@ class ShockGuard:
             "fear_greed_yesterday": load_market_mood_previous(session, now)
             if self.engine.market_mood_enabled
             else None,
+            "etf_flows": load_all_etf_flows(session, coins, now)
+            if self.engine.etf_flows_enabled
+            else {},
             "upcoming_events": [
                 {"label": e.label, "at": e.at}
                 for e in upcoming_events(

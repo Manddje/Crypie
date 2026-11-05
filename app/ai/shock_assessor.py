@@ -49,6 +49,11 @@ Uitgangspunten:
   werking) van coin-specifiek (één project). Coin-specifiek raakt alleen die coin.
 - Weeg geruststellend nieuws mee: bevestigde compensatie, hervatte opnames, officiële
   verklaringen die de omvang beperken.
+- ETF-stromen zijn dagcijfers van de Amerikaanse spot-ETF's (bekend na het slot van de
+  Amerikaanse beurs), geen uurcijfers: ze zeggen niet of de reactie op dit bericht nog
+  gaande is, wel hoe grote partijen de afgelopen dagen stonden. Aanhoudende of sterke
+  uitstroom maakt een schok geloofwaardiger en een pauze eerder nog nodig; aanhoudende
+  instroom dempt. Eén dag zegt weinig; ontbreken ze, dan negeer je ze.
 - Onzekerheid is geen reden om te blokkeren. Blokkeer als je gelooft dat het een schok
   is; laat los als je gelooft van niet. Gebruik confidence voor je twijfel.
 - Antwoord uitsluitend met het gevraagde JSON-object, zonder tekst eromheen. De
@@ -132,6 +137,34 @@ def _fear_greed(mood: dict | None) -> str:
     return f"{mood.get('value')} ({mood.get('label')})"
 
 
+def _etf_flow_line(coin: str, f: dict[str, Any]) -> str:
+    streak = int(f.get("streak_days") or 0)
+    streak_text = (
+        f"{abs(streak)} dagen op rij {'instroom' if streak > 0 else 'uitstroom'}"
+        if abs(streak) > 1
+        else "geen reeks"
+    )
+    return (
+        f"{coin}: laatste dag {_musd(f.get('last_day_musd'))}, 5 dagen "
+        f"{_musd(f.get('sum_5d_musd'))} ({f.get('label_nl') or f.get('label') or UNKNOWN}), "
+        f"30 dagen {_musd(f.get('sum_30d_musd'))}, {streak_text}, stand {f.get('as_of') or UNKNOWN}"
+    )
+
+
+def _etf_flows_text(flows: Any) -> str:
+    """One line per coin with ETFs, in millions of USD; 'onbekend' without figures."""
+    if not isinstance(flows, dict):
+        return UNKNOWN
+    lines = [_etf_flow_line(c, f) for c, f in flows.items() if isinstance(f, dict)]
+    return "\n".join(lines) or UNKNOWN
+
+
+def _musd(value: Any) -> str:
+    if value is None:
+        return UNKNOWN
+    return f"{float(value):+,.1f} mln USD".replace(",", " ")
+
+
 def render_prompt_a(facts: dict[str, Any]) -> str:
     """The user prompt of call A from the facts the guard computed (see ShockGuard)."""
     new = not facts.get("prior_article_count")
@@ -183,6 +216,8 @@ def render_prompt_a(facts: dict[str, Any]) -> str:
         f"BTC uurbeweging t.o.v. 7-daagse mediaan: {fmt_ratio(facts.get('btc_move_ratio'))}",
         f"BTC uurvolume t.o.v. 7-daagse mediaan: {fmt_ratio(facts.get('btc_volume_ratio'))}",
         f"Fear & Greed: {_fear_greed(facts.get('fear_greed'))}",
+        "ETF-stromen (Amerikaanse spot-ETF's, dagcijfers):",
+        _etf_flows_text(facts.get("etf_flows")),
         "",
         "Antwoord met:",
         '{"verdict": "nieuw" | "ontwikkeling" | "herhaling",',
@@ -270,6 +305,8 @@ def render_prompt_b(facts: dict[str, Any]) -> str:
         "CONTEXT",
         f"Fear & Greed: {_fear_greed(facts.get('fear_greed'))} (gisteren "
         f"{_fear_greed(facts.get('fear_greed_yesterday'))})",
+        "ETF-stromen (Amerikaanse spot-ETF's, dagcijfers):",
+        _etf_flows_text(facts.get("etf_flows")),
         f"Agendamomenten binnen 3 uur: {upcoming_text}",
         "Vorige oordelen in deze pauze (oudste eerst):",
         verdict_lines,
