@@ -114,12 +114,19 @@ from app.strategy.page import (
     save_confirm,
 )
 from app.strategy.store import (
-    STRATEGY_KEY,
-    load_previous,
+    MAX_STRATEGIES,
+    StrategySlot,
+    add_slot,
+    assign_markets,
+    delete_slot,
+    load_slots,
     load_strategy,
-    load_strategy_checked,
-    save_strategy,
-    strategy_version,
+    market_problems,
+    parse_budget,
+    parse_markets,
+    resolved_markets,
+    save_slot,
+    slot_version,
 )
 from app.trading import display, risk
 from app.trading.engine import (
@@ -1419,14 +1426,14 @@ async def _run_backtest(
 
 @app.get("/api/strategy")
 async def get_strategy(session: Session = Depends(get_session)):
+    """The rules of the first strategy (see /api/strategies for all of them)."""
     return load_strategy(session).model_dump()
 
 
-@app.put("/api/strategy")
-async def put_strategy(
-    strategy: Strategy, request: Request, session: Session = Depends(get_session)
-):
-    if strategy.market not in request.app.state.settings.markets:
+def _check_strategy_rules(settings: Settings, strategy: Strategy) -> None:
+    """The checks before rules may become active (API): the backtest market is tracked and
+    check_for_use passes. Raises ApiError 422."""
+    if strategy.market not in settings.markets:
         raise errors.ApiError(
             422,
             f"{strategy.market} staat niet bij de markten van de bot (MARKETS).",
@@ -1437,8 +1444,179 @@ async def put_strategy(
         check_for_use(strategy)
     except ValueError as exc:
         raise errors.ApiError(422, str(exc), "invalid_strategy") from exc
-    save_strategy(session, strategy)
+
+
+def _check_slot_scope(
+    session: Session,
+    settings: Settings,
+    markets: list[str],
+    *,
+    slot_id: int | None,
+    enabled: bool,
+) -> None:
+    """A strategy's markets must be tracked and free (API). Raises ApiError 422."""
+    problems = market_problems(
+        load_slots(session), markets, slot_id=slot_id, enabled=enabled, all_markets=settings.markets
+    )
+    if problems:
+        code = "market_not_tracked" if "staat niet bij" in problems[0] else "strategy_conflict"
+        raise errors.ApiError(422, "; ".join(problems) + ".", code, fields={"markets": problems[0]})
+
+
+@app.put("/api/strategy")
+async def put_strategy(
+    strategy: Strategy, request: Request, session: Session = Depends(get_session)
+):
+    """Replace the rules of the first strategy; its markets and budget stay."""
+    _check_strategy_rules(request.app.state.settings, strategy)
+    slots = load_slots(session)
+    save_slot(session, slots[0].id, strategy)
     return strategy.model_dump()
+
+
+class StrategySlotIn(BaseModel):
+    """A new strategy: its rules, the markets it trades and its own budget."""
+
+    strategy: Strategy
+    budget_eur: float = Field(default=0, ge=0, le=10_000_000, allow_inf_nan=False)
+    markets: list[str] = Field(default_factory=list, max_length=20)
+    enabled: bool = True
+
+
+class StrategySlotUpdate(BaseModel):
+    """A change to a strategy; only the given parts change."""
+
+    strategy: Strategy | None = None
+    budget_eur: float | None = Field(default=None, ge=0, le=10_000_000, allow_inf_nan=False)
+    markets: list[str] | None = Field(default=None, max_length=20)
+    enabled: bool | None = None
+
+
+def _slot_dict(row: dict) -> dict:
+    slot: StrategySlot = row["slot"]
+    return {
+        "id": slot.id,
+        "name": slot.name,
+        "enabled": slot.enabled,
+        "valid": slot.warning is None,
+        "warning": slot.warning,
+        "budget_eur": slot.budget_eur,
+        # The markets as saved (empty = every tracked market no other strategy names) and
+        # the tracked markets it trades right now.
+        "markets": list(slot.markets),
+        "active_markets": row["active_markets"],
+        "invested_eur": row["invested_eur"],
+        "available_eur": row["room_eur"],
+        "value_eur": row["value_eur"],
+        "open_positions": row["open_positions"],
+        "strategy": slot.strategy.model_dump(),
+        "previous_name": slot.previous.name if slot.previous else None,
+        "created_at": slot.created_at,
+        "updated_at": slot.updated_at,
+    }
+
+
+def _slot_row_or_404(engine: TradingEngine, session: Session, strategy_id: int) -> dict:
+    row = next((r for r in engine.strategy_slots(session) if r["slot"].id == strategy_id), None)
+    if row is None:
+        raise errors.ApiError(404, f"Strategie {strategy_id} bestaat niet.", "strategy_not_found")
+    return row
+
+
+def _parse_slot_fields(budget: object, markets: object) -> tuple[float, list[str]]:
+    try:
+        return parse_budget(budget), parse_markets(markets)
+    except ValueError as exc:
+        raise errors.ApiError(422, f"{exc}.", "invalid_input") from exc
+
+
+@app.get("/api/strategies")
+async def list_strategies(
+    engine: TradingEngine = Depends(get_engine), session: Session = Depends(get_session)
+):
+    """Every strategy with its markets, budget and what is in use (in the active mode)."""
+    return [_slot_dict(r) for r in engine.strategy_slots(session)]
+
+
+@app.post("/api/strategies", status_code=201)
+async def create_strategy(
+    body: StrategySlotIn,
+    request: Request,
+    response: Response,
+    engine: TradingEngine = Depends(get_engine),
+    session: Session = Depends(get_session),
+):
+    settings = request.app.state.settings
+    budget, markets = _parse_slot_fields(body.budget_eur, body.markets)
+    _check_strategy_rules(settings, body.strategy)
+    _check_slot_scope(session, settings, markets, slot_id=None, enabled=body.enabled)
+    try:
+        slot = add_slot(
+            session, body.strategy, budget_eur=budget, markets=markets, enabled=body.enabled
+        )
+    except ValueError as exc:
+        raise errors.ApiError(422, str(exc), "too_many_strategies") from exc
+    response.headers["Location"] = f"/api/strategies/{slot.id}"
+    return _slot_dict(_slot_row_or_404(engine, session, slot.id))
+
+
+@app.get("/api/strategies/{strategy_id}")
+async def get_strategy_slot(
+    strategy_id: int = Path(ge=1, le=DB_ID_MAX),
+    engine: TradingEngine = Depends(get_engine),
+    session: Session = Depends(get_session),
+):
+    return _slot_dict(_slot_row_or_404(engine, session, strategy_id))
+
+
+@app.put("/api/strategies/{strategy_id}")
+async def update_strategy_slot(
+    body: StrategySlotUpdate,
+    request: Request,
+    strategy_id: int = Path(ge=1, le=DB_ID_MAX),
+    engine: TradingEngine = Depends(get_engine),
+    session: Session = Depends(get_session),
+):
+    settings = request.app.state.settings
+    current = _slot_row_or_404(engine, session, strategy_id)["slot"]
+    budget = markets = None
+    if body.budget_eur is not None:
+        budget, _ = _parse_slot_fields(body.budget_eur, [])
+    if body.markets is not None:
+        _, markets = _parse_slot_fields(0, body.markets)
+    if body.strategy is not None:
+        _check_strategy_rules(settings, body.strategy)
+    enabled = current.enabled if body.enabled is None else body.enabled
+    _check_slot_scope(
+        session,
+        settings,
+        current.markets if markets is None else markets,
+        slot_id=strategy_id,
+        enabled=enabled,
+    )
+    save_slot(
+        session,
+        strategy_id,
+        body.strategy,
+        budget_eur=budget,
+        markets=markets,
+        enabled=body.enabled,
+    )
+    return _slot_dict(_slot_row_or_404(engine, session, strategy_id))
+
+
+@app.delete("/api/strategies/{strategy_id}")
+async def delete_strategy_slot(
+    strategy_id: int = Path(ge=1, le=DB_ID_MAX),
+    engine: TradingEngine = Depends(get_engine),
+    session: Session = Depends(get_session),
+):
+    _slot_row_or_404(engine, session, strategy_id)
+    try:
+        delete_slot(session, strategy_id)
+    except ValueError as exc:
+        raise errors.ApiError(409, str(exc), "last_strategy") from exc
+    return {"deleted": True, "id": strategy_id}
 
 
 @app.post("/api/strategy/propose")
@@ -1486,7 +1664,14 @@ async def run_backtest(
         raise errors.ApiError(422, f"Backtest mislukt: {exc}", "backtest_failed") from exc
 
 
-def _waiting_proposal(session: Session, settings: Settings, current: Strategy) -> dict | None:
+def _proposal_target(ev: Evaluation, slots: list[StrategySlot]) -> StrategySlot:
+    """The strategy an evaluation's proposal changes: the one it names, else the first."""
+    return next((s for s in slots if s.id == ev.strategy_id), None) or slots[0]
+
+
+def _waiting_proposal(
+    session: Session, settings: Settings, slots: list[StrategySlot]
+) -> dict | None:
     """The proposal that waits at the top of Handelen (``#voorstel``), so the strategy page can
     point to it (UX-15). Same rule as Handelen: the newest unapplied proposal of the last
     evaluations, and only when it can be applied as it is; an older one is not offered."""
@@ -1494,10 +1679,48 @@ def _waiting_proposal(session: Session, settings: Settings, current: Strategy) -
         if not ev.proposed_strategy or ev.applied:
             continue
         proposal = _proposal(ev)
-        if proposal is None or _proposal_problems(ev, current, settings):
+        target = _proposal_target(ev, slots)
+        if proposal is None or _proposal_problems(ev, target.strategy, settings):
             return None
-        return {"name": proposal.name, "created_at": ev.created_at, "id": ev.id}
+        return {
+            "name": proposal.name,
+            "created_at": ev.created_at,
+            "id": ev.id,
+            "strategy_id": target.id,
+            "strategy_name": target.name,
+        }
     return None
+
+
+def _slot_scope_nl(slot: StrategySlot, row: dict, slots: list[StrategySlot], settings: Settings):
+    """The markets a strategy trades now (or would trade once switched on), for the pages."""
+    if slot.enabled:
+        return list(row["active_markets"])
+    return resolved_markets(slot, slots, settings.markets)
+
+
+def _strategy_rows(engine: TradingEngine, session: Session, settings: Settings) -> list[dict]:
+    """Every strategy for the overview on the strategy page: its scope, budget and use."""
+    rows = engine.strategy_slots(session)
+    slots = [r["slot"] for r in rows]
+    out = []
+    for r in rows:
+        slot = r["slot"]
+        out.append(
+            {
+                **r,
+                "id": slot.id,
+                "name": slot.name,
+                "enabled": slot.enabled,
+                "warning": slot.warning,
+                "catch_all": slot.catch_all,
+                "markets": list(slot.markets),
+                "scope": _slot_scope_nl(slot, r, slots, settings),
+                "budget_eur": slot.budget_eur,
+                "strategy": slot.strategy,
+            }
+        )
+    return out
 
 
 def _strategy_context(
@@ -1505,26 +1728,58 @@ def _strategy_context(
     session: Session,
     assistant: StrategyAssistant,
     state: dict | None = None,
+    slot_id: int | None = None,
 ) -> dict:
-    """The strategy page. ``state`` is the outcome of a form (a test, a proposal, refused
-    input or a conflict), from the result store or straight from the POST."""
+    """The strategy page: every strategy (markets, budget, use) and the editor for one of them
+    (``slot_id``, else the first). ``state`` is the outcome of a form (a test, a proposal,
+    refused input or a conflict), from the result store or straight from the POST."""
     settings: Settings = request.app.state.settings
-    current, load_warning = load_strategy_checked(session)
+    engine: TradingEngine = request.app.state.engine
     state = state or {}
+    rows = _strategy_rows(engine, session, settings)
+    slots = [r["slot"] for r in rows]
+    wanted = state.get("strategy_id") or slot_id
+    selected = next((r for r in rows if r["id"] == wanted), None)
+    slot_missing = wanted is not None and selected is None
+    selected = selected or rows[0]
+    slot: StrategySlot = selected["slot"]
+    current, load_warning = slot.strategy, slot.warning
     live = settings.trading_mode == "live"
-    previous = load_previous(session)
+    scope = selected["scope"]
+    scope_nl = ", ".join(scope) if scope else "geen markt (nog niet toegewezen)"
+    where = f" op {scope_nl}" if scope else ""
+    plan = assign_markets(slots, settings.markets)
+    unassigned = [m for m in settings.markets if m not in plan]
+    budgets = sum(r["budget_eur"] for r in rows if r["enabled"])
+    capital = settings.live_capital_eur if live else settings.paper_start_eur
     ctx: dict = {
         "settings": settings,
         "mode": settings.trading_mode,
+        "slots": rows,
+        "slot": selected,
+        "strategy_id": slot.id,
+        "slot_missing": slot_missing,
+        "scope": scope,
+        "scope_nl": scope_nl,
+        "unassigned_markets": unassigned,
+        "budget_total": budgets,
+        "capital_eur": capital,
+        "budget_over": bool(capital) and budgets > capital,
+        "can_delete": len(rows) > 1,
+        "max_strategies": MAX_STRATEGIES,
+        "max_reached": len(rows) >= MAX_STRATEGIES,
+        "slot_errors": state.get("slot_errors") or {},
+        "slot_form": state.get("slot_form") or {},
+        "new_form": state.get("new_form") or {},
         "strategy": current,
         "strategy_json": state.get("strategy_json") or current.model_dump_json(indent=2),
-        "version": strategy_version(session),
+        "version": slot_version(session, slot.id),
         "load_warning": load_warning,
         "assistant_available": assistant.available,
         "assistant_model": settings.claude_model_strategy,
-        "waiting": _waiting_proposal(session, settings, current),
-        "previous": previous[0] if previous else None,
-        "previous_at": previous[1] if previous else None,
+        "waiting": _waiting_proposal(session, settings, slots),
+        "previous": slot.previous,
+        "previous_at": slot.previous_at,
         "previous_confirm": None,
         "result_missing": state.get("missing", False),
         "kind": state.get("kind"),
@@ -1547,21 +1802,24 @@ def _strategy_context(
         "conflict": None,
         "backtest_error": state.get("backtest_error"),
         "editor_confirm": ("LIVE · echt geld: " if live else "")
-        + "Opslaan zonder test? De strategie in de editor wordt meteen actief op "
-        + ", ".join(settings.markets)
-        + ", zonder backtest.",
+        + f"Opslaan zonder test? De regels in de editor gelden meteen voor '{slot.name}'"
+        + f"{where}, zonder backtest.",
         "reset_confirm": (
             ("LIVE · echt geld: " if live else "")
-            + f"De actieve strategie wordt vervangen door de standaardstrategie "
-            f"'{DEFAULT_STRATEGY.name}' van Crypie, op {', '.join(settings.markets)}. De huidige "
-            "blijft bewaard als vorige strategie. Doorgaan?"
+            + f"De regels van '{slot.name}' worden vervangen door de standaardstrategie "
+            f"'{DEFAULT_STRATEGY.name}' van Crypie{where}. De huidige regels blijven bewaard "
+            "als vorige strategie. Doorgaan?"
+        ),
+        "delete_confirm": (
+            f"Strategie '{slot.name}' verwijderen? Open posities in haar markten blijven "
+            "bewaakt door de stops van de eerste strategie."
         ),
     }
-    if ctx["previous"] is not None:
+    if slot.previous is not None:
         ctx["previous_confirm"] = (
             ("LIVE · echt geld: " if live else "")
-            + f"Vorige strategie '{ctx['previous'].name}' terugzetten en meteen actief maken "
-            f"op {', '.join(settings.markets)}? De huidige wordt dan de vorige."
+            + f"Vorige strategie '{slot.previous.name}' terugzetten en meteen actief maken"
+            f"{where}? De huidige wordt dan de vorige."
         )
     if state.get("proposal"):
         proposal = Strategy.model_validate(state["proposal"])
@@ -1574,7 +1832,7 @@ def _strategy_context(
         ctx["problems"] = problems
         ctx["save_confirm"] = save_confirm(
             proposal.name,
-            settings.markets,
+            scope or ["nog geen markt"],
             state.get("backtest"),
             live,
             tested=bool(state.get("backtest")),
@@ -1627,7 +1885,8 @@ def _strategy_input(strategy_json: str, settings: Settings) -> Strategy:
                     "path": "market",
                     "message": f"{candidate.market} staat niet in je markten (MARKETS: "
                     f"{', '.join(settings.markets)}). Dit veld bepaalt alleen op welke markt de "
-                    "backtest draait; de strategie geldt voor al je markten",
+                    "backtest draait; op welke markten de strategie handelt, stel je bij de "
+                    "strategie in",
                 }
             ]
         )
@@ -1638,6 +1897,7 @@ def _strategy_input(strategy_json: str, settings: Settings) -> Strategy:
 async def strategy_page(
     request: Request,
     result: str | None = Query(None, max_length=64),
+    id: int | None = Query(None, ge=1, le=DB_ID_MAX),
     assistant: StrategyAssistant = Depends(get_assistant),
     session: Session = Depends(get_session),
 ):
@@ -1645,12 +1905,93 @@ async def strategy_page(
     if result:
         state = RESULTS.get(result) if RESULT_TOKEN.match(result) else None
         state = state or {"missing": True}
-    ctx = _strategy_context(request, session, assistant, state)
+    ctx = _strategy_context(request, session, assistant, state, slot_id=id)
     return templates.TemplateResponse(request, "strategy.html", ctx)
 
 
 # Where each outcome lands on the page.
 STRATEGY_ANCHORS = {"invalid": "editor", "claude": "claude", "conflict": "conflict"}
+# Actions on the list of strategies (not on the rules of one); they land on #strategieen.
+SLOT_ACTIONS = ("add", "slot_settings", "enable", "disable", "delete")
+
+
+def _slot_url(slot_id: int | None, anchor: str, primary_id: int | None = None) -> str:
+    """The page of one strategy; the first strategy is the page without ``id``."""
+    if not slot_id or slot_id == primary_id:
+        return f"/strategy#{anchor}"
+    return f"/strategy?id={slot_id}#{anchor}"
+
+
+def _form_bool(value: str) -> bool:
+    return str(value).strip().lower() in ("1", "true", "on", "yes", "ja")
+
+
+def _slot_action(
+    session: Session,
+    settings: Settings,
+    action: str,
+    slot_id: int | None,
+    budget_eur: str,
+    markets: str,
+    enabled: str,
+) -> tuple[str, str]:
+    """Add, change, switch or delete a strategy from the overview. Returns (message, the
+    page url to go to); raises ValueError (Dutch) when refused."""
+    slots = load_slots(session)
+    if action == "add":
+        if len(slots) >= MAX_STRATEGIES:
+            raise ValueError(f"Er kunnen hoogstens {MAX_STRATEGIES} strategieën zijn.")
+        budget, markets_ = parse_budget(budget_eur), parse_markets(markets)
+        problems = market_problems(
+            slots, markets_, slot_id=None, enabled=True, all_markets=settings.markets
+        )
+        if problems:
+            raise ValueError("; ".join(problems) + ".")
+        rules = DEFAULT_STRATEGY.model_copy(update={"name": "Nieuwe strategie"})
+        new = add_slot(session, rules, budget_eur=budget, markets=markets_, enabled=True)
+        scope = ", ".join(markets_) if markets_ else "alle overige markten"
+        return (
+            f"Strategie toegevoegd met de standaardregels, op {scope}"
+            + (f" en een budget van € {budget:,.2f}" if budget else "")
+            + ". Pas hieronder de naam en de regels aan.",
+            _slot_url(new.id, "actief"),
+        )
+    slot = next((s for s in slots if s.id == slot_id), None)
+    if slot is None:
+        raise ValueError("Deze strategie bestaat niet (meer).")
+    if action == "delete":
+        delete_slot(session, slot_id)
+        return f"Strategie '{slot.name}' verwijderd.", "/strategy#strategieen"
+    if action in ("enable", "disable"):
+        on = action == "enable"
+        if on:
+            problems = market_problems(
+                slots, slot.markets, slot_id=slot.id, enabled=True, all_markets=settings.markets
+            )
+            if problems:
+                raise ValueError("; ".join(problems) + ".")
+        save_slot(session, slot.id, enabled=on)
+        return (
+            f"Strategie '{slot.name}' {'aangezet' if on else 'uitgezet'}."
+            + ("" if on else " Open posities in haar markten blijven bewaakt."),
+            _slot_url(slot.id, "strategieen", slots[0].id),
+        )
+    # slot_settings: budget, markets and the switch in one go.
+    budget, markets_ = parse_budget(budget_eur), parse_markets(markets)
+    on = _form_bool(enabled)
+    problems = market_problems(
+        slots, markets_, slot_id=slot.id, enabled=on, all_markets=settings.markets
+    )
+    if problems:
+        raise ValueError("; ".join(problems) + ".")
+    save_slot(session, slot.id, budget_eur=budget, markets=markets_, enabled=on)
+    scope = ", ".join(markets_) if markets_ else "alle overige markten"
+    return (
+        f"Strategie '{slot.name}' bijgewerkt: {scope}, "
+        + (f"budget € {budget:,.2f}" if budget else "geen eigen budget")
+        + (", aan." if on else ", uit."),
+        _slot_url(slot.id, "strategieen", slots[0].id),
+    )
 
 
 @app.post("/strategy", response_class=HTMLResponse, include_in_schema=False)
@@ -1662,11 +2003,16 @@ async def strategy_action(
     limit: int = Form(500, ge=50, le=MAX_CANDLES),
     market: str = Form("", max_length=16),
     base_version: str = Form("", max_length=64),
+    strategy_id: int = Form(0, ge=0, le=DB_ID_MAX),
+    budget_eur: str = Form("", max_length=32),
+    markets: str = Form("", max_length=400),
+    enabled: str = Form("", max_length=8),
     client: BitvavoClient = Depends(get_client),
     assistant: StrategyAssistant = Depends(get_assistant),
     session: Session = Depends(get_session),
 ):
-    """Test, propose, save, reset or put back the previous strategy.
+    """Test, propose, save, reset or put back the previous rules of one strategy
+    (``strategy_id``, else the first), or add, change, switch or delete a strategy.
 
     Browsers always get a redirect (Post/Redirect/Get): a success to the page with a message, a
     test or proposal to ``/strategy?result=<id>``, so a reload never runs a test or a paid
@@ -1674,7 +2020,45 @@ async def strategy_action(
     """
     settings: Settings = request.app.state.settings
     html = errors.wants_html(request)
-    state: dict = {"limit": limit, "market": market if market in settings.markets else ""}
+    primary_id = load_slots(session)[0].id
+    if action in SLOT_ACTIONS:
+        try:
+            done, url = _slot_action(
+                session, settings, action, strategy_id or None, budget_eur, markets, enabled
+            )
+        except (ValueError, LookupError) as exc:
+            if html:
+                return flash.redirect_with_flash(
+                    _slot_url(strategy_id or None, "strategieen", primary_id), "error", str(exc)
+                )
+            ctx = _strategy_context(request, session, assistant, {}, slot_id=strategy_id or None)
+            ctx["error_title"] = str(exc)
+            return templates.TemplateResponse(request, "strategy.html", ctx, status_code=400)
+        if html:
+            return flash.redirect_with_flash(url, "ok", done)
+        ctx = _strategy_context(request, session, assistant, {"message": done})
+        return templates.TemplateResponse(request, "strategy.html", ctx)
+    slots = load_slots(session)
+    slot = next((s for s in slots if s.id == strategy_id), None) if strategy_id else slots[0]
+    if slot is None:
+        if html:
+            return flash.redirect_with_flash(
+                "/strategy#strategieen", "error", "Deze strategie bestaat niet (meer)."
+            )
+        ctx = _strategy_context(request, session, assistant, {})
+        ctx["error_title"] = "Deze strategie bestaat niet (meer)."
+        return templates.TemplateResponse(request, "strategy.html", ctx, status_code=400)
+    scope = (
+        resolved_markets(slot, slots, settings.markets)
+        if not slot.enabled
+        else [m for m, s in assign_markets(slots, settings.markets).items() if s.id == slot.id]
+    )
+    where = f" op {', '.join(scope)}" if scope else ""
+    state: dict = {
+        "limit": limit,
+        "market": market if market in settings.markets else "",
+        "strategy_id": slot.id,
+    }
     done: str | None = None  # the message after a change that went through
     status = 200
     try:
@@ -1689,8 +2073,9 @@ async def strategy_action(
                 raise RuntimeError(
                     f"schrijf je wens in minstens 5 en hoogstens {DESCRIPTION_MAX} tekens."
                 ) from exc
-            current = load_strategy(session)
-            proposal = await assistant.propose(session, description, current, settings.markets)
+            proposal = await assistant.propose(
+                session, description, slot.strategy, settings.markets
+            )
             state.update(
                 kind="propose",
                 proposal=proposal.strategy.model_dump(mode="json"),
@@ -1699,28 +2084,27 @@ async def strategy_action(
             )
             await _try_backtest(request, client, proposal.strategy, limit, state)
         elif action == "reset":
-            save_strategy(session, DEFAULT_STRATEGY)
+            save_slot(session, slot.id, DEFAULT_STRATEGY)
             done = (
-                f"Standaardstrategie '{DEFAULT_STRATEGY.name}' hersteld en actief op "
-                f"{', '.join(settings.markets)}. De vorige strategie is bewaard."
+                f"Standaardstrategie '{DEFAULT_STRATEGY.name}' hersteld en actief{where} "
+                f"(strategie {slot.id}). De vorige regels zijn bewaard."
             )
         elif action == "restore_previous":
-            previous = load_previous(session)
-            if previous is None:
+            if slot.previous is None:
                 raise ValueError("Er is geen vorige strategie bewaard.")
-            if base_version and base_version != strategy_version(session):
+            if base_version and base_version != slot_version(session, slot.id):
                 raise ValueError(
                     "De strategie is intussen gewijzigd; terugzetten zou die wijziging ongedaan "
                     "maken. Bekijk de pagina opnieuw en kies dan."
                 )
-            strategy = previous[0]
+            strategy = slot.previous
             if strategy.market not in settings.markets:
                 raise ValueError(f"{strategy.market} staat niet meer in je markten (MARKETS).")
             check_for_use(strategy)
-            save_strategy(session, strategy)
+            save_slot(session, slot.id, strategy)
             done = (
-                f"Vorige strategie '{strategy.name}' teruggezet en actief op "
-                f"{', '.join(settings.markets)}. De strategie die er stond, is nu de vorige."
+                f"Vorige strategie '{strategy.name}' teruggezet en actief{where}. "
+                "De strategie die er stond, is nu de vorige."
             )
         elif action in ("backtest", "save"):
             state.update(kind="invalid", strategy_json=strategy_json[:STRATEGY_JSON_MAX])
@@ -1744,16 +2128,16 @@ async def strategy_action(
                     raise StrategyInputError(
                         [{"where": "Strategie", "path": "", "message": str(exc)}]
                     ) from exc
-                if base_version and base_version != strategy_version(session):
+                if base_version and base_version != slot_version(session, slot.id):
                     # Changed since this page was loaded (another tab, an applied proposal):
                     # show what saving would undo instead of overwriting it silently.
                     state.update(kind="conflict", conflict=candidate.model_dump(mode="json"))
                     status = 409
                 else:
-                    save_strategy(session, candidate)
+                    save_slot(session, slot.id, candidate)
                     done = (
-                        f"Strategie '{candidate.name}' opgeslagen en actief op "
-                        f"{', '.join(settings.markets)}. De vorige strategie is bewaard."
+                        f"Strategie '{candidate.name}' opgeslagen en actief{where}. "
+                        "De vorige strategie is bewaard."
                     )
         else:
             raise ValueError(f"Onbekende actie {action!r}")
@@ -1774,19 +2158,22 @@ async def strategy_action(
         if action == "propose":
             state.update(kind="claude", claude_error=f"Geen voorstel gemaakt: {exc}")
         elif html:
-            return flash.redirect_with_flash("/strategy#actief", "error", str(exc))
+            return flash.redirect_with_flash(
+                _slot_url(slot.id, "actief", primary_id), "error", str(exc)
+            )
         else:
-            state = {"message_error": str(exc)}
+            state = {"message_error": str(exc), "strategy_id": slot.id}
     if done is not None:
         if html:
-            return flash.redirect_with_flash("/strategy#actief", "ok", done)
-        state = {"message": done}
+            return flash.redirect_with_flash(_slot_url(slot.id, "actief", primary_id), "ok", done)
+        state = {"message": done, "strategy_id": slot.id}
     elif html:
         token = RESULTS.put(state)
         anchor = STRATEGY_ANCHORS.get(state.get("kind") or "", "resultaat")
         if state.get("kind") in ("backtest", "propose") and status == 400:
             anchor = "editor"
-        return RedirectResponse(f"/strategy?result={token}#{anchor}", status_code=303)
+        own = f"id={slot.id}&" if slot.id != primary_id else ""
+        return RedirectResponse(f"/strategy?{own}result={token}#{anchor}", status_code=303)
     ctx = _strategy_context(request, session, assistant, state)
     if state.get("message_error"):
         ctx["error_title"] = state["message_error"]
@@ -2116,7 +2503,7 @@ def _health(
 ) -> dict:
     """bot_health() with what the app knows: Claude budget, the scheduler's last start."""
     if strategy_invalid is None:
-        strategy_invalid = load_strategy_checked(session)[1] is not None
+        strategy_invalid = any(s.enabled and s.warning for s in load_slots(session))
     return bot_health(
         engine,
         session,
@@ -2287,6 +2674,7 @@ def _evaluation_dict(ev: Evaluation) -> dict:
         "proposed_strategy": json.loads(ev.proposed_strategy) if ev.proposed_strategy else None,
         "proposal_backtest": json.loads(ev.proposal_backtest) if ev.proposal_backtest else None,
         "applied": ev.applied,
+        "strategy_id": ev.strategy_id,
     }
 
 
@@ -2452,7 +2840,8 @@ def _apply_proposal(request: Request, session: Session, evaluation_id: int) -> S
         check_for_use(strategy)
     except ValueError as exc:
         raise ProposalError(400, str(exc)) from exc
-    current, load_warning = load_strategy_checked(session)
+    target = _proposal_target(ev, load_slots(session))
+    current, load_warning = target.strategy, target.warning
     guard = _proposal_guard_problems(current, strategy, ev)
     if guard:
         message = "; ".join(guard)
@@ -2463,6 +2852,7 @@ def _apply_proposal(request: Request, session: Session, evaluation_id: int) -> S
             "evaluation_id": ev.id,
             "evaluation_at": ev.created_at.isoformat() if ev.created_at else None,
             "applied_at": datetime.now(UTC).isoformat(),
+            "strategy_id": target.id,
             # An unusable stored strategy is not offered back (the default stood in for it).
             "previous": None if load_warning else current.model_dump(mode="json"),
             "reverted_at": None,
@@ -2470,7 +2860,7 @@ def _apply_proposal(request: Request, session: Session, evaluation_id: int) -> S
     )
     _store_applied_history(session, history)
     ev.applied = True
-    save_strategy(session, strategy)  # commits the strategy, the history and ev.applied
+    save_slot(session, target.id, strategy)  # commits the strategy, the history and ev.applied
     return strategy
 
 
@@ -2491,7 +2881,8 @@ def _revert_proposal(request: Request, session: Session, evaluation_id: int) -> 
     if previous is None:
         raise ProposalError(409, "De vorige strategie is niet bewaard en kan niet terug.")
     proposal = _proposal(ev)
-    if proposal is None or load_strategy(session).model_dump() != proposal.model_dump():
+    target = _proposal_target(ev, load_slots(session))
+    if proposal is None or target.strategy.model_dump() != proposal.model_dump():
         raise ProposalError(
             409,
             "De strategie is na het toepassen nog gewijzigd; terugzetten zou die wijziging "
@@ -2505,7 +2896,7 @@ def _revert_proposal(request: Request, session: Session, evaluation_id: int) -> 
         raise ProposalError(400, str(exc)) from exc
     entry["reverted_at"] = datetime.now(UTC).isoformat()
     _store_applied_history(session, history)
-    save_strategy(session, previous)  # commits both
+    save_slot(session, target.id, previous)  # commits both
     return previous
 
 
@@ -2527,7 +2918,7 @@ async def apply_evaluation(
     return {"applied": True, "strategy": strategy.model_dump()}
 
 
-def _evaluation_rows(session: Session, settings: Settings, current: Strategy) -> list[dict]:
+def _evaluation_rows(session: Session, settings: Settings, slots: list[StrategySlot]) -> list[dict]:
     """The last evaluations for the page: what applying a proposal would change (or, once
     applied, what it changed), why it cannot be applied, and whether it can be undone."""
     evaluations = session.scalars(select(Evaluation).order_by(Evaluation.id.desc()).limit(5)).all()
@@ -2538,6 +2929,10 @@ def _evaluation_rows(session: Session, settings: Settings, current: Strategy) ->
         row = _evaluation_dict(e)
         row["model_nl"] = display.model_name_nl(e.model)
         proposal = _proposal(e)
+        target = _proposal_target(e, slots)
+        current = target.strategy
+        row["target_id"], row["target_name"] = target.id, target.name
+        row["several"] = len(slots) > 1
         row["proposal_name"] = proposal.name if proposal is not None else None
         row["problems"] = _proposal_problems(e, current, settings)
         row["diff"] = None
@@ -2612,10 +3007,16 @@ def _trading_context(
     page: int = 1,
 ) -> dict:
     settings: Settings = request.app.state.settings
-    strategy = load_strategy(session)
-    labels = display.indicator_labels(strategy)
+    slot_rows = _strategy_rows(engine, session, settings)
+    slots = [r["slot"] for r in slot_rows]
+    plan = assign_markets(slots, list(engine.markets))
+    strategy = slots[0].strategy
+    # Indicator ids of every strategy as people read them; the own strategy of a market wins.
+    labels: dict[str, str] = {}
+    for s in reversed(slots):
+        labels.update(display.indicator_labels(s.strategy))
     last_cycle = latest_decisions(session, engine.mode, list(engine.markets))
-    evaluation_rows = _evaluation_rows(session, settings, strategy)
+    evaluation_rows = _evaluation_rows(session, settings, slots)
     now = datetime.now(UTC)
     # At the top of the page: the newest proposal that waits for the owner, or else the one
     # that was just applied (so its changes and the way back are where the owner looks).
@@ -2703,10 +3104,19 @@ def _trading_context(
             for r in engine.last_results or []
             if r.get("signal") == "error" and r.get("market") in engine.markets
         ],
-        "levels": {d.id: levels_summary(strategy, d.indicator_values()) for d in last_cycle},
+        "levels": {
+            d.id: levels_summary(
+                (plan[d.market].strategy if d.market in plan else strategy), d.indicator_values()
+            )
+            for d in last_cycle
+        },
         "evaluations": evaluation_rows,
         "featured": featured,
         "strategy_name": strategy.name,
+        # Per market: the strategy that trades it (None = no strategy, nothing is bought).
+        "strategies": slot_rows,
+        "strategy_by_market": {m: s.name for m, s in plan.items()},
+        "unassigned_markets": [m for m in engine.markets if m not in plan],
         "evaluation_model_nl": display.model_name_nl(settings.claude_model_evaluation),
         "evaluation_available": claude_ok,
         "next_evaluation": next_evaluation,
@@ -2803,7 +3213,9 @@ async def trading_action(
         proposal = _proposal(ev)
         if proposal is None:
             text = "Evaluatie klaar. Claude stelt deze keer geen andere strategie voor."
-        elif _proposal_problems(ev, load_strategy(session), request.app.state.settings):
+        elif _proposal_problems(
+            ev, _proposal_target(ev, load_slots(session)).strategy, request.app.state.settings
+        ):
             text = (
                 f"Evaluatie klaar. Claude stelt de strategie '{proposal.name}' voor, maar die "
                 "kan zo niet worden toegepast; de reden staat bij Evaluaties."
@@ -2887,16 +3299,26 @@ def _plan_claude(settings: Settings, available: bool, budget: dict) -> dict:
 def _plan_context(request: Request, engine: TradingEngine, session: Session) -> dict:
     """Everything the plan page shows: the owner's own text plus the rules the code follows."""
     settings: Settings = request.app.state.settings
-    strategy = load_strategy(session)
+    slot_rows = _strategy_rows(engine, session, settings)
+    strategies = [r for r in slot_rows if r["enabled"]] or slot_rows[:1]
+    strategy = strategies[0]["strategy"]
     budget = request.app.state.budget.status(session)
+    labels: dict[str, str] = {}
+    for r in reversed(slot_rows):
+        labels.update(display.indicator_labels(r["strategy"]))
     return {
         "settings": settings,
         "plan": load_plan(session),
         "fields": PLAN_FIELDS,
         "max_length": PLAN_MAX_LENGTH,
         "strategy": strategy,
+        # Every switched-on strategy with the markets it trades and its budget.
+        "strategies": strategies,
+        "unassigned_markets": [
+            m for m in settings.markets if not any(m in r["scope"] for r in strategies)
+        ],
         # Indicator ids as people read them ('rsi14' -> 'RSI 14'), as on Handelen.
-        "indicator_labels": display.indicator_labels(strategy),
+        "indicator_labels": labels,
         "mode": engine.mode,
         "limits": engine.limits,
         "fee_pct": engine.fee_pct,
@@ -4326,6 +4748,19 @@ def _portfolio(
     }
 
 
+def _strategy_touched(session: Session) -> bool:
+    """Whether the owner ever saved a strategy (for the getting-started list): a second
+    strategy, changed rules, or rules that differ from the default."""
+    slots = load_slots(session)
+    first = slots[0]
+    return (
+        len(slots) > 1
+        or first.previous is not None
+        or first.warning is not None
+        or first.strategy.model_dump() != DEFAULT_STRATEGY.model_dump()
+    )
+
+
 def _position_rows(positions: list[Position], prices_: dict[str, float], fee_pct: float) -> dict:
     """Open positions with their result as if sold now: net, so after the fee paid on the buy
     (in entry_quote) and the fee a sell would cost. The same sum as the engine's exit checks,
@@ -4429,7 +4864,7 @@ def _getting_started(
             "text": "Lees wanneer de bot koopt en verkoopt, en test de regels op oude koersen.",
             "href": "/strategy",
             "link": "Naar Strategie",
-            "done": session.get(Setting, STRATEGY_KEY) is not None,
+            "done": _strategy_touched(session),
         },
         {
             "title": "Tradingplan schrijven",
@@ -4525,7 +4960,12 @@ async def _dashboard_context(
     (prices_, prices_at, price_problem), (balances, balance_problem) = await asyncio.gather(
         _dashboard_prices(engine, client, markets), _dashboard_balances(broker, session)
     )
-    strategy, strategy_warning = load_strategy_checked(session)
+    slot_rows = _strategy_rows(engine, session, settings)
+    strategy = slot_rows[0]["strategy"]
+    invalid = [r["name"] for r in slot_rows if r["enabled"] and r["warning"]]
+    strategy_warning = (
+        next(r["warning"] for r in slot_rows if r["enabled"] and r["warning"]) if invalid else None
+    )
     paused = risk.is_paused(session)
     figures = risk_now(
         engine,
@@ -4571,8 +5011,10 @@ async def _dashboard_context(
         "rate_limit": client.rate_limit_remaining,
         "budget": budget.status(session),
         "strategy": strategy,
+        "strategies": [r for r in slot_rows if r["enabled"]],
+        "strategies_off": [r for r in slot_rows if not r["enabled"]],
         # A proposal of Claude that waits on Handelen (same rule as the strategy page).
-        "waiting_proposal": _waiting_proposal(session, settings, strategy),
+        "waiting_proposal": _waiting_proposal(session, settings, [r["slot"] for r in slot_rows]),
         "strategy_warning": strategy_warning,
         "sentiments": [market_sentiment(session, c, 48) for c in settings.coins],
         "open_positions": positions,

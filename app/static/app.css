@@ -1586,6 +1586,17 @@ footer.site .footer-alert { color: var(--red); font-weight: 500; }
 .strategy-note p { margin: 4px 0 0; white-space: pre-line; overflow-wrap: anywhere; }
 .strategy-previous { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--hairline); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
 .strategy-previous p { margin: 0; }
+.strategy-list > * + * { margin-top: 14px; }
+.strategy-item { padding: 14px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-sm, 10px); }
+.strategy-item.is-selected { border-color: var(--accent); }
+.strategy-item.is-off { color: var(--text-2); }
+.strategy-item-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 10px; }
+.strategy-item-title { margin: 0; font-size: var(--fs-body); }
+.strategy-item-facts { margin: 0 0 12px; }
+.strategy-item-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.strategy-add { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--hairline); }
+.strategy-add .subhead { margin: 0 0 4px; }
+.input-md { width: 14rem; max-width: 100%; }
 .strategy-conflict { border-color: var(--orange); }
 .strategy-conflict > .notice { margin-bottom: 4px; }
 

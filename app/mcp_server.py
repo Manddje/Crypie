@@ -60,8 +60,8 @@ Crypie is een handelsbot voor Bitvavo (crypto, in euro's) die indicatoren, nieuw
 combineert tot koop- en verkoopbeslissingen. De bot draait in oefenmodus (paper: gesimuleerde
 orders) of live (echte orders). Alles wat de bot doet staat in dit MCP: zijn status en limieten,
 open en gesloten posities, de beslissingen met Claude's redenering, orders, het trade-journaal,
-nieuws en sentiment, de strategie (indicatoren en voorwaarden), het tradingplan van de eigenaar,
-de periodieke zelfevaluaties en de Claude-kosten.
+nieuws en sentiment, de strategieën (elk met eigen markten, budget en regels), het tradingplan
+van de eigenaar, de periodieke zelfevaluaties en de Claude-kosten.
 
 Gebruik eerst de leestools (status, positions, decisions, journal, news_sentiment) om te zien wat
 er speelt, en spar daarmee met de eigenaar. Tools die iets doen (een order, de strategie,
@@ -210,6 +210,46 @@ class OrderIn(_In):
 
 class StrategyIn(_In):
     strategy: Strategy = Field(description="De volledige strategie (haal eerst `strategy` op)")
+    strategy_id: int | None = Field(
+        default=None,
+        ge=1,
+        description="Welke strategie (id uit `strategies`); leeg = de eerste strategie",
+    )
+
+
+class StrategyAddIn(_In):
+    strategy: Strategy = Field(description="De volledige regels (zoals `strategy` ze geeft)")
+    markets: list[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description='Markten van deze strategie (bijv. ["ETH-EUR"]); leeg = alle gevolgde '
+        "markten die geen andere strategie heeft. Een markt hoort bij één strategie tegelijk.",
+    )
+    budget_eur: float = Field(
+        default=0,
+        ge=0,
+        description="Eigen budget: zoveel euro mag tegelijk in haar open posities zitten; "
+        "0 = geen eigen budget (alleen de algemene limieten)",
+    )
+    enabled: bool = Field(default=True, description="Aan (handelt) of uit")
+
+
+class StrategyUpdateIn(_In):
+    strategy_id: int = Field(ge=1, description="id uit `strategies`")
+    strategy: Strategy | None = Field(default=None, description="Nieuwe regels; leeg = ongewijzigd")
+    markets: list[str] | None = Field(
+        default=None,
+        max_length=20,
+        description="Nieuwe markten; leeg = ongewijzigd, [] = alle overige",
+    )
+    budget_eur: float | None = Field(
+        default=None, ge=0, description="Nieuw budget in euro's (0 = geen eigen budget)"
+    )
+    enabled: bool | None = Field(default=None, description="Aan- of uitzetten")
+
+
+class StrategyIdIn(_In):
+    strategy_id: int = Field(ge=1, description="id uit `strategies`")
 
 
 class ProposalIn(_In):
@@ -526,10 +566,21 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         "strategy",
         "Strategie",
-        "De actieve strategie: markt, interval, indicatoren, koop- en verkoopvoorwaarden, "
-        "stop-loss, trailing stop, take-profit en positiegrootte.",
+        "De regels van de eerste strategie: markt, interval, indicatoren, koop- en "
+        "verkoopvoorwaarden, stop-loss, trailing stop, take-profit en positiegrootte. Zie "
+        "`strategies` voor alle strategieën met hun markten en budget.",
         "GET",
         "/api/strategy",
+        read_only=True,
+    ),
+    Tool(
+        "strategies",
+        "Strategieën",
+        "Alle strategieën van de bot: per strategie id, naam, aan/uit, de markten waarop ze "
+        "handelt, haar eigen budget (en wat daarvan belegd en vrij is), open posities en de "
+        "volledige regels.",
+        "GET",
+        "/api/strategies",
         read_only=True,
     ),
     Tool(
@@ -630,12 +681,47 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         "set_strategy",
         "Strategie opslaan",
-        "Vervang de actieve strategie. De markt moet een gevolgde markt zijn; de vorige strategie "
-        "blijft bewaard.",
+        "Vervang de regels van een strategie (strategy_id; leeg = de eerste). De markt moet "
+        "een gevolgde markt zijn; de vorige regels blijven bewaard. Markten en budget van de "
+        "strategie veranderen niet (daarvoor update_strategy).",
         "PUT",
-        "/api/strategy",
+        lambda a: f"/api/strategies/{a.strategy_id}" if a.strategy_id else "/api/strategy",
         StrategyIn,
-        body=lambda a: _dump(a)["strategy"],
+        body=lambda a: (
+            {"strategy": _dump(a)["strategy"]} if a.strategy_id else _dump(a)["strategy"]
+        ),
+        destructive=True,
+    ),
+    Tool(
+        "add_strategy",
+        "Strategie toevoegen",
+        "Voeg een strategie toe met eigen markten en een eigen budget, naast de bestaande. "
+        "Haal eerst `strategies` op om te zien welke markten nog vrij zijn.",
+        "POST",
+        "/api/strategies",
+        StrategyAddIn,
+        body=_dump,
+        destructive=True,
+    ),
+    Tool(
+        "update_strategy",
+        "Strategie wijzigen",
+        "Wijzig van één strategie de markten, het budget, de regels of de aan/uit-stand; "
+        "alleen de meegegeven velden veranderen.",
+        "PUT",
+        lambda a: f"/api/strategies/{a.strategy_id}",
+        StrategyUpdateIn,
+        body=lambda a: _dump(a, exclude={"strategy_id"}),
+        destructive=True,
+    ),
+    Tool(
+        "remove_strategy",
+        "Strategie verwijderen",
+        "Verwijder een strategie (niet de laatste). Open posities in haar markten blijven "
+        "bewaakt door de stops van een andere strategie.",
+        "DELETE",
+        lambda a: f"/api/strategies/{a.strategy_id}",
+        StrategyIdIn,
         destructive=True,
     ),
     Tool(

@@ -24,6 +24,7 @@ from app.db import (
     Position,
     SessionLocal,
     Setting,
+    StrategyRecord,
     init_db,
 )
 from app.flash import flashes_from_response
@@ -36,7 +37,7 @@ HTML = {"accept": "text/html,application/xhtml+xml"}
 
 def _clean():
     with SessionLocal() as s:
-        for table in (Decision, Order, Position, NewsItem, Evaluation):
+        for table in (Decision, Order, Position, NewsItem, Evaluation, StrategyRecord):
             s.execute(delete(table))
         s.execute(
             delete(Setting).where(

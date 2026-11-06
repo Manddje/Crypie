@@ -66,10 +66,10 @@
   {% if e.problems %}
   <div class="mt-4">{{ ui.notice("warn", "Dit voorstel kan niet worden toegepast: " ~ e.problems|join("; ") ~ ".", live=false) }}</div>
   {% elif e.proposal_name %}
-  <form method="post" action="/trading/action" class="mt-4" data-confirm="{{ live_prefix }}Strategie '{{ e.proposal_name }}' activeren in plaats van '{{ strategy_name }}'? Open posities houden hun huidige stop-loss en take-profit.">
+  <form method="post" action="/trading/action" class="mt-4" data-confirm="{{ live_prefix }}Strategie '{{ e.proposal_name }}' activeren in plaats van '{{ e.target_name }}'? Open posities houden hun huidige stop-loss en take-profit.">
     <button class="btn btn-primary" type="submit" name="action" value="apply:{{ e.id }}" data-busy="Toepassen…" aria-describedby="apply-help-{{ e.id }}">Voorstel toepassen als actieve strategie</button>
   </form>
-  <p class="form-help" id="apply-help-{{ e.id }}">Na het toepassen kun je de vorige strategie hier terugzetten. Open posities houden hun huidige stop-loss en take-profit; alleen een trailing stop volgt daarna de nieuwe strategie.</p>
+  <p class="form-help" id="apply-help-{{ e.id }}">{% if e.several %}Het voorstel vervangt de regels van strategie {{ e.target_id }} ('{{ e.target_name }}'). {% endif %}Na het toepassen kun je de vorige strategie hier terugzetten. Open posities houden hun huidige stop-loss en take-profit; alleen een trailing stop volgt daarna de nieuwe strategie.</p>
   {% endif %}
 {% else %}
   {% if e.diff is not none %}
@@ -153,6 +153,7 @@
       <p class="small muted">Tot {{ r.until|dt }} legt de bot deze markt bij elke cyclus opnieuw aan Claude voor zodra de draai doorzet, ook als de dipvoorwaarde dan niet meer geldt, zolang de koers niet boven {{ r.max_price|price_eur }} staat.</p>
     </div>
     {% endfor %}
+    {% if unassigned_markets %}{{ ui.notice("warn", "Geen strategie handelt op " ~ unassigned_markets|join(", ") ~ ": daar koopt de bot niets. Wijs de markt toe op de strategiepagina.", live=false) }}{% endif %}
     {% if last_cycle or failed_markets %}
     <div class="grid-2">
       {#- UX-53: a market whose last cycle failed (a typo, a delisted coin, Bitvavo refusing it)
@@ -172,7 +173,7 @@
       <article class="cycle" aria-labelledby="cycle-{{ d.id }}">
         <div class="cycle-head">
           <h3 class="cycle-market" id="cycle-{{ d.id }}">{{ d.market }}</h3>
-          <span class="small muted">{{ d.price|price_eur }} · {{ d.created_at|dt }}</span>
+          <span class="small muted">{{ d.price|price_eur }} · {{ d.created_at|dt }}{% if strategies|length > 1 or d.market not in strategy_by_market %} · {% if d.market in strategy_by_market %}strategie '{{ strategy_by_market[d.market] }}'{% else %}<span class="neg">geen strategie</span>{% endif %}{% endif %}</span>
         </div>
         <p class="decision-line">{{ decision_line(v) }}</p>
         {% if v.has_checks %}{{ ui.checks(v.checklist, legend=loop.first) }}{% endif %}

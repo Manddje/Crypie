@@ -70,9 +70,10 @@
       <dl class="kv">
         <dt>Modus</dt><dd>{{ ui.mode_pill(mode, link=false) }} {{ "echte orders met echt geld op Bitvavo" if mode == "live" else "fictief geld, start " ~ settings.paper_start_eur|eur(0) }}</dd>
         <dt>Markten</dt><dd>{{ settings.markets|join(", ") }}</dd>
+        {% if strategies|length > 1 %}<dt>Strategieën</dt><dd>{% for r in strategies %}{{ r.name }} op {{ r.scope|join(", ") if r.scope else "geen markt" }}{% if r.budget_eur %} (budget {{ r.budget_eur|eur(0) }}){% endif %}{% if not loop.last %}; {% endif %}{% endfor %}{% if unassigned_markets %}; geen strategie op {{ unassigned_markets|join(", ") }}{% endif %}</dd>{% else %}{% if strategies and strategies[0].budget_eur %}<dt>Budget strategie</dt><dd>{{ strategies[0].budget_eur|eur(0) }} tegelijk in open posities</dd>{% endif %}{% if unassigned_markets %}<dt>Zonder strategie</dt><dd>{{ unassigned_markets|join(", ") }}: geen strategie handelt daar, de bot koopt er niets</dd>{% endif %}{% endif %}
         <dt>Richting</dt><dd>alleen long: kopen in euro's, later weer verkopen; nooit short, nooit hefboom</dd>
         <dt>Cyclus</dt><dd>{% if settings.trading_enabled %}elke {{ settings.trade_interval_min }} minuten per markt{% else %}automatisch handelen staat uit{% endif %}</dd>
-        <dt>Candles</dt><dd>{{ strategy.interval|nl }}</dd>
+        <dt>Candles</dt><dd>{% if strategies|length > 1 %}{% for r in strategies %}{{ r.strategy.interval|nl }} ({{ r.name }}){% if not loop.last %}, {% endif %}{% endfor %}{% else %}{{ strategy.interval|nl }}{% endif %}</dd>
         <dt>Per markt</dt><dd>hoogstens één open positie tegelijk; bijkopen in een open positie doet de bot niet</dd>
       </dl>
       {{ change_link("/settings#trading", "Markten en modus aanpassen") }}
@@ -91,14 +92,16 @@
 
     <div class="grid-2">
       {% call derived("instappen", "Instappen") %}
-      <p class="small">Strategie <strong>{{ strategy.name }}</strong></p>
+      {% for r in strategies %}{% set st = r.strategy %}
+      <p class="small">Strategie <strong>{{ st.name }}</strong>{% if strategies|length > 1 %} · {{ r.scope|join(", ") if r.scope else "geen markt" }}{% endif %}</p>
       <h4 class="plan-h">Koopsignaal: alle harde voorwaarden gelden</h4>
       <ul class="rules">
-        {% for c in strategy.buy %}
+        {% for c in st.buy %}
         <li class="{{ 'soft' if c.soft else 'hard' }}"><span class="mark">{{ ui.icon("tilde" if c.soft else "dot") }}</span>{{ c|condition_nl|readable_condition(indicator_labels) }}</li>
         {% endfor %}
       </ul>
-      {% if strategy.buy|selectattr("soft")|list %}
+      {% endfor %}
+      {% if strategies|map(attribute="strategy.buy")|sum(start=[])|selectattr("soft")|list %}
       <p class="form-help">Een <strong>zacht filter</strong> (~) hoeft niet te gelden. Geldt het niet, dan weegt Claude dat af tegen het nieuws en koopt hij hoogstens {{ half_order_pct }}% van het maximum, alleen bij neutraal tot positief nieuws.</p>
       {% endif %}
       <h4 class="plan-h">Dipbewaking</h4>
@@ -114,17 +117,20 @@
 
       {% call derived("uitstappen", "Uitstappen") %}
       <h4 class="plan-h">Automatisch, zonder Claude</h4>
+      {% for r in strategies %}{% set st = r.strategy %}
+      {% if strategies|length > 1 %}<p class="small">Strategie <strong>{{ st.name }}</strong> · {{ r.scope|join(", ") if r.scope else "geen markt" }}</p>{% endif %}
       <ul class="rules">
-        <li class="hard"><span class="mark">{{ ui.icon("dot") }}</span>Stop-loss: {% if strategy.stop_loss_pct %}verkopen bij {{ strategy.stop_loss_pct|pct_limit }} onder de instapkoers{% else %}<span class="muted">niet ingesteld</span>{% endif %}</li>
-        <li class="hard"><span class="mark">{{ ui.icon("dot") }}</span>Trailing stop: {% if strategy.trailing_stop_pct %}de stop schuift mee tot {{ strategy.trailing_stop_pct|pct_limit }} onder het hoogste punt sinds instap{% if strategy.trailing_start_pct %}, zodra de winst eerst {{ strategy.trailing_start_pct|pct_limit }} was{% endif %}; hij gaat nooit omlaag{% else %}<span class="muted">niet ingesteld</span>{% endif %}</li>
-        <li class="hard"><span class="mark">{{ ui.icon("dot") }}</span>Take-profit: {% if strategy.take_profit_pct %}verkopen bij {{ strategy.take_profit_pct|pct_limit }} boven de instapkoers{% else %}<span class="muted">niet ingesteld; de verkoop volgt het signaal</span>{% endif %}</li>
+        <li class="hard"><span class="mark">{{ ui.icon("dot") }}</span>Stop-loss: {% if st.stop_loss_pct %}verkopen bij {{ st.stop_loss_pct|pct_limit }} onder de instapkoers{% else %}<span class="muted">niet ingesteld</span>{% endif %}</li>
+        <li class="hard"><span class="mark">{{ ui.icon("dot") }}</span>Trailing stop: {% if st.trailing_stop_pct %}de stop schuift mee tot {{ st.trailing_stop_pct|pct_limit }} onder het hoogste punt sinds instap{% if st.trailing_start_pct %}, zodra de winst eerst {{ st.trailing_start_pct|pct_limit }} was{% endif %}; hij gaat nooit omlaag{% else %}<span class="muted">niet ingesteld</span>{% endif %}</li>
+        <li class="hard"><span class="mark">{{ ui.icon("dot") }}</span>Take-profit: {% if st.take_profit_pct %}verkopen bij {{ st.take_profit_pct|pct_limit }} boven de instapkoers{% else %}<span class="muted">niet ingesteld; de verkoop volgt het signaal</span>{% endif %}</li>
       </ul>
       <h4 class="plan-h">Verkoopsignaal: alle voorwaarden gelden</h4>
       <ul class="rules">
-        {% for c in strategy.sell %}
+        {% for c in st.sell %}
         <li class="{{ 'soft' if c.soft else 'hard' }}"><span class="mark">{{ ui.icon("tilde" if c.soft else "dot") }}</span>{{ c|condition_nl|readable_condition(indicator_labels) }}</li>
         {% endfor %}
       </ul>
+      {% endfor %}
       <p class="small">Bij een verkoopsignaal beslist Claude of hij verkoopt; zonder Claude volgt de bot het signaal. De noodstop houdt een verkoop op een verkoopsignaal niet tegen.</p>
       <h4 class="plan-h">Uitstappen op nieuws</h4>
       <p class="small">Is het nieuws voor de coin duidelijk negatief (score {{ news_exit_max_score|num(1) }} of lager) met minstens één nieuwsfeit van impact middel of groot, gemeld door minstens {{ news_min_sources }} bronnen, dan mag Claude een open positie sluiten zonder signaal. Tijdens de noodstop wacht zo'n verkoop.</p>

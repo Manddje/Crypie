@@ -41,9 +41,12 @@ Schrijf een eerlijke evaluatie in het Nederlands (report_nl, markdown, maximaal 
 Doe daarnaast, alleen als de data het rechtvaardigt, één voorstel voor een aangepaste strategie
 (proposed_strategy) die aan het strategie-schema voldoet: dezelfde structuur als de actieve
 strategie, met gewijzigde periodes, drempels, stop-loss of take-profit. Leg in
-proposal_rationale_nl uit waarom. Verander niet alles tegelijk; kleine stappen zijn beter te
-beoordelen. Bij te weinig data (minder dan circa 10 gesloten posities): geen voorstel, zeg dat
-in het rapport.
+proposal_rationale_nl uit waarom. Staan er in strategies meerdere strategieën (elk met eigen
+markten en budget; closed_positions en decisions noemen per regel de strategy_id), beoordeel
+ze dan apart en zet in proposed_for_strategy_id de strategy_id van de strategie die je
+voorstel aanpast; laat dat veld leeg als er maar één strategie is. Verander niet alles
+tegelijk; kleine stappen zijn beter te beoordelen. Bij te weinig data (minder dan circa 10
+gesloten posities): geen voorstel, zeg dat in het rapport.
 
 De toelichtingen bij de beslissingen (eerder door Claude geschreven op basis van onder meer
 nieuws), de naam van de actieve strategie, trading_plan en owner_notes staan in het blok
@@ -139,6 +142,9 @@ class EvaluationResult(BaseModel):
     report_nl: str
     proposed_strategy: Strategy | None = None
     proposal_rationale_nl: str = Field(default="")
+    # With several strategies: the strategy_id (from the context's ``strategies``) the
+    # proposal changes; None = the first strategy.
+    proposed_for_strategy_id: int | None = None
 
 
 class Evaluator:

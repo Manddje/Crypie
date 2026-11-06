@@ -269,6 +269,33 @@ class ShockPause(Base):
         return [v for v in data if isinstance(v, dict)] if isinstance(data, list) else []
 
 
+class StrategyRecord(Base):
+    """One of the bot's strategies (app/strategy/store.py): its rules as JSON, the markets it
+    trades, its own budget and whether it is switched on.
+
+    ``markets`` is a comma-separated list; empty means "every tracked market that no other
+    strategy claims" (the one strategy of an older installation keeps working that way).
+    ``budget_eur`` caps the EUR invested in this strategy's open positions at once; 0 means
+    no budget of its own (only the general limits apply). ``previous`` keeps the rules the
+    last save replaced, so the owner can put them back.
+    """
+
+    __tablename__ = "strategies"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    config: Mapped[str] = mapped_column(Text)  # JSON of app.strategy.model.Strategy
+    budget_eur: Mapped[float] = mapped_column(Float, default=0.0)
+    markets: Mapped[str] = mapped_column(String(255), default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
+    previous: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON of Strategy
+    previous_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+
+    def market_list(self) -> list[str]:
+        return [m for m in (self.markets or "").split(",") if m]
+
+
 ACTIVE_POSITION_STATUSES = ("open", "opening", "closing")
 
 
@@ -313,6 +340,9 @@ class Position(Base):
     open_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     close_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fees_eur: Mapped[float] = mapped_column(Float, default=0.0)  # entry + exit fees, EUR
+    # The strategy (StrategyRecord) that opened this position; None for older positions and
+    # manual buys in a market without a strategy.
+    strategy_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     # Trade journal: the owner's own notes on this trade, written on /journal.
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     tags: Mapped[str | None] = mapped_column(String(128), nullable=True)  # "fout,nieuws"
@@ -342,6 +372,7 @@ class Decision(Base):
     news_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     news_label: Mapped[str | None] = mapped_column(String(32), nullable=True)
     has_position: Mapped[bool] = mapped_column(Boolean, default=False)
+    strategy_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # StrategyRecord
     source: Mapped[str] = mapped_column(String(16))  # claude | rules | risk | mechanical
     model: Mapped[str | None] = mapped_column(String(64), nullable=True)
     action: Mapped[str] = mapped_column(String(8))  # buy | sell | hold
@@ -384,6 +415,8 @@ class Evaluation(Base):
     proposed_strategy: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     proposal_backtest: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     applied: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The strategy (StrategyRecord) the proposal is for; None = the first strategy.
+    strategy_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class AuthUser(Base):

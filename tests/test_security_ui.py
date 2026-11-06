@@ -12,12 +12,21 @@ import re
 import pytest
 import respx
 from httpx import ASGITransport, AsyncClient, Response
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.orm import sessionmaker
 
 from app import settings_store as cfg
 from app.config import Settings
-from app.db import Base, Evaluation, Position, SessionLocal, Setting, init_db, make_engine
+from app.db import (
+    Base,
+    Evaluation,
+    Position,
+    SessionLocal,
+    Setting,
+    StrategyRecord,
+    init_db,
+    make_engine,
+)
 from app.indicators.core import rsi
 from app.main import app
 from app.strategy.describe import strategy_diff
@@ -30,7 +39,13 @@ from app.strategy.model import (
     check_for_use,
     use_problems,
 )
-from app.strategy.store import STRATEGY_KEY, load_strategy, load_strategy_checked, save_strategy
+from app.strategy.store import (
+    STRATEGY_KEY,
+    ensure_strategies,
+    load_strategy,
+    load_strategy_checked,
+    save_strategy,
+)
 from app.trading.journal import TAGS_COLUMN_MAX, normalize_tags, save_note
 from tests.test_trading import FakeDecider, candles, make_engine_
 
@@ -54,6 +69,7 @@ def env(monkeypatch):
 def _app_db_cleanup():
     with SessionLocal() as s:
         s.execute(delete(Evaluation))
+        s.execute(delete(StrategyRecord))
         s.execute(delete(Setting).where(Setting.key == STRATEGY_KEY))
         s.execute(delete(Setting).where(Setting.key.like(f"{cfg.CONFIG_PREFIX}%")))
         s.commit()
@@ -481,7 +497,11 @@ async def test_api_and_form_refuse_a_strategy_without_stop(api):
 async def test_strategy_page_survives_an_invalid_stored_strategy(api):
     respx.get(url__startswith=f"{BASE}/").mock(return_value=Response(200, json=[]))
     with SessionLocal() as s:
-        s.add(Setting(key=STRATEGY_KEY, value='{"name": "kapot", "buy": [{"right": null}]}'))
+        # The stored rules of the first strategy become unusable (hand-edited, say).
+        ensure_strategies(s)
+        s.scalar(
+            select(StrategyRecord).order_by(StrategyRecord.id)
+        ).config = '{"name": "kapot", "buy": [{"right": null}]}'
         s.commit()
     r = await api.get("/strategy")
     assert r.status_code == 200 and "De opgeslagen strategie is ongeldig" in r.text

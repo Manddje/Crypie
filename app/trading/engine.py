@@ -33,8 +33,8 @@ from app.news.service import load_etf_flows, load_market_mood, market_sentiment,
 from app.news.sources import ETF_ASSETS
 from app.strategy.describe import ConditionCheck, explain_signal, levels_summary, signal_reason_nl
 from app.strategy.engine import SOFT_FAIL_SIZE_FACTOR, backtest, compute_series, signal_at
-from app.strategy.model import LOOKBACK_OPS, Strategy
-from app.strategy.store import load_strategy, load_strategy_checked
+from app.strategy.model import DEFAULT_STRATEGY, LOOKBACK_OPS, Strategy
+from app.strategy.store import StrategySlot, assign_markets, exit_slot_for, load_slots
 from app.trading import risk
 from app.trading.events import MarketEvent, active_event, upcoming_events
 from app.trading.health import describe_problem
@@ -87,6 +87,8 @@ ENGINE_STATE_KEY = "engine_state"
 # at most once per position per this period; the retries in between are only logged.
 EXIT_FAILURE_JOURNAL = timedelta(minutes=60)
 STRATEGY_INVALID_BLOCK = "opgeslagen strategie ongeldig"
+NO_STRATEGY_REASON = "geen strategie voor deze markt"
+STRATEGY_BUDGET_BLOCK = "budget van de strategie is op"
 _EXIT_NL = {
     "stop_loss": "stop-loss",
     "trailing_stop": "trailing stop",
@@ -662,7 +664,7 @@ class TradingEngine:
     async def _guarded_market(
         self,
         session: Session,
-        strategy: Strategy,
+        slot: StrategySlot,
         market: str,
         prices: dict[str, float],
         watch: bool = False,
@@ -670,7 +672,7 @@ class TradingEngine:
     ) -> CycleResult:
         try:
             return await asyncio.wait_for(
-                self.run_market(session, strategy, market, prices, watch=watch, consult=consult),
+                self.run_market(session, slot, market, prices, watch=watch, consult=consult),
                 self.market_timeout_s,
             )
         except TimeoutError as exc:
@@ -678,12 +680,44 @@ class TradingEngine:
                 f"{market}: afgebroken, geen resultaat binnen de tijdslimiet"
             ) from exc
 
-    def _trading_strategy(self, session: Session) -> Strategy:
-        """The strategy for a cycle; flags a stored strategy that does not validate, so the
-        cycle opens no positions with the default strategy in its place."""
-        strategy, warning = load_strategy_checked(session)
-        self.strategy_invalid = warning is not None
-        return strategy
+    def _trading_plan(self, session: Session) -> tuple[dict[str, StrategySlot], list[StrategySlot]]:
+        """(market -> the strategy that trades it, every strategy) for a cycle. Flags a
+        switched-on strategy whose stored rules do not validate: the default strategy stands
+        in for its exits, and no new positions are opened in its markets."""
+        slots = load_slots(session)
+        self.strategy_invalid = any(s.enabled and s.warning is not None for s in slots)
+        return assign_markets(slots, self.markets), slots
+
+    def strategy_slots(self, session: Session) -> list[dict[str, Any]]:
+        """Per strategy: what it trades and how much of its budget is in use (for the pages
+        and the API, in the active mode)."""
+        slots = load_slots(session)
+        plan = assign_markets(slots, self.markets)
+        prices = self.last_prices or {}
+        out = []
+        for slot in slots:
+            markets = [m for m, s in plan.items() if s.id == slot.id]
+            invested, room = risk.budget_room(session, self.mode, markets, slot.budget_eur, slot.id)
+            positions = (
+                [p for p in open_positions(session, self.mode) if p.market in markets]
+                if markets
+                else []
+            )
+            value = sum(
+                p.amount * prices[p.market] if prices.get(p.market) else p.entry_quote
+                for p in positions
+            )
+            out.append(
+                {
+                    "slot": slot,
+                    "active_markets": markets,
+                    "invested_eur": round(invested, 2),
+                    "room_eur": None if math.isinf(room) else round(room, 2),
+                    "value_eur": round(value, 2),
+                    "open_positions": len(positions),
+                }
+            )
+        return out
 
     def _cycle_failed(self, reason: str) -> None:
         now = datetime.now(UTC)
@@ -701,7 +735,7 @@ class TradingEngine:
             log.exception("news-shock check before the cycle failed")
 
     async def run_cycle(self, session: Session) -> list[CycleResult]:
-        strategy = self._trading_strategy(session)
+        plan, _ = self._trading_plan(session)
         try:
             prices = await self.client.ticker_prices(self.markets)
         except Exception as exc:
@@ -712,8 +746,25 @@ class TradingEngine:
         await self.shock_scan(session)
         results: list[CycleResult] = []
         for market in list(self.markets):
+            slot = plan.get(market)
+            if slot is None:
+                # Tracked, but no strategy trades it: nothing to decide (the exit loop still
+                # guards an open position in it). Not journaled: it would repeat every cycle.
+                self.watch.pop(market, None)
+                results.append(
+                    CycleResult(
+                        market,
+                        prices.get(market, 0.0),
+                        "hold",
+                        "hold",
+                        "rules",
+                        False,
+                        NO_STRATEGY_REASON,
+                    )
+                )
+                continue
             try:
-                results.append(await self._guarded_market(session, strategy, market, prices))
+                results.append(await self._guarded_market(session, slot, market, prices))
             except Exception as exc:  # one market must not stop the others
                 session.rollback()
                 log.exception("cycle failed for %s", market)
@@ -745,8 +796,8 @@ class TradingEngine:
         """Re-check only the armed markets; called every WATCH_INTERVAL_MIN by the scheduler."""
         if not self.watch:
             return []
-        strategy = self._trading_strategy(session)
-        markets = [m for m in self.watch if m in self.markets]
+        plan, _ = self._trading_plan(session)
+        markets = [m for m in self.watch if m in plan]
         for stale in set(self.watch) - set(markets):
             self.watch.pop(stale, None)
         if not markets:
@@ -757,7 +808,7 @@ class TradingEngine:
         for market in markets:
             try:
                 results.append(
-                    await self._guarded_market(session, strategy, market, prices, watch=True)
+                    await self._guarded_market(session, plan[market], market, prices, watch=True)
                 )
             except Exception as exc:  # noqa: BLE001
                 session.rollback()
@@ -871,10 +922,13 @@ class TradingEngine:
         beoordelen'). Same rules and limits as a cycle: without a buy signal he cannot buy."""
         if market not in self.markets:
             raise ValueError(f"{market} staat niet bij de markten van de bot")
-        strategy = self._trading_strategy(session)
+        plan, _ = self._trading_plan(session)
+        slot = plan.get(market)
+        if slot is None:
+            raise ValueError(f"geen strategie handelt op {market}; wijs de markt eerst toe")
         prices = await self.client.ticker_prices([market])
         self.remember_prices(prices)
-        result = await self._guarded_market(session, strategy, market, prices, consult=True)
+        result = await self._guarded_market(session, slot, market, prices, consult=True)
         # The market's card on Handelen shows this run as its last one.
         self.last_results = [r for r in self.last_results if r.get("market") != market] + [
             result.as_dict()
@@ -952,31 +1006,37 @@ class TradingEngine:
     async def run_market(
         self,
         session: Session,
-        strategy: Strategy,
+        slot: StrategySlot | Strategy,
         market: str,
         prices: dict[str, float],
         watch: bool = False,
         consult: bool = False,
     ) -> CycleResult:
-        """One market: a regular cycle, a dip-watch check (``watch``) or a consultation the
-        owner asked for (``consult``: Claude is asked whatever the signal says)."""
+        """One market with one strategy: a regular cycle, a dip-watch check (``watch``) or a
+        consultation the owner asked for (``consult``: Claude is asked whatever the signal
+        says). A bare ``Strategy`` counts as a strategy without a budget of its own."""
+        if isinstance(slot, Strategy):
+            slot = StrategySlot(id=0, strategy=slot)
         async with self.market_lock(market):
             # One snapshot for the whole run: a mode switch halfway can never make this run
             # trade through the other mode's broker.
             broker = self.broker
-            return await self._run_market(session, broker, strategy, market, prices, watch, consult)
+            return await self._run_market(session, broker, slot, market, prices, watch, consult)
 
     async def _run_market(
         self,
         session: Session,
         broker: Broker,
-        strategy: Strategy,
+        slot: StrategySlot,
         market: str,
         prices: dict[str, float],
         watch: bool,
         consult: bool = False,
     ) -> CycleResult:
         mode = broker.mode
+        strategy = slot.strategy
+        # A bare strategy (slot 0, from a caller without a plan) follows the engine-wide flag.
+        strategy_invalid = slot.warning is not None or (slot.id == 0 and self.strategy_invalid)
         candles = await asyncio.wait_for(
             self.client.candles(market, strategy.interval, live_candle_limit(strategy)),
             self.data_timeout_s,
@@ -1065,6 +1125,7 @@ class TradingEngine:
             news_score=sentiment.score,
             news_label=sentiment.label(),
             has_position=position is not None,
+            strategy_id=slot.id or None,
             source="rules",
             action="hold",
         )
@@ -1115,7 +1176,7 @@ class TradingEngine:
             session.add(decision)
             session.commit()
             return CycleResult(market, price, signal, "hold", "rules", False, decision.reasoning)
-        if self.strategy_invalid and position is None and (needs_claude or signal == "buy"):
+        if strategy_invalid and position is None and (needs_claude or signal == "buy"):
             # 2b'. The stored strategy does not validate: the default stands in for exits only.
             # No new position on a strategy the owner never chose; Claude is not asked.
             self.watch.pop(market, None)
@@ -1200,6 +1261,7 @@ class TradingEngine:
             mode=mode,
             follow_up=follow_up,
             consult=consult,
+            slot=slot,
         )
         if follow_up is not None:
             reasoning = (
@@ -1250,21 +1312,28 @@ class TradingEngine:
                     # and blocked_by reaches Claude's prompts. The details go in the reasoning.
                     blocked = f"risk-off: {ro['kind']}"
                     decision.reasoning = f"{decision.reasoning} (risk-off: {ro['reason_nl']})"
-                elif self.strategy_invalid:
+                elif strategy_invalid:
                     blocked = STRATEGY_INVALID_BLOCK
                 else:
                     async with self._buy_lock:
                         total, exposure = await self.portfolio(session, prices, broker)
-                        allowed, blocked = risk.check_buy(
-                            session,
-                            self.limits,
-                            mode,
-                            market,
-                            amount_quote,
-                            total,
-                            exposure,
-                            unrealized=risk.unrealized_pnl(session, mode, prices),
+                        # The strategy's own budget first (its own markets, entry value),
+                        # then the general limits.
+                        amount_quote, blocked = self._within_budget(
+                            session, slot, mode, amount_quote
                         )
+                        allowed = 0.0
+                        if blocked is None:
+                            allowed, blocked = risk.check_buy(
+                                session,
+                                self.limits,
+                                mode,
+                                market,
+                                amount_quote,
+                                total,
+                                exposure,
+                                unrealized=risk.unrealized_pnl(session, mode, prices),
+                            )
                         if blocked is None:
                             order, opened, blocked = await self._buy(
                                 session,
@@ -1274,6 +1343,7 @@ class TradingEngine:
                                 allowed,
                                 price,
                                 reason=f"{source}: {reasoning[:120]}",
+                                strategy_id=slot.id or None,
                             )
                             session.commit()  # booked before the next buy checks the limits
                             if order is not None:
@@ -1340,6 +1410,7 @@ class TradingEngine:
         mode: str | None = None,
         follow_up: dict | None = None,
         consult: bool = False,
+        slot: StrategySlot | None = None,
     ) -> tuple[str, float | None, float, str, str, str | None, bool]:
         """(action, confidence, amount, reasoning, source, model, revisit_next_cycle)."""
         mode = mode or self.mode
@@ -1347,6 +1418,7 @@ class TradingEngine:
             "market": market,
             "price": price,
             "strategy": strategy.model_dump(),
+            "strategy_budget": self._budget_context(session, slot, mode),
             "signal": signal,
             "news_entry_allowed": news_entry,
             "follow_up": None
@@ -1392,7 +1464,10 @@ class TradingEngine:
                 "stop_price": position.stop_price,
                 "take_profit_price": position.take_profit_price,
             },
-            "limits": {"max_trade_eur": self.limits.max_trade_eur},
+            "limits": {
+                "max_trade_eur": self.limits.max_trade_eur,
+                **self._budget_limits(session, slot, mode),
+            },
             "costs": {
                 "fee_pct_per_side": self.fee_pct,
                 "round_trip_pct": round(2 * self.fee_pct, 4),
@@ -1445,6 +1520,74 @@ class TradingEngine:
         else:
             self.last_error = "er is geen Claude-sleutel"
         return (*self._fallback(signal, position, sentiment), False)
+
+    def _slot_markets(self, slot: StrategySlot) -> list[str]:
+        """The tracked markets this strategy trades (where its budget is spent)."""
+        if slot.id == 0:
+            return list(self.markets)
+        if slot.active_markets is not None:
+            return [m for m in slot.active_markets if m in self.markets]
+        return [m for m in slot.markets if m in self.markets]
+
+    def _budget_state(
+        self, session: Session, slot: StrategySlot | None, mode: str
+    ) -> tuple[list[str], float, float] | None:
+        """(markets, invested, room) of a strategy with a budget of its own, else None."""
+        if slot is None or not slot.budget_eur or slot.budget_eur <= 0:
+            return None
+        markets = self._slot_markets(slot)
+        invested, room = risk.budget_room(session, mode, markets, slot.budget_eur, slot.id or None)
+        return markets, invested, room
+
+    def _budget_context(
+        self, session: Session, slot: StrategySlot | None, mode: str
+    ) -> dict[str, Any] | None:
+        """What Claude sees of the strategy's own money: its markets, budget and what is
+        left; None for a strategy without a budget of its own."""
+        if slot is None or slot.id == 0:
+            return None
+        state = self._budget_state(session, slot, mode)
+        if state is None:
+            return {
+                "strategy_id": slot.id,
+                "markets": self._slot_markets(slot),
+                "budget_eur": None,
+                "note": "deze strategie heeft geen eigen budget; alleen de algemene limieten",
+            }
+        markets, invested, room = state
+        return {
+            "strategy_id": slot.id,
+            "markets": markets,
+            "budget_eur": slot.budget_eur,
+            "invested_eur": round(invested, 2),
+            "available_eur": round(room, 2),
+            "note": "eigen budget van deze strategie: wat in open posities van haar markten "
+            "zit telt mee; een aankoop kan nooit groter zijn dan available_eur",
+        }
+
+    def _budget_limits(
+        self, session: Session, slot: StrategySlot | None, mode: str
+    ) -> dict[str, Any]:
+        state = self._budget_state(session, slot, mode)
+        if state is None:
+            return {}
+        _, _, room = state
+        return {"strategy_available_eur": round(room, 2)}
+
+    def _within_budget(
+        self, session: Session, slot: StrategySlot, mode: str, amount_quote: float
+    ) -> tuple[float, str | None]:
+        """Cap a buy on what the strategy's own budget leaves; (amount, block reason)."""
+        state = self._budget_state(session, slot, mode)
+        if state is None:
+            return amount_quote, None
+        _, invested, room = state
+        if room < self.limits.min_trade_eur or room < EXCHANGE_MIN_ORDER_EUR:
+            return 0.0, (
+                f"{STRATEGY_BUDGET_BLOCK} ('{slot.name}': € {invested:.2f} van € "
+                f"{slot.budget_eur:.2f} belegd)"
+            )
+        return min(amount_quote, room), None
 
     def _fallback(
         self, signal: str, position, sentiment
@@ -1592,6 +1735,7 @@ class TradingEngine:
         amount_eur: float,
         price: float,
         reason: str,
+        strategy_id: int | None = None,
     ) -> tuple[Order | None, Position | None, str | None]:
         """Claim the market, buy for ``amount_eur`` and open a position with the strategy's
         stops. Returns (order, position, blocked); the caller commits."""
@@ -1602,6 +1746,7 @@ class TradingEngine:
             amount=0.0,
             entry_price=price,
             entry_quote=0.0,
+            strategy_id=strategy_id,
         )
         session.add(claim)
         try:
@@ -1861,6 +2006,15 @@ class TradingEngine:
 
     # -- exit loop --
 
+    @staticmethod
+    def _exit_strategy(
+        position: Position, plan: dict[str, StrategySlot], slots: list[StrategySlot]
+    ) -> Strategy:
+        """Whose stops guard this position: the strategy that trades its market now, else
+        the one that opened it, else the first strategy (see store.exit_slot_for)."""
+        slot = exit_slot_for(position.market, position.strategy_id, plan, slots)
+        return slot.strategy if slot is not None else DEFAULT_STRATEGY
+
     async def run_exits(self, session: Session) -> list[CycleResult]:
         """Stop-loss, trailing stop and take-profit for every open position, any market and
         any mode, on the current ticker price.
@@ -1882,7 +2036,8 @@ class TradingEngine:
             self._exits_ok(session, force_save=bool(failures_before))
             self._notify_unprotected(stuck)
             return []
-        strategy = load_strategy(session)
+        slots = load_slots(session)
+        plan = assign_markets(slots, self.markets)
         try:
             prices = await self.client.ticker_prices(sorted({p.market for p in positions}))
         except Exception as exc:  # noqa: BLE001 - reported below, retried next run
@@ -1930,6 +2085,7 @@ class TradingEngine:
                 broker = self.broker_for(mode)  # again: the mode may have switched meanwhile
                 if p.status != "open" or broker is None:
                     continue
+                strategy = self._exit_strategy(p, plan, slots)
                 result = await self._mechanical_exit(session, broker, strategy, p, price)
                 if result is not None:
                     results.append(result)
@@ -2098,7 +2254,8 @@ class TradingEngine:
                 .order_by(Order.id)
             )
         )
-        strategy = load_strategy(session) if orders else None
+        slots = load_slots(session) if orders else []
+        plan = assign_markets(slots, self.markets) if orders else {}
         for order in orders:
             broker = self.broker_for(order.mode)
             if broker is None:
@@ -2114,7 +2271,7 @@ class TradingEngine:
                 try:
                     if not await broker.settle(session, order):
                         continue
-                    self._book_settled(session, order, strategy)
+                    self._book_settled(session, order, plan, slots)
                     session.commit()
                     settled += 1
                     log.info("order %s settled: %s", order.id, order.status)
@@ -2153,9 +2310,21 @@ class TradingEngine:
                 every=timedelta(hours=24),
             )
 
-    def _book_settled(self, session: Session, order: Order, strategy: Strategy | None) -> None:
+    def _book_settled(
+        self,
+        session: Session,
+        order: Order,
+        plan: dict[str, StrategySlot] | None = None,
+        slots: list[StrategySlot] | None = None,
+    ) -> None:
         position = session.get(Position, order.position_id) if order.position_id else None
-        strategy = strategy or load_strategy(session)
+        if slots is None:
+            slots = load_slots(session)
+            plan = assign_markets(slots, self.markets)
+        owner = exit_slot_for(
+            order.market, position.strategy_id if position else None, plan or {}, slots
+        )
+        strategy = owner.strategy if owner is not None else DEFAULT_STRATEGY
         self._notify_live_order(order, order.reason or "reconcile")  # a late (partial) fill
         if order.side == "buy":
             if position is not None and position.status == "opening":
@@ -2176,6 +2345,7 @@ class TradingEngine:
                     amount=0.0,
                     entry_price=order.price or 0.0,
                     entry_quote=0.0,
+                    strategy_id=owner.id if owner is not None else None,
                 )
                 session.add(claim)
                 session.flush()
@@ -2275,9 +2445,22 @@ class TradingEngine:
                 prices = await self.client.ticker_prices(sorted({*self.markets, market}))
                 self.remember_prices(prices)
                 price = prices.get(market) or await self.client.ticker_price(market)
-                strategy = load_strategy(session)
+                # The strategy that trades this market sets the stops and lends its budget;
+                # a market without one gets the first strategy's stops and no budget.
+                plan, slots = self._trading_plan(session)
+                slot = plan.get(market)
+                strategy = slot.strategy if slot is not None else slots[0].strategy
                 async with self._buy_lock:  # inside the market lock, like _run_market
                     total, exposure = await self.portfolio(session, prices, broker)
+                    if slot is not None:
+                        capped, blocked = self._within_budget(session, slot, mode, amount)
+                        if blocked:
+                            raise ManualOrderError(blocked)
+                        if capped + 0.005 < amount:
+                            raise ManualOrderError(
+                                f"het budget van strategie '{slot.name}' laat nu hoogstens "
+                                f"€ {capped:.2f} toe in {market}"
+                            )
                     allowed, blocked = risk.check_buy(
                         session,
                         self.limits,
@@ -2295,7 +2478,14 @@ class TradingEngine:
                             f"de limieten staan nu maximaal € {allowed:.2f} toe in {market}"
                         )
                     order, _, blocked = await self._buy(
-                        session, broker, strategy, market, amount, price, label
+                        session,
+                        broker,
+                        strategy,
+                        market,
+                        amount,
+                        price,
+                        label,
+                        strategy_id=slot.id if slot is not None else None,
                     )
                     session.commit()
                 if blocked:
@@ -2393,17 +2583,31 @@ class TradingEngine:
             return await self._run_evaluation(session, days)
 
     async def _run_evaluation(self, session: Session, days: int) -> Evaluation:
-        strategy = load_strategy(session)
+        slots = load_slots(session)
+        plan = assign_markets(slots, self.markets)
+        strategy = slots[0].strategy
         closed = closed_positions(session, self.mode, days)
         decisions = [d for d in recent_decisions(session, self.mode, 200) if d.source != "rules"]
         context = {
             "period_days": days,
             "mode": self.mode,
             "strategy": strategy.model_dump(),
+            # Every strategy with its id, so a proposal can say which one it changes.
+            "strategies": [
+                {
+                    "strategy_id": s.id,
+                    "enabled": s.enabled,
+                    "markets": [m for m, owner in plan.items() if owner.id == s.id],
+                    "budget_eur": s.budget_eur or None,
+                    "strategy": s.strategy.model_dump(),
+                }
+                for s in slots
+            ],
             "performance": performance_summary(session, self.mode, days),
             "closed_positions": [
                 {
                     "market": p.market,
+                    "strategy_id": p.strategy_id,
                     "opened_at": p.opened_at,
                     "closed_at": p.closed_at,
                     "entry_price": p.entry_price,
@@ -2417,6 +2621,7 @@ class TradingEngine:
                 {
                     "when": d.created_at,
                     "market": d.market,
+                    "strategy_id": d.strategy_id,
                     "signal": d.signal,
                     "news_label": d.news_label,
                     "news_score": d.news_score,
@@ -2450,8 +2655,14 @@ class TradingEngine:
         result = await self.evaluator.evaluate(session, context)
         proposal_json = None
         backtest_json = None
+        target_id = None
         if result.proposed_strategy is not None:
             proposal_json = result.proposed_strategy.model_dump_json()
+            # The strategy the proposal changes: the one Claude names, else the first.
+            wanted = getattr(result, "proposed_for_strategy_id", None)
+            target = next((s for s in slots if s.id == wanted), None) or slots[0]
+            target_id = target.id
+            current = target.strategy
             try:
                 candles = await self.client.candles(
                     result.proposed_strategy.market, result.proposed_strategy.interval, 500
@@ -2461,10 +2672,8 @@ class TradingEngine:
                         "proposed": backtest(
                             result.proposed_strategy, candles, 1000, self.backtest_fee_pct
                         ).summary(),
-                        "current": backtest(
-                            strategy, candles, 1000, self.backtest_fee_pct
-                        ).summary()
-                        if strategy.market == result.proposed_strategy.market
+                        "current": backtest(current, candles, 1000, self.backtest_fee_pct).summary()
+                        if current.market == result.proposed_strategy.market
                         else None,
                     }
                 )
@@ -2479,6 +2688,7 @@ class TradingEngine:
             report_nl=report,
             proposed_strategy=proposal_json,
             proposal_backtest=backtest_json,
+            strategy_id=target_id,
         )
         session.add(ev)
         session.commit()

@@ -14,14 +14,23 @@ from pathlib import Path
 import pytest
 import respx
 from httpx import ASGITransport, AsyncClient, Response
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.orm import sessionmaker
 
 from app import settings_store as cfg
-from app.db import Base, NewsItem, Order, SessionLocal, Setting, init_db, make_engine
+from app.db import (
+    Base,
+    NewsItem,
+    Order,
+    SessionLocal,
+    Setting,
+    StrategyRecord,
+    init_db,
+    make_engine,
+)
 from app.main import app
 from app.news.service import ETF_FLOWS_KEY_PREFIX, MARKET_MOOD_KEY
-from app.strategy.store import STRATEGY_KEY
+from app.strategy.store import STRATEGY_KEY, ensure_strategies
 from app.trading import risk
 from app.trading.engine import EvaluationBusy, news_sources
 from app.trading.history import market_actions, trade_actions
@@ -44,6 +53,7 @@ def session():
 
 def _cleanup():
     with SessionLocal() as s:
+        s.execute(delete(StrategyRecord))
         s.execute(delete(Setting).where(Setting.key == STRATEGY_KEY))
         s.execute(delete(Setting).where(Setting.key == MARKET_MOOD_KEY))
         s.execute(delete(Setting).where(Setting.key.like(f"{cfg.CONFIG_PREFIX}%")))
@@ -112,7 +122,9 @@ async def test_dashboard_shows_unprotected_positions_and_weak_secret(api):
 async def test_dashboard_warns_about_an_invalid_stored_strategy(api):
     respx.get(url__startswith=f"{BASE}/").mock(return_value=Response(200, json=[]))
     with SessionLocal() as s:
-        s.merge(Setting(key=STRATEGY_KEY, value='{"name": "kapot"}'))
+        # The stored rules of the first strategy become unusable (hand-edited, say).
+        ensure_strategies(s)
+        s.scalar(select(StrategyRecord).order_by(StrategyRecord.id)).config = '{"name": "kapot"}'
         s.commit()
     page = (await api.get("/")).text
     assert "De opgeslagen strategie is ongeldig" in page

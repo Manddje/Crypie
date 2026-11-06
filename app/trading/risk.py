@@ -109,6 +109,45 @@ def position_exposure(session: Session, mode: str, prices: dict[str, float]) -> 
     return total
 
 
+def strategy_invested(
+    session: Session, mode: str, markets: list[str], strategy_id: int | None = None
+) -> float:
+    """EUR spent (incl. fee) on the active positions in ``markets``, plus those the strategy
+    opened itself in a market it no longer trades: what a strategy with a budget of its own
+    has tied up right now. Buys in flight (``opening``) count too."""
+    conditions = []
+    if markets:
+        conditions.append(Position.market.in_(list(markets)))
+    if strategy_id is not None:
+        conditions.append(Position.strategy_id == strategy_id)
+    if not conditions:
+        return 0.0
+    return float(
+        session.scalar(
+            select(func.coalesce(func.sum(Position.entry_quote), 0.0)).where(
+                Position.mode == mode,
+                Position.status.in_(ACTIVE_POSITION_STATUSES),
+                or_(*conditions),
+            )
+        )
+        or 0.0
+    )
+
+
+def budget_room(
+    session: Session,
+    mode: str,
+    markets: list[str],
+    budget_eur: float,
+    strategy_id: int | None = None,
+) -> tuple[float, float]:
+    """(invested, room) of a strategy's budget; room is unbounded (inf) without a budget."""
+    invested = strategy_invested(session, mode, markets, strategy_id)
+    if not budget_eur or budget_eur <= 0:
+        return invested, math.inf
+    return invested, max(budget_eur - invested, 0.0)
+
+
 def has_unsettled_order(session: Session, mode: str, market: str) -> bool:
     """True while an order in ``market`` was sent but its outcome is not known yet."""
     return (

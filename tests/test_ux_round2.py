@@ -7,7 +7,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete
 
-from app.db import Decision, Evaluation, Position, SessionLocal, Setting, init_db
+from app.db import Decision, Evaluation, Position, SessionLocal, Setting, StrategyRecord, init_db
 from app.main import APPLIED_PROPOSALS_KEY, app
 from app.strategy.model import DEFAULT_STRATEGY
 from app.strategy.store import PREVIOUS_KEY, STRATEGY_KEY
@@ -22,6 +22,7 @@ def _clean():
             s.execute(delete(table))
         keys = (STRATEGY_KEY, APPLIED_PROPOSALS_KEY, PREVIOUS_KEY)
         s.execute(delete(Setting).where(Setting.key.in_(keys)))
+        s.execute(delete(StrategyRecord))
         s.commit()
         risk.set_paused(s, False)
 

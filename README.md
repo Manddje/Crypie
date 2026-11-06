@@ -306,8 +306,45 @@ Op de pagina **/strategy** kun je:
 
 De pagina toont de regels eerst, in leesbare namen ("RSI 14 lager dan 35"), met de indicator-id's uit de
 JSON ernaast; de vrije omschrijving staat klein als "Toelichting (vrije tekst)" en de pagina waarschuwt
-als de regels veranderen maar de omschrijving niet. De strategie geldt voor al je markten; het veld
-`market` bepaalt alleen op welke markt de backtest draait (bij *Testen* kun je een andere markt kiezen).
+als de regels veranderen maar de omschrijving niet. Het veld `market` bepaalt alleen op welke markt de
+backtest draait (bij *Testen* kun je een andere markt kiezen); op welke markten een strategie handelt,
+stel je in bij *Strategieën* (zie hieronder).
+
+### Meerdere strategieën, elk met eigen budget
+
+Bovenaan /strategy staat het blok **Strategieën**: de bot kan er tot tien naast elkaar draaien, elk met:
+
+- **eigen markten**: een of meer markten uit `MARKETS`. Een markt hoort bij één strategie tegelijk
+  (opslaan weigert een markt die een andere aanstaande strategie al heeft). Een strategie *zonder* eigen
+  markten handelt op alle markten die overblijven (hoogstens één zo'n "rest"-strategie staat tegelijk
+  aan). Een markt waar geen strategie op handelt, wordt niet gekocht; open posities erin blijven wel
+  bewaakt door stop-loss, trailing stop en take-profit, en de pagina's zeggen het;
+- **een eigen budget** in euro's: zoveel mag er tegelijk in haar open posities zitten (gerekend als wat
+  de aankopen kostten, inclusief kosten; ook posities die ze opende in een markt die je intussen niet
+  meer volgt). Is het budget op, dan koopt die strategie niets tot er een positie sluit; een kleinere
+  rest wordt afgekapt op wat er nog vrij is. Claude ziet het budget en wat er nog vrij is
+  (`strategy_budget`, `limits.strategy_available_eur`). Budget 0 = geen eigen budget: alleen de
+  algemene limieten. De harde limieten (maximum per order, maximaal in crypto, dagverlies, orders per
+  dag) gelden altijd bovenop de budgetten; de budgetten samen mogen groter zijn dan het start- of
+  botkapitaal, de pagina zegt dat dan;
+- **een schakelaar**: uit = koopt niets; haar open posities blijven bewaakt (door de strategie die de
+  markt nu heeft, anders door haarzelf, anders door de eerste strategie).
+
+*Strategie toevoegen* maakt een strategie met de standaardregels op de opgegeven markten; daarna pas je
+naam en regels aan in de editor (*Regels bekijken en bewerken* opent `/strategy?id=…`; de eerste
+strategie staat op `/strategy` zelf). Testen, voorstellen, opslaan, terugzetten en herstellen werken per
+strategie; elke strategie bewaart haar eigen vorige regels. Posities en beslissingen in het journaal
+onthouden welke strategie ze maakte (`strategy_id`); een evaluatievoorstel geldt voor één strategie
+(`strategy_id` van de evaluatie, standaard de eerste) en Handelen noemt die bij het toepassen. Een
+installatie van vóór dit blok houdt haar ene strategie als eerste strategie, zonder eigen markten en
+zonder budget: niets verandert tot je een tweede toevoegt.
+
+API: `GET /api/strategies` (alles, met per strategie `active_markets`, `invested_eur` en
+`available_eur` in de actieve modus), `POST /api/strategies` (`{"strategy", "markets", "budget_eur",
+"enabled"}`, 201 met `Location`), `GET`/`PUT`/`DELETE /api/strategies/{id}` (`PUT` wijzigt alleen de
+meegegeven velden; verwijderen van de laatste geeft 409 `last_strategy`; een markt van een andere
+strategie geeft 422 `strategy_conflict`). `GET`/`PUT /api/strategy` blijven: de regels van de eerste
+strategie.
 
 - **Resultaat op een eigen adres.** Een test en een voorstel van Claude staan daarna op
   `/strategy?result=…` (twee uur geldig, in het geheugen, weg na een herstart). Vernieuwen voert de test
@@ -575,8 +612,9 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    [De pagina Handelen](#de-pagina-handelen)). Zonder `ANTHROPIC_API_KEY` staan *Nu evalueren* en de
    automatische evaluaties uit.
 
-De actieve strategie bepaalt de regels (indicatoren, condities, stop-loss, trailing stop, take-profit) en wordt op elke
-markt uit `MARKETS` toegepast; het `market`-veld van de strategie is alleen de standaard voor backtests.
+Per markt bepaalt de strategie die de markt heeft (zie [Meerdere strategieën](#meerdere-strategieën-elk-met-eigen-budget))
+de regels (indicatoren, condities, stop-loss, trailing stop, take-profit) en het budget; het `market`-veld
+van een strategie is alleen de standaard voor backtests.
 
 **De noodstop** ("Noodstop: kopen pauzeren" op Overzicht en Handelen, `POST /trading/action` met
 `action=pause` of `resume`) blokkeert nieuwe aankopen, van de bot en handmatig. Stop-loss, trailing
@@ -934,10 +972,13 @@ jouw verzoek ook ingrijpen. De server zit in de app zelf (`app/mcp_server.py`), 
 
 **Tools.** Lezen: `status` (gezondheid, limieten nu, onbeschermde posities; begin hier),
 `trading_status`, `prices`, `candles`, `chart`, `portfolio_history`, `balance`, `orders`, `positions`,
-`decisions`, `journal` (filterbaar), `news`, `news_sentiment`, `etf_flows`, `evaluations`, `strategy`, `plan`,
-`settings` en `claude_usage`. Doen: `run_cycle`, `consult` (Claude laten beoordelen), `pause` (noodstop
-aan of uit), `run_evaluation`, `apply_evaluation`, `refresh_news`, `place_order`, `set_strategy`,
-`propose_strategy`, `backtest`, `set_plan`, `journal_note`, `update_settings` en `reset_settings`. Elke
+`decisions`, `journal` (filterbaar), `news`, `news_sentiment`, `etf_flows`, `evaluations`, `strategy`
+(de regels van de eerste strategie), `strategies` (alle strategieën met markten, budget en gebruik),
+`plan`, `settings` en `claude_usage`. Doen: `run_cycle`, `consult` (Claude laten beoordelen), `pause`
+(noodstop aan of uit), `run_evaluation`, `apply_evaluation`, `refresh_news`, `place_order`,
+`set_strategy` (regels van een strategie, `strategy_id` leeg = de eerste), `add_strategy`,
+`update_strategy` (markten, budget, regels of aan/uit), `remove_strategy`, `propose_strategy`,
+`backtest`, `set_plan`, `journal_note`, `update_settings` en `reset_settings`. Elke
 tool is een dunne laag om een adres uit de API, met dezelfde controles, limieten en foutmeldingen; de
 MCP kan niets wat de API niet kan. Gevoelige wijzigingen (zie [Instellingen](#instellingen)) en
 handmatige orders in live-modus vragen ook via de MCP je huidige wachtwoord (`current_password`);
@@ -1194,7 +1235,7 @@ app/
   indicators/core.py        SMA, EMA, RSI, MACD, Bollinger, drawdown (pure Python)
   strategy/model.py         strategie-schema (pydantic) en standaardstrategie
   strategy/engine.py        indicatorseries, signalen en backtester
-  strategy/store.py         actieve en vorige strategie in de settings-tabel
+  strategy/store.py         de strategieën (tabel strategies): regels, markten, budget, aan/uit, vorige regels
   strategy/page.py          strategiepagina: leesbare validatiefouten, backtest-oordeel, resultaten per adres
   ai/strategy_assistant.py  Claude vertaalt een beschrijving naar een strategie (structured output)
   ai/news_analyst.py        Claude beoordeelt nieuwsberichten in batches (structured output)

@@ -24,7 +24,16 @@ from app.ai.evaluator import render_evaluation_prompt, split_evaluation_context
 from app.bitvavo.broker import PaperBroker
 from app.bitvavo.client import BitvavoClient, BitvavoError, InvalidMarketError, check_market
 from app.db import Base as DbBase
-from app.db import ClaudeUsage, Decision, NewsItem, Order, Position, Setting, make_engine
+from app.db import (
+    ClaudeUsage,
+    Decision,
+    NewsItem,
+    Order,
+    Position,
+    Setting,
+    StrategyRecord,
+    make_engine,
+)
 from app.news import sources
 from app.news.service import (
     NewsService,
@@ -35,7 +44,6 @@ from app.news.service import (
     store_items,
 )
 from app.news.sources import RawItem, VettedNetworkBackend, parse_rss, vetted_transport
-from app.strategy.store import STRATEGY_KEY
 from app.trading import risk
 from app.trading.engine import (
     EXIT_FAILURE_JOURNAL,
@@ -89,7 +97,7 @@ async def test_concurrent_buys_in_two_markets_respect_the_daily_trade_limit(tmp_
         engine.client = YieldingClient(series, prices)
         engine.broker = PaperBroker(engine.client, start_eur=1000, fee_pct=0.0)
         engine.limits = replace(LIMITS, max_trades_per_day=1)
-        strategy = engine._trading_strategy(s1)
+        strategy = engine._trading_plan(s1)[0]["BTC-EUR"].strategy
         # e.g. the hourly cycle on BTC while the dip watch fires on ETH
         a, b = await asyncio.gather(
             engine.run_market(s1, strategy, "BTC-EUR", prices),
@@ -315,9 +323,10 @@ def test_market_check_refuses_a_trailing_newline():
 async def test_invalid_stored_strategy_blocks_new_buys_but_not_exits(session):  # noqa: F811
     decider = buy_decider()
     engine = make_engine_(session, {"BTC-EUR": candles(BUY_SERIES)}, {"BTC-EUR": 12.0}, decider)
-    strategy = engine._trading_strategy(session)
+    plan, _ = engine._trading_plan(session)
+    strategy = plan["BTC-EUR"].strategy
     assert engine.strategy_invalid is False
-    session.get(Setting, STRATEGY_KEY).value = "{not json"
+    session.scalar(select(StrategyRecord).order_by(StrategyRecord.id)).config = "{not json"
     session.commit()
     await engine.run_cycle(session)
     assert engine.strategy_invalid is True

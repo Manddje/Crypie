@@ -39,6 +39,8 @@ Spelregels:
 - Zonder open positie is "sell" zinloos; zonder buy-signaal en zonder news_entry_allowed is
   "buy" niet toegestaan.
 - amount_quote is in EUR en mag nooit boven max_trade_eur liggen; de code kapt het verder af.
+  Heeft de strategie een eigen budget (strategy_budget, limits.strategy_available_eur), dan is
+  strategy_available_eur het meeste wat deze aankoop mag kosten; is dat te weinig, kies "hold".
 - Leer van de samenvatting van recente beslissingen: als vergelijkbare situaties recent slecht
   uitpakten, wees terughoudender; als ze goed uitpakten, mag je het signaal volgen.
 - Transactiekosten tellen: "costs" geeft de fee per kant en wat een rondje kopen+verkopen

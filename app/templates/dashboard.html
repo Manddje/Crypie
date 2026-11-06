@@ -250,16 +250,23 @@
   {# -- Strategy, closed trades, Claude budget -- #}
   <div class="grid-3">
     <section class="card dash-strategy" aria-labelledby="strategy-title">
-      {{ ui.card_header("Strategie", 2, href="/strategy", link="Naar Strategie", id="strategy-title") }}
+      {{ ui.card_header("Strategie" if strategies|length == 1 else "Strategieën", 2, href="/strategy", link="Naar Strategie", id="strategy-title") }}
+      {% for r in strategies %}{% set strategy = r.strategy %}
+      <div class="dash-strategy-item{{ ' mt-4' if not loop.first }}">
       <p class="fw-bold">{{ strategy.name }}</p>
-      <p class="small muted">Geldt voor {{ settings.markets|market_list }} · candles van {{ strategy.interval|nl }}</p>
-      {% if strategy.description %}<p class="small dash-oneline mt-2">{{ strategy.description }}</p>{% endif %}
+      <p class="small muted">Geldt voor {{ r.scope|market_list if r.scope else "geen markt (nog niet toegewezen)" }} · candles van {{ strategy.interval|nl }}{% if r.budget_eur %} · budget {{ r.budget_eur|eur(0) }}, {{ r.invested_eur|eur(0) }} belegd{% endif %}</p>
+      {% if strategy.description and strategies|length == 1 %}<p class="small dash-oneline mt-2">{{ strategy.description }}</p>{% endif %}
       <div class="chips mt-3">
         {% for ind in strategy.indicators %}<span class="chip">{{ ind|indicator_nl }}</span>{% endfor %}
         {% if strategy.stop_loss_pct %}<span class="chip">stop-loss {{ strategy.stop_loss_pct|pct_limit }}</span>{% endif %}
         {% if strategy.trailing_stop_pct %}<span class="chip">trailing stop {{ strategy.trailing_stop_pct|pct_limit }}</span>{% endif %}
         {% if strategy.take_profit_pct %}<span class="chip">take-profit {{ strategy.take_profit_pct|pct_limit }}</span>{% endif %}
       </div>
+      </div>
+      {% else %}
+      <p class="small muted">Alle strategieën staan uit: de bot koopt niets.</p>
+      {% endfor %}
+      {% if strategies_off %}<p class="small muted mt-3">Uit: {{ strategies_off|map(attribute="name")|join(", ") }}.</p>{% endif %}
     </section>
 
     <section class="card" aria-labelledby="closed-title">

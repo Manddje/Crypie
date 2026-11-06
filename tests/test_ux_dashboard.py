@@ -17,7 +17,7 @@ from sqlalchemy import delete, select
 from app import flash, main
 from app.bitvavo.broker import PAPER_WALLET_KEY, OrderUncertain, recent_orders
 from app.bitvavo.client import BitvavoError, BitvavoNetworkError
-from app.db import Decision, Order, Position, SessionLocal, Setting, init_db
+from app.db import Decision, Order, Position, SessionLocal, Setting, StrategyRecord, init_db
 from app.flash import flashes_from_response
 from app.main import (
     GETTING_STARTED_KEY,
@@ -548,6 +548,8 @@ async def test_getting_started_until_hidden(api):
     _clear_trades()
     with SessionLocal() as s:
         s.execute(delete(Setting).where(Setting.key.in_([GETTING_STARTED_KEY, PLAN_KEY])))
+        s.execute(delete(StrategyRecord))
+        s.execute(delete(Setting).where(Setting.key.in_(["strategy", "strategy:previous"])))
         s.commit()
     page = (await api.get("/")).text
     assert 'id="aan-de-slag"' in page and "0 van 5 stappen klaar" in page
