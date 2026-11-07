@@ -329,6 +329,20 @@ SPECS: tuple[Spec, ...] = (
         depends="risk_off_enabled",
     ),
     Spec(
+        "risk_off_etf_outflow",
+        "trading",
+        "Risk-off bij ETF-uitstroom",
+        "",
+        kind="choice",
+        choices=(
+            ("off", "Uit"),
+            ("strong", "Bij sterke uitstroom (5 dagen)"),
+            ("any", "Bij elke uitstroom (5 dagen)"),
+        ),
+        section="bescherming",
+        depends="risk_off_enabled",
+    ),
+    Spec(
         "shock_mode",
         "trading",
         "Nieuwsschok",
@@ -716,6 +730,7 @@ SENSITIVE_KEYS: frozenset[str] = frozenset(
         "risk_off_enabled",
         "risk_off_before_min",
         "risk_off_after_min",
+        "risk_off_etf_outflow",
         "event_calendar",
         "shock_pause_hours",
         "shock_mode",

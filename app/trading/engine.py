@@ -357,6 +357,14 @@ def _from_iso(value: Any) -> datetime | None:
     return out if out.tzinfo else out.replace(tzinfo=UTC)
 
 
+# The ETF-flow labels (app.news.sources.etf_flow_label) each RISK_OFF_ETF_OUTFLOW mode blocks on.
+ETF_OUTFLOW_LABELS: dict[str, tuple[str, ...]] = {
+    "off": (),
+    "strong": ("strong_outflow",),
+    "any": ("outflow", "strong_outflow"),
+}
+
+
 class TradingEngine:
     def __init__(
         self,
@@ -389,6 +397,8 @@ class TradingEngine:
         # Risk-off: no new buys around calendar events and after a news shock.
         self.calendar: list[MarketEvent] = []
         self.risk_off_enabled = True
+        # RISK_OFF_ETF_OUTFLOW: no new buys in a coin while its ETF flows show (strong) outflow.
+        self.risk_off_etf_outflow = "strong"
         self.risk_off_before_min = 60
         self.risk_off_after_min = 120
         # News shocks (app/trading/shock.py): Claude judges new vs repeat ("claude") or a fixed
@@ -956,7 +966,34 @@ class TradingEngine:
         pause = self.shock.pause_for(session, market.split("-")[0], now)
         if pause is not None:
             return self.shock.risk_off_info(pause)
-        return None
+        return self.etf_risk_off(session, market.split("-")[0], now)
+
+    def etf_risk_off(self, session: Session, coin: str, now: datetime) -> dict[str, Any] | None:
+        """Risk-off on ETF outflow: the stored flows of ``coin`` show outflow of the kind
+        RISK_OFF_ETF_OUTFLOW asks for (day figures; the block lasts until they turn)."""
+        if not self.risk_off_enabled or not self.etf_flows_enabled:
+            return None
+        wanted = ETF_OUTFLOW_LABELS.get(self.risk_off_etf_outflow) or ()
+        if not wanted:
+            return None
+        flows = load_etf_flows(session, coin, now)
+        if flows is None or flows.get("label") not in wanted:
+            return None
+        sum_5d = float(flows.get("sum_5d_musd") or 0)
+        return {
+            "kind": "etf",
+            "label": f"ETF-uitstroom {coin}",
+            "at": flows.get("as_of"),
+            "until": None,
+            "sum_5d_musd": flows.get("sum_5d_musd"),
+            "streak_days": flows.get("streak_days"),
+            "flow_label": flows.get("label"),
+            "reason_nl": (
+                f"ETF-uitstroom {coin}: {sum_5d:+,.0f} mln USD over 5 dagen "
+                f"({flows.get('label_nl')}, stand {flows.get('as_of')}); geen nieuwe aankopen "
+                "zolang de stroom niet keert"
+            ).replace(",", " "),
+        }
 
     def events_context(self, session: Session, market: str, now: datetime) -> dict[str, Any]:
         """What Claude and the UI see: the active risk-off (if any) and the next events."""
@@ -974,10 +1011,13 @@ class TradingEngine:
     def events_status(self, session: Session) -> dict[str, Any]:
         now = datetime.now(UTC)
         shocks = {}
+        etf_outflows = {}
         for market in self.markets:
             ro = self.risk_off(session, market, now)
             if ro and ro["kind"] == "shock":
                 shocks[market] = ro
+            elif ro and ro["kind"] == "etf":
+                etf_outflows[market] = ro
         event = (
             active_event(self.calendar, now, self.risk_off_before_min, self.risk_off_after_min)
             if self.risk_off_enabled
@@ -992,6 +1032,8 @@ class TradingEngine:
                 "until": event.window(0, self.risk_off_after_min)[1].isoformat(),
             },
             "shocks": shocks,
+            "etf_outflows": etf_outflows,
+            "etf_outflow_mode": self.risk_off_etf_outflow if self.etf_flows_enabled else "off",
             "upcoming": [e.as_dict() for e in upcoming_events(self.calendar, now, 4)],
             "before_min": self.risk_off_before_min,
             "after_min": self.risk_off_after_min,

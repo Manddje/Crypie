@@ -475,7 +475,8 @@ Nieuws is onbetrouwbare invoer, dus:
   wist ze. Claude krijgt ze per beslissing mee als `etf_flows` (context, geen signaal: aanhoudende
   instroom maakt een dip eerder koopwaardig, aanhoudende uitstroom vraagt terughoudendheid) en bij de
   schokbeoordeling als dagcijfers naast Fear & Greed (uitstroom maakt een schok geloofwaardiger), en bij de
-  zelfevaluatie als dagreeks over de periode, om te toetsen of beslissingen met of tegen de stroom in gingen;
+  zelfevaluatie als dagreeks over de periode, om te toetsen of beslissingen met of tegen de stroom in gingen.
+  Sterke uitstroom is bovendien een risk-off-reden (`RISK_OFF_ETF_OUTFLOW`, zie [Handelen](#handelen));
   /news toont
   ze onder *ETF-stromen*; API `GET /api/news/etf-flows`, MCP-tool `etf_flows`. De sleutel staat alleen
   in de omgeving en komt niet in de log.
@@ -567,8 +568,14 @@ Elke `TRADE_INTERVAL_MIN` minuten draait per markt uit `MARKETS` één cyclus (`
    `SHOCK_RECHECK_MIN` (60) minuten opnieuw. Elk oordeel staat als beslissing in het journaal ("Schokbeoordeling
    (…)"), de lopende pauzes in `/api/status`, en de kosten in `claude_usage` onder `shock`. Verkopen,
    stop-loss en take-profit blijven werken; de
-   dipbewaking wordt niet gewapend. Claude ziet dit als `market_events` (actieve risk-off en de komende 72 uur);
-   /trading toont de agenda en een actieve risk-off. Alles instelbaar in het portaal.
+   dipbewaking wordt niet gewapend. De derde risk-off-reden is **ETF-uitstroom**: met
+   `RISK_OFF_ETF_OUTFLOW=strong` (standaard) koopt de bot een coin niet zolang de nettostroom van zijn
+   Amerikaanse spot-ETF's over de laatste 5 handelsdagen het label *sterke uitstroom* heeft (zie
+   [Nieuws](#nieuws)); `any` blokkeert ook bij gewone uitstroom, `off` zet dit uit. Dagcijfers, dus de blokkade
+   duurt tot de volgende cijfers de stroom laten keren; zonder (verse) cijfers of met `ETF_FLOWS_ENABLED=false`
+   geldt hij niet. Claude ziet dit alles als `market_events` (actieve risk-off en de komende 72 uur);
+   /trading toont de agenda en een actieve risk-off, de statusbalk meldt het als "koopt niet" (alle markten)
+   of als notitie (sommige). Alles instelbaar in het portaal.
    Een voorwaarde met `"soft": true` is een **zacht filter**: het signaal ontstaat ook als het niet geldt,
    Claude ziet dat in `signal_checks` en `soft_filters_failed` en koopt dan hoogstens de helft van
    `MAX_TRADE_EUR`. De standaardstrategie gebruikt dat voor de EMA200-trendfilter, zodat een RSI-dip in een

@@ -96,6 +96,9 @@ class Settings(BaseSettings):
     risk_off_enabled: bool = True
     risk_off_before_min: int = 60
     risk_off_after_min: int = 120
+    # ETF outflow as risk-off: no new buys in a coin while the net flows of its US spot
+    # ETFs show strong outflow (strong), any outflow (any), or never (off).
+    risk_off_etf_outflow: Literal["off", "strong", "any"] = "strong"
     # News shocks (app/trading/shock.py). claude: Claude tells a new shock from a repeat and
     # rechecks a running pause; fixed: a pause of SHOCK_PAUSE_HOURS without Claude. The fixed
     # pause is also the fallback when Claude is not available (no key, budget spent, an error).

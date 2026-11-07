@@ -253,7 +253,7 @@
     </div>
     <p class="form-help">{% if rn.as_of %}Stand van {{ rn.as_of|dt }}. {% endif %}De dagtellers beginnen opnieuw om {{ rn.resets_at|dt }}. Deze grenzen worden in code afgedwongen; Claude kan ze niet omzeilen.</p>
 
-    <details class="context-more"{% if agenda.active_event or agenda.shocks %} open{% endif %}>
+    <details class="context-more"{% if agenda.active_event or agenda.shocks or agenda.etf_outflows %} open{% endif %}>
       <summary>Agenda, trend en alle limieten</summary>
       <div class="context-grid">
         <section aria-labelledby="limits-title">
@@ -264,12 +264,15 @@
         <section aria-labelledby="agenda-title">
           <div class="context-head"><h3 class="context-title" id="agenda-title">Agenda en risk-off</h3><a class="card-link" href="/settings#row-event_calendar">Agenda aanpassen{{ ui.icon("chevron", "link-chevron") }}</a></div>
           {% if not agenda.enabled %}
-          <p class="small muted">Risk-off staat uit: de bot koopt ook rond agendamomenten en na nieuwsschokken.</p>
+          <p class="small muted">Risk-off staat uit: de bot koopt ook rond agendamomenten, na nieuwsschokken en bij ETF-uitstroom.</p>
           {% elif agenda.active_event %}
           <p class="small"><span class="pill pill-orange"><span class="dot" aria-hidden="true"></span>Risk-off actief</span> {{ agenda.active_event.label }} om {{ agenda.active_event.at|isodt }}; geen nieuwe aankopen tot {{ agenda.active_event.until|isodt }}.</p>
           {% else %}
-          <p class="small muted">Geen agendamoment actief. Rond elk moment hieronder koopt de bot niet van {{ agenda.before_min }} min ervoor tot {{ agenda.after_min }} min erna.{% if agenda.shock_mode == "claude" %} Na een nieuwsschok (impact groot, sterk negatief) beoordeelt Claude of het een nieuwe schok is of een herhaling; bij een nieuwe schok koopt de bot minstens {{ agenda.shock_min_hours|num(2)|replace(",00", "") }} en hooguit {{ agenda.shock_max_hours|num(2)|replace(",00", "") }} uur niet in de geraakte coins.{% elif agenda.shock_pause_hours %} Na een nieuwsschok (impact groot, sterk negatief) koopt de bot {{ agenda.shock_pause_hours }} uur niet in de geraakte coins.{% endif %}</p>
+          <p class="small muted">Geen agendamoment actief. Rond elk moment hieronder koopt de bot niet van {{ agenda.before_min }} min ervoor tot {{ agenda.after_min }} min erna.{% if agenda.shock_mode == "claude" %} Na een nieuwsschok (impact groot, sterk negatief) beoordeelt Claude of het een nieuwe schok is of een herhaling; bij een nieuwe schok koopt de bot minstens {{ agenda.shock_min_hours|num(2)|replace(",00", "") }} en hooguit {{ agenda.shock_max_hours|num(2)|replace(",00", "") }} uur niet in de geraakte coins.{% elif agenda.shock_pause_hours %} Na een nieuwsschok (impact groot, sterk negatief) koopt de bot {{ agenda.shock_pause_hours }} uur niet in de geraakte coins.{% endif %}{% if agenda.etf_outflow_mode == "strong" %} Bij sterke uitstroom uit de Amerikaanse spot-ETF's van een coin (laatste 5 handelsdagen) koopt de bot die coin niet tot de stroom keert.{% elif agenda.etf_outflow_mode == "any" %} Bij uitstroom uit de Amerikaanse spot-ETF's van een coin (laatste 5 handelsdagen) koopt de bot die coin niet tot de stroom keert.{% endif %}</p>
           {% endif %}
+          {% for market, ro in agenda.etf_outflows.items() %}
+          <p class="small"><span class="pill pill-orange"><span class="dot" aria-hidden="true"></span>ETF-uitstroom {{ market }}</span> {{ ro.reason_nl }}.</p>
+          {% endfor %}
           {% for market, ro in agenda.shocks.items() %}
           <p class="small"><span class="pill pill-red"><span class="dot" aria-hidden="true"></span>Schok-pauze {{ market }}</span> {{ ro.label }}; {% if ro.mode == "claude" %}geen nieuwe aankopen, volgende beoordeling {{ ro.next_recheck_at|isodt }}, uiterlijk {{ ro.max_until|isodt }}.{% else %}geen nieuwe aankopen tot {{ ro.until|isodt }}.{% endif %}</p>
           {% endfor %}

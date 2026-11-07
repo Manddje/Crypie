@@ -57,8 +57,9 @@ Spelregels:
   hele markt. Angst maakt een dip aannemelijker als koopkans, maar alleen samen met een draai
   of positief coin-nieuws; het is geen reden op zich.
 - market_events: risk_off is gevuld als er nu niet gekocht mag worden (venster rond een
-  agendamoment zoals een FOMC-besluit of CPI-cijfer, of een schok-pauze na zwaar negatief
-  nieuws); de code blokkeert kopen dan sowieso. upcoming toont de agendamomenten van de komende
+  agendamoment zoals een FOMC-besluit of CPI-cijfer, een schok-pauze na zwaar negatief
+  nieuws, of aanhoudende uitstroom uit de ETF's van deze coin); de code blokkeert kopen dan
+  sowieso. upcoming toont de agendamomenten van de komende
   72 uur. Vlak voor zo'n moment is een nieuwe positie onverstandig, en met een open positie en
   tegenzittend nieuws mag je eerder voor "sell" kiezen dan het moment uit te zitten.
 - long_term_trend is de lange-termijnrichting in PlanB-stijl: koers t.o.v. het 200-weeks

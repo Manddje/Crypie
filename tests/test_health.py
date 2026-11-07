@@ -90,6 +90,36 @@ def test_without_claude_in_hold_mode_the_bot_never_buys(session):
     assert any("alleen de regels" in r for r in h["reasons"])
 
 
+def test_etf_outflow_blocks_buying_or_is_a_note(session):
+    from app.news.service import save_etf_flows
+
+    eng = engine_(session)
+    flows = {
+        "coin": "BTC",
+        "as_of": NOW.date().isoformat(),
+        "sum_5d_musd": -300.0,
+        "sum_30d_musd": -300.0,
+        "typical_day_musd": 40.0,
+        "days": 5,
+        "last_day_musd": -60.0,
+        "streak_days": -4,
+        "daily": [],
+    }
+    save_etf_flows(session, flows)
+    h = health(eng, session)
+    assert (h["level"], h["label"]) == ("warn", "Actief · koopt niet")
+    assert "risk-off: ETF-uitstroom in BTC-EUR" in h["detail"]
+    # With another market still open to buys it is a note, not a blocker.
+    eng.markets = ["BTC-EUR", "ETH-EUR"]
+    h = health(eng, session)
+    assert h["label"] == "Actief" and any(
+        "Risk-off in BTC-EUR: ETF-uitstroom" in r for r in h["reasons"]
+    )
+    eng.risk_off_etf_outflow = "off"
+    h = health(eng, session)
+    assert h["label"] == "Actief" and not any("ETF" in r for r in h["reasons"])
+
+
 def test_empty_claude_budget_blocks_buying_in_hold_mode(session):
     h = health(engine_(session), session, budget={"exhausted": True})
     assert h["label"] == "Actief · koopt niet" and "Claude-budget is op" in h["detail"]

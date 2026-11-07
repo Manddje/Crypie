@@ -738,6 +738,7 @@ async def test_etf_flows_reach_claude_when_enabled(session):
         TradeDecision(action="hold", confidence=0.5, amount_quote=0, reasoning_nl="Wacht.")
     )
     engine = make_engine_(session, {"BTC-EUR": candles(BUY_SERIES)}, {"BTC-EUR": 12.0}, decider)
+    engine.risk_off_etf_outflow = "off"  # the context, not the risk-off block, is under test
     await engine.run_cycle(session)
     flows = decider.contexts[0]["etf_flows"]
     assert flows["label"] == "strong_outflow" and flows["sum_5d_musd"] == -300.0
@@ -761,6 +762,63 @@ async def test_risk_off_window_blocks_buys_without_asking_claude(session):
 
     # Switched off: the same cycle buys.
     engine.risk_off_enabled = False
+    (result,) = await engine.run_cycle(session)
+    assert result.action == "buy" and result.executed
+
+
+def _flows(label_sum_5d: float, typical: float = 40.0, coin: str = "BTC") -> dict:
+    """A stored ETF-flow summary; the label follows from sum_5d against 5 x typical."""
+    return {
+        "coin": coin,
+        "as_of": datetime.now(UTC).date().isoformat(),
+        "sum_5d_musd": label_sum_5d,
+        "sum_30d_musd": label_sum_5d,
+        "typical_day_musd": typical,
+        "days": 5,
+        "last_day_musd": label_sum_5d / 5,
+        "streak_days": -3,
+        "daily": [],
+    }
+
+
+async def test_etf_outflow_is_a_risk_off_reason(session):
+    decider = FakeDecider(
+        TradeDecision(action="buy", confidence=0.9, amount_quote=100, reasoning_nl="Kopen.")
+    )
+    engine = make_engine_(session, {"BTC-EUR": candles(BUY_SERIES)}, {"BTC-EUR": 12.0}, decider)
+    save_etf_flows(session, _flows(-300.0))  # -300 / (5 x 40) = -1.5: strong outflow
+
+    (result,) = await engine.run_cycle(session)
+    assert result.signal == "buy" and result.action == "hold" and result.source == "rules"
+    assert "Risk-off: ETF-uitstroom BTC: -300 mln USD over 5 dagen (sterke uitstroom" in (
+        result.reason
+    )
+    assert "zolang de stroom niet keert" in result.reason and decider.contexts == []
+    (d,) = session.query(Decision).all()
+    assert d.blocked_by == "risk-off" and open_position(session, "paper", "BTC-EUR") is None
+    ro = engine.risk_off(session, "BTC-EUR", datetime.now(UTC))
+    assert ro["kind"] == "etf" and ro["until"] is None and ro["flow_label"] == "strong_outflow"
+    assert engine.events_status(session)["etf_outflows"]["BTC-EUR"]["kind"] == "etf"
+
+    # Plain outflow (-50 / 200 = -0.25) only blocks in mode "any"; "off" never blocks.
+    save_etf_flows(session, _flows(-50.0))
+    assert engine.risk_off(session, "BTC-EUR", datetime.now(UTC)) is None
+    engine.risk_off_etf_outflow = "any"
+    assert engine.risk_off(session, "BTC-EUR", datetime.now(UTC))["kind"] == "etf"
+    engine.risk_off_etf_outflow = "off"
+    assert engine.risk_off(session, "BTC-EUR", datetime.now(UTC)) is None
+    # Without the ETF source, or with risk-off off, the flows never block.
+    engine.risk_off_etf_outflow = "strong"
+    save_etf_flows(session, _flows(-300.0))
+    engine.etf_flows_enabled = False
+    assert engine.risk_off(session, "BTC-EUR", datetime.now(UTC)) is None
+    engine.etf_flows_enabled, engine.risk_off_enabled = True, False
+    assert engine.risk_off(session, "BTC-EUR", datetime.now(UTC)) is None
+    engine.risk_off_enabled = True
+    # A coin without ETFs is never blocked this way.
+    assert engine.risk_off(session, "PEPE-EUR", datetime.now(UTC)) is None
+
+    engine.risk_off_etf_outflow = "off"
     (result,) = await engine.run_cycle(session)
     assert result.action == "buy" and result.executed
 

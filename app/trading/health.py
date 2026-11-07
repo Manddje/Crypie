@@ -323,6 +323,28 @@ def bot_health(
                     blocked_until = until
             elif markets:
                 notes.append(f"Risk-off in {', '.join(markets)}: {guard.reason_nl(pause)}.")
+        # ETF outflow: every market blocked is a blocker, some markets a note.
+        etf_off = getattr(engine, "etf_risk_off", None)
+        outflows = {}
+        if etf_off is not None:
+            for market in engine.markets:
+                ro = etf_off(session, market.split("-")[0], now)
+                if ro is not None:
+                    outflows[market] = ro
+        if outflows and set(outflows) >= set(engine.markets):
+            blockers.append(
+                "risk-off: ETF-uitstroom in "
+                + ", ".join(outflows)
+                + "; geen nieuwe aankopen zolang de stroom niet keert"
+            )
+        elif outflows:
+            notes.append(
+                "Risk-off in "
+                + ", ".join(outflows)
+                + ": "
+                + "; ".join(ro["reason_nl"] for ro in outflows.values())
+                + "."
+            )
 
     # -- one status --
     if errors:

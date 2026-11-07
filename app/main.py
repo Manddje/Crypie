@@ -337,6 +337,7 @@ def _apply_risk_off(engine: TradingEngine, settings: Settings) -> None:
     engine.risk_off_before_min = settings.risk_off_before_min
     engine.risk_off_after_min = settings.risk_off_after_min
     engine.shock_pause_hours = settings.shock_pause_hours
+    engine.risk_off_etf_outflow = settings.risk_off_etf_outflow
     engine.shock_mode = settings.shock_mode
     engine.shock_min_hours = settings.shock_min_hours
     engine.shock_max_hours = settings.shock_max_hours
