@@ -1,0 +1,24 @@
+{% extends "auth/_base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Account aanmaken{% endblock %}
+{% block content %}
+<h1>Welkom bij Crypie</h1>
+<p class="auth-sub">Stap 1 van 3 · account aanmaken</p>
+{% if error %}{{ ui.notice("error", error, live=true, id="setup-error") }}{% endif %}
+<p class="muted">Er is nog geen account. Kies een gebruikersnaam en wachtwoord. Daarna koppel je een authenticator-app voor de tweede stap bij het inloggen (stap 2) en bewaar je je herstelcodes (stap 3).</p>
+<form method="post" action="/setup" class="auth-form" data-auth-form>
+  <input type="hidden" name="token" value="{{ token }}">
+  <label>Gebruikersnaam
+    <input type="text" name="username" value="{{ username }}" autocomplete="username" autocapitalize="off" spellcheck="false" minlength="2" maxlength="64" required{% if not username %} autofocus{% endif %}>
+  </label>
+  <label>Wachtwoord
+    <input type="password" name="password" autocomplete="new-password" minlength="10" required aria-describedby="setup-password-help"{% if username %} autofocus{% endif %}>
+  </label>
+  <label>Wachtwoord nog een keer
+    <input type="password" name="password_repeat" autocomplete="new-password" minlength="10" required>
+  </label>
+  <p class="form-help" id="setup-password-help">Minstens 10 tekens. Bewaar het in je wachtwoordmanager; kwijt is kwijt, al kun je het via de server resetten.</p>
+  <button class="btn btn-primary btn-block" type="submit" data-busy="Bezig…">Account aanmaken</button>
+</form>
+<p class="auth-meta">Na het aanmaken heb je {{ stage_minutes }} minuten om de authenticator te koppelen.</p>
+{% endblock %}

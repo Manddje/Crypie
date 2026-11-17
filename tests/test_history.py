@@ -1,0 +1,322 @@
+from datetime import UTC, datetime, timedelta
+
+import pytest
+import respx
+from httpx import ASGITransport, AsyncClient, Response
+
+from app.db import Decision, Order, SessionLocal, init_db
+from app.main import app
+from app.trading.history import (
+    bar_time,
+    candle_dicts,
+    market_actions,
+    period_spec,
+    portfolio_history,
+)
+
+BASE = "https://api.bitvavo.com/v2"
+T0 = datetime(2026, 11, 1, 0, 0, tzinfo=UTC)
+
+
+def _order(session, market, side, amount, quote, price, at, reason=None, mode="paper"):
+    o = Order(
+        created_at=at,
+        mode=mode,
+        market=market,
+        side=side,
+        order_type="market",
+        amount=amount,
+        amount_quote=quote,
+        price=price,
+        status="filled",
+        reason=reason,
+    )
+    session.add(o)
+    session.commit()
+    return o
+
+
+def _candles(closes):
+    return [
+        {
+            "time": int((T0 + timedelta(hours=i)).timestamp()),
+            "open": close,
+            "high": close,
+            "low": close,
+            "close": close,
+            "volume": 1.0,
+        }
+        for i, close in enumerate(closes)
+    ]
+
+
+def test_period_and_bar_time():
+    assert period_spec("30d") == ("30d", "4h", 180)
+    assert period_spec("nonsense") == ("7d", "1h", 168)
+    moment = datetime(2026, 11, 1, 13, 47, tzinfo=UTC)
+    assert bar_time(moment, "1h") == int(datetime(2026, 11, 1, 13, 0, tzinfo=UTC).timestamp())
+    assert bar_time(moment, "1d") == int(T0.timestamp())
+    assert candle_dicts([[1_700_000_000_000, 1, 2, 0.5, 1.5, 9]])[0] == {
+        "time": 1_700_000_000,
+        "open": 1,
+        "high": 2,
+        "low": 0.5,
+        "close": 1.5,
+        "volume": 9,
+    }
+
+
+def test_portfolio_history_rewinds_orders_from_the_current_balance():
+    init_db()
+    with SessionLocal() as s:
+        s.query(Order).delete()
+        s.commit()
+        # Bought 0.5 BTC for 100 EUR at hour 2, sold half of it for 60 EUR at hour 4.
+        _order(s, "BTC-EUR", "buy", 0.5, 100.0, 200.0, T0 + timedelta(hours=2, minutes=10))
+        _order(s, "BTC-EUR", "sell", 0.25, 60.0, 240.0, T0 + timedelta(hours=4, minutes=5))
+        balances = {"EUR": 960.0, "BTC": 0.25}
+        candles = {"BTC-EUR": _candles([200.0, 200.0, 200.0, 220.0, 240.0, 240.0])}
+        points = portfolio_history(s, "paper", balances, candles, T0)
+        s.query(Order).delete()
+        s.commit()
+    values = [p["value"] for p in points]
+    # Hours 0-2: 1000 EUR cash. Hour 3: 900 EUR + 0.5 BTC at 220. Hour 4: the sell at 4:05 is
+    # still ahead, so 900 + 0.5 * 240. Hour 5: 960 + 0.25 * 240.
+    assert values == [1000.0, 1000.0, 1000.0, 1010.0, 1020.0, 1020.0]
+    assert points[0]["time"] == int(T0.timestamp())
+
+
+def test_market_actions_keeps_orders_claude_and_blocked_only():
+    init_db()
+    with SessionLocal() as s:
+        s.query(Order).delete()
+        s.query(Decision).delete()
+        s.commit()
+        _order(s, "BTC-EUR", "buy", 0.001, 50.0, 50000.0, T0, reason="claude: dip met goed nieuws")
+        later = T0 + timedelta(hours=3)
+        _order(s, "BTC-EUR", "sell", 0.001, 48.0, 48000.0, later, reason="stop_loss")
+        _order(s, "ETH-EUR", "buy", 0.01, 20.0, 2000.0, T0, reason="rules: signaal")
+        common = dict(mode="paper", market="BTC-EUR", price=50000.0, signal="hold")
+        s.add_all(
+            [
+                Decision(
+                    created_at=T0 + timedelta(hours=1), source="rules", action="hold", **common
+                ),
+                Decision(
+                    created_at=T0 + timedelta(hours=2),
+                    source="claude",
+                    action="hold",
+                    reasoning="Nieuws is gemengd.",
+                    **common,
+                ),
+                Decision(
+                    created_at=T0 + timedelta(hours=2, minutes=30),
+                    source="rules",
+                    action="buy",
+                    blocked_by="daglimiet bereikt",
+                    **common,
+                ),
+            ]
+        )
+        s.commit()
+        actions = market_actions(s, "paper", "BTC-EUR", T0 - timedelta(hours=1), "1h")
+        s.query(Order).delete()
+        s.query(Decision).delete()
+        s.commit()
+    assert [a["kind"] for a in actions] == ["buy", "advice", "blocked", "sell"]
+    assert actions[0]["label"] == "Gekocht op advies van Claude"
+    assert actions[0]["detail"] == "dip met goed nieuws" and actions[0]["short"] == "Koop"
+    assert actions[1]["label"] == "Claude adviseert afwachten" and actions[1]["executed"] is False
+    assert actions[2]["label"] == "Kopen geblokkeerd"
+    assert actions[2]["detail"] == "daglimiet bereikt"
+    assert actions[3]["label"] == "Verkocht: stop-loss geraakt"
+    assert actions[3]["short"] == "Stop-loss"
+    assert actions[3]["bar_time"] == int((T0 + timedelta(hours=3)).timestamp())
+
+
+@pytest.fixture
+async def api():
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            yield c
+    # The in-memory database outlives the test; leave it as the other API tests expect it.
+    with SessionLocal() as s:
+        s.query(Order).delete()
+        s.query(Decision).delete()
+        s.commit()
+
+
+@respx.mock
+async def test_chart_endpoints_and_dashboard(api):
+    now_ms = int(datetime.now(UTC).timestamp()) // 3600 * 3600 * 1000
+    rows = [[now_ms - (167 - i) * 3_600_000, "100", "101", "99", "100", "1"] for i in range(168)]
+    respx.get(f"{BASE}/BTC-EUR/candles").mock(return_value=Response(200, json=rows))
+    respx.get(f"{BASE}/ETH-EUR/candles").mock(return_value=Response(200, json=rows))
+    respx.get(f"{BASE}/ticker/price").mock(
+        return_value=Response(
+            200, json=[{"market": "BTC-EUR", "price": "100"}, {"market": "ETH-EUR", "price": "100"}]
+        )
+    )
+    with SessionLocal() as s:
+        s.query(Order).delete()
+        s.commit()
+        _order(
+            s,
+            "BTC-EUR",
+            "buy",
+            0.5,
+            50.0,
+            100.0,
+            datetime.now(UTC) - timedelta(hours=5),
+            reason="rules: koopsignaal",
+        )
+
+    r = await api.get("/api/chart/btc-eur?period=7d")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["market"] == "BTC-EUR" and body["interval"] == "1h"
+    assert len(body["candles"]) == 168 and body["candles"][0]["time"] == rows[0][0] // 1000
+    assert [a["kind"] for a in body["actions"]] == ["buy"]
+    assert body["actions"][0]["label"] == "Gekocht op strategiesignaal"
+    assert (await api.get("/api/chart/DOGE-EUR")).status_code == 404
+
+    r = await api.get("/api/portfolio/history?period=7d")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["start_eur"] == 1000.0 and len(body["points"]) == 168
+    assert len(body["actions"]) == 1
+    # The paper wallet is untouched (1000 EUR, no coins): rewinding the inserted buy adds the
+    # 50 EUR back and takes the 0.5 BTC away for the hours before it.
+    assert body["points"][-1]["value"] == 1000.0
+    assert body["points"][0]["value"] == 1000.0  # 1050 EUR minus 0.5 BTC at 100 EUR
+    assert body["points"][0]["value"] == 1050.0 - 0.5 * 100.0
+
+    r = await api.get("/")
+    assert r.status_code == 200
+    assert "Koers en acties" in r.text and "Portefeuillewaarde" in r.text
+    assert "lightweight-charts.standalone.production.js" in r.text
+    assert 'data-period="90d"' in r.text
+
+
+def test_blocked_hold_names_the_prevented_order_and_the_risk_off_reason():
+    """Risk-off blocks before Claude is asked, so the journal says 'hold' with blocked_by
+    'risk-off': the chart must say which order was stopped and why, not 'Afwachten geblokkeerd'."""
+    from app.trading.history import _decision_action
+
+    common = dict(mode="paper", market="BTC-EUR", price=50000.0, created_at=T0, source="rules")
+    shock = Decision(
+        signal="buy",
+        action="hold",
+        blocked_by="risk-off",
+        reasoning=(
+            "RSI onder 30. Risk-off: nieuwsschok (Beurs X gehackt); geen nieuwe aankopen tot "
+            "01:10 UTC. Geen nieuwe positie; verkopen en stop-loss blijven mogelijk."
+        ),
+        **common,
+    )
+    a = _decision_action(shock, "1h")
+    assert a["label"] == "Kopen geblokkeerd"
+    assert (
+        a["detail"] == "Risk-off: nieuwsschok (Beurs X gehackt); geen nieuwe aankopen tot 01:10 UTC"
+    )
+    event = Decision(
+        signal="buy",
+        action="buy",
+        blocked_by="risk-off: event",
+        reasoning="Claude: koop klein. (risk-off: FOMC-rentebesluit om 19:00 UTC; geen nieuwe "
+        "aankopen van 18:00 tot 21:00 UTC)",
+        **common,
+    )
+    a = _decision_action(event, "1h")
+    assert a["label"] == "Kopen geblokkeerd"
+    assert (
+        a["detail"]
+        == "Risk-off: FOMC-rentebesluit om 19:00 UTC; geen nieuwe aankopen van 18:00 tot 21:00 UTC"
+    )
+    sell = Decision(
+        signal="sell", has_position=True, action="hold", blocked_by="order onderweg", **common
+    )
+    a = _decision_action(sell, "1h")
+    assert a["label"] == "Verkopen geblokkeerd" and a["detail"] == "order onderweg"
+
+
+def test_blocked_buy_review_groups_a_blockade_and_prices_it_from_the_journal():
+    from app.trading.history import blocked_buy_review
+
+    init_db()
+    with SessionLocal() as s:
+        s.query(Decision).delete()
+        s.commit()
+        common = dict(mode="paper", market="BTC-EUR", source="rules")
+        start = T0
+        rows = []
+        # Six hours of a shock pause: a buy signal every 10 minutes, blocked, as the price falls.
+        for i in range(36):
+            rows.append(
+                Decision(
+                    created_at=start + timedelta(minutes=10 * i),
+                    price=69000 - 20 * i,
+                    signal="buy",
+                    action="hold",
+                    blocked_by="risk-off",
+                    **common,
+                )
+            )
+        # Afterwards the routine cycles carry the price: 6 h later 68.310, 24 h later 70.380.
+        for h in range(6, 26):
+            rows.append(
+                Decision(
+                    created_at=start + timedelta(hours=h, minutes=5),
+                    price=68310 if h < 12 else 70380,
+                    signal="hold",
+                    action="hold",
+                    **common,
+                )
+            )
+        # A blocked sell and a blocked buy in another market two days later: separate rows.
+        rows.append(
+            Decision(
+                created_at=start + timedelta(hours=30),
+                price=70000,
+                signal="sell",
+                has_position=True,
+                action="hold",
+                blocked_by="order onderweg",
+                **common,
+            )
+        )
+        rows.append(
+            Decision(
+                created_at=start + timedelta(hours=48),
+                price=100.0,
+                signal="buy",
+                action="buy",
+                source="claude",
+                blocked_by="maximum van 5 trades per dag bereikt",
+                mode="paper",
+                market="SOL-EUR",
+            )
+        )
+        s.add_all(rows)
+        s.commit()
+        review = blocked_buy_review(
+            s,
+            "paper",
+            start - timedelta(days=1),
+            now=start + timedelta(hours=50),
+            prices_now={"BTC-EUR": 69690.0, "SOL-EUR": 101.0},
+        )
+        s.query(Decision).delete()
+        s.commit()
+    assert [b["market"] for b in review["blockades"]] == ["SOL-EUR", "BTC-EUR"]
+    btc = review["blockades"][1]
+    assert btc["count"] == 36 and btc["reason"] == "risk-off" and btc["hours"] == 5.8
+    assert btc["price"] == 69000
+    assert round(btc["moves"]["6u"], 2) == -1.0 and round(btc["moves"]["24u"], 2) == 2.0
+    assert round(btc["moves"]["now"], 2) == 1.0 and btc["pending"] is False
+    sol = review["blockades"][0]
+    assert sol["moves"]["6u"] is None and sol["pending"] is True  # 48 h ago: 6 h known? no bot
+    assert sol["moves"]["24u"] is None and round(sol["moves"]["now"], 2) == 1.0
+    assert review["summary"]["6u"] == {"known": 1, "avoided": 1, "average": btc["moves"]["6u"]}
+    assert review["summary"]["24u"]["avoided"] == 0

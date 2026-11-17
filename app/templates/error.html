@@ -1,0 +1,46 @@
+{#- Error pages (404, 405, 500, Bitvavo down, invalid input) in the normal layout, with a way back.
+    Visitors who are not logged in get the login layout: no navigation and no instance details. -#}
+{% extends "auth/_base.html" if anonymous else "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · {{ title }}{% endblock %}
+{% block content %}
+{% if anonymous %}
+<h1>{{ title }}</h1>
+{% if status_code %}<p class="auth-sub">Foutcode {{ status_code }}</p>{% endif %}
+<p class="muted">{{ message }}</p>
+<div class="actions">
+  {% if logout %}
+  <form method="post" action="/logout" class="inline"><button class="btn btn-primary" type="submit">Uitloggen</button></form>
+  {% endif %}
+  <a class="btn{{ '' if logout else ' btn-primary' }}" href="{{ back_href or '/login' }}">{{ back_label or "Naar inloggen" }}</a>
+</div>
+{% else %}
+<div class="page-header">
+  <h1>{{ title }}</h1>
+  {% if status_code %}<p class="subtitle">Foutcode {{ status_code }}</p>{% endif %}
+</div>
+<div class="stack">
+  {#- The page itself is the message (the h1 says it), so no alert role: app.js would otherwise
+      move the focus to it as if a form had just failed. -#}
+  {{ ui.notice(kind, message, live=false) }}
+  {% if details %}
+  <section class="card">
+    <ul class="small">
+      {% for d in details %}<li>{{ d }}</li>{% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+  <div class="actions">
+    {% if logout %}
+    <form method="post" action="/logout" class="inline"><button class="btn btn-primary" type="submit">Uitloggen</button></form>
+    {% endif %}
+    {% if back_href and back_href != "/" %}
+    <a class="btn{{ '' if logout else ' btn-primary' }}" href="{{ back_href }}">{{ back_label }}</a>
+    <a class="btn" href="/">Naar overzicht</a>
+    {% else %}
+    <a class="btn{{ '' if logout else ' btn-primary' }}" href="/">Naar overzicht</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

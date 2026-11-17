@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Account{% endblock %}
+
+{#- The result of a form, shown in that form's card. -#}
+{% macro result(key) -%}
+{% if form == key %}
+{% if error %}{{ ui.notice("error", error, live=true, id=key ~ "-error") }}{% endif %}
+{% if message %}{{ ui.notice("ok", message, live=true) }}{% endif %}
+{% endif %}
+{%- endmacro %}
+
+{#- A field of an account form; marked when the error is about it. -#}
+{% macro field(key, name, label, type="password", autocomplete="current-password", extra="") -%}
+{%- set bad = form == key and error and bad_field is defined and bad_field == name -%}
+<label>{{ label }}
+  <input type="{{ type }}" name="{{ name }}" autocomplete="{{ autocomplete }}" {{ extra|safe }} required{% if bad %} aria-invalid="true" aria-describedby="{{ key }}-error"{% endif %}>
+</label>
+{%- endmacro %}
+
+{#- A block of code with its label and a copy button (shown by app.js). The body comes from
+    {% call %}, so its quotes stay as written. -#}
+{% macro codeblock(label, wrap=false) -%}
+<div class="codeblock{{ ' codeblock--wrap' if wrap }}" data-copy-box>
+  <div class="codeblock-head">
+    <span class="codeblock-label">{{ label }}</span>
+    <button class="btn btn-sm codeblock-copy" type="button" data-copy-code hidden>Kopiëren</button>
+    <span class="visually-hidden" role="status" data-copy-status></span>
+  </div>
+  <pre data-copy-src tabindex="0" aria-label="{{ label }}">{{ caller() }}</pre>
+</div>
+{%- endmacro %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Account</h1>
+  <p class="subtitle">Je bent ingelogd als <strong>{{ user.username }}</strong>. Inloggen gebeurt met je wachtwoord plus een code uit je authenticator-app.</p>
+</div>
+<div class="stack account">
+  {% if error and not form %}{{ ui.notice("error", error, live=true) }}{% endif %}
+  {% if message and not form %}{{ ui.notice("ok", message, live=true) }}{% endif %}
+  {% if user.mfa_failures_before_login %}{{ ui.notice("warn", "Voor je laatste login is " ~ user.mfa_failures_before_login ~ " keer een verkeerde code voor je account ingevuld. Was jij dat niet, dan kent iemand anders waarschijnlijk je wachtwoord: wijzig het hieronder.", live=false) }}{% endif %}
+  {% if codes_left <= 2 %}{{ ui.notice("warn", "Je hebt nog maar " ~ codes_left ~ " herstelcode" ~ ("" if codes_left == 1 else "s") ~ ". Maak nieuwe aan onder Beveiliging wijzigen.", live=false) }}{% endif %}
+
+  <section class="card" aria-labelledby="account-status">
+    {{ ui.card_header("Status", 2, id="account-status") }}
+    <dl class="kv">
+      <dt>Tweestapsverificatie</dt><dd>{{ ui.pill("Actief", "pill-green") if user.mfa_enrolled else ui.pill("Niet ingesteld", "pill-orange") }}</dd>
+      <dt>Authenticator gekoppeld</dt><dd>{{ user.totp_enrolled_at|dt(true) }}</dd>
+      <dt>Laatste login</dt><dd>{{ user.last_login_at|dt(true) }}</dd>
+      <dt>Herstelcodes over</dt><dd>{{ codes_left }} van {{ codes_total }}</dd>
+      {% if session_expires %}<dt>Deze sessie geldig tot</dt><dd>{{ session_expires|dt }} <span class="muted">({{ session_hours }} uur na het inloggen; daarna log je opnieuw in)</span></dd>{% endif %}
+    </dl>
+  </section>
+
+  <section class="card" aria-labelledby="account-change">
+    {{ ui.card_header("Beveiliging wijzigen", 2, id="account-change") }}
+    <p class="card-desc">Elke wijziging vraagt opnieuw om je wachtwoord. Wat andere browsers uitlogt of je oude codes ongeldig maakt, staat erbij.</p>
+
+    <details class="account-action" id="wachtwoord"{% if form == "password" %} open{% endif %}>
+      <summary><h3 class="account-action-title">Wachtwoord wijzigen</h3><span class="account-action-note">andere browsers worden uitgelogd</span></summary>
+      {{ result("password") }}
+      <form method="post" action="/account#wachtwoord" class="auth-form">
+        <input type="hidden" name="action" value="password">
+        {{ field("password", "password", "Huidig wachtwoord") }}
+        {{ field("password", "new_password", "Nieuw wachtwoord", autocomplete="new-password", extra='minlength="10"') }}
+        {{ field("password", "new_password_repeat", "Nieuw wachtwoord nog een keer", autocomplete="new-password", extra='minlength="10"') }}
+        <div class="actions"><button class="btn btn-primary" type="submit" data-busy="Bezig…">Wachtwoord wijzigen</button></div>
+      </form>
+    </details>
+
+    <details class="account-action account-action--danger" id="herstelcodes"{% if form == "recovery" %} open{% endif %}>
+      <summary><h3 class="account-action-title">Nieuwe herstelcodes</h3><span class="account-action-note">je oude codes werken daarna niet meer</span></summary>
+      {{ result("recovery") }}
+      <p class="card-desc">Vul ter bevestiging je wachtwoord in plus een code uit je authenticator-app of een herstelcode. Je oude herstelcodes werken daarna niet meer en andere browsers worden uitgelogd.</p>
+      <form method="post" action="/account#herstelcodes" class="auth-form" data-confirm="Nieuwe herstelcodes maken? Je oude herstelcodes werken daarna niet meer en andere browsers worden uitgelogd.">
+        <input type="hidden" name="action" value="recovery">
+        {{ field("recovery", "password", "Wachtwoord") }}
+        {{ field("recovery", "code", "Huidige code of herstelcode", type="text", autocomplete="one-time-code", extra='class="code-input code-input--text" autocapitalize="off" spellcheck="false" maxlength="32" placeholder="123 456"') }}
+        <div class="actions"><button class="btn btn-danger" type="submit" data-busy="Bezig…">Nieuwe herstelcodes maken</button></div>
+      </form>
+    </details>
+
+    <details class="account-action account-action--danger" id="authenticator"{% if form == "reenrol" %} open{% endif %}>
+      <summary><h3 class="account-action-title">Authenticator opnieuw instellen</h3><span class="account-action-note">vervangt de koppeling en je herstelcodes</span></summary>
+      {{ result("reenrol") }}
+      <p class="card-desc">Vul ter bevestiging je wachtwoord in plus een code uit je huidige authenticator-app of een herstelcode. Daarna koppel je binnen 5 minuten de nieuwe app; je krijgt nieuwe herstelcodes en andere browsers worden uitgelogd.</p>
+      <form method="post" action="/account#authenticator" class="auth-form" data-confirm="Authenticator opnieuw instellen? De huidige koppeling en je herstelcodes vervallen zodra je de nieuwe app koppelt, en andere browsers worden uitgelogd.">
+        <input type="hidden" name="action" value="reenrol">
+        {{ field("reenrol", "password", "Wachtwoord") }}
+        {{ field("reenrol", "code", "Huidige code of herstelcode", type="text", autocomplete="one-time-code", extra='class="code-input code-input--text" autocapitalize="off" spellcheck="false" maxlength="32" placeholder="123 456"') }}
+        <div class="actions"><button class="btn btn-danger" type="submit" data-busy="Bezig…">Authenticator opnieuw instellen</button></div>
+      </form>
+    </details>
+  </section>
+
+  <section class="card" aria-labelledby="account-api-token">
+    {{ ui.card_header("API-token voor Claude", 2, id="account-api-token") }}
+    <p class="card-desc">Met dit token praat Claude (Desktop of Code) via de MCP-server op <span class="mono">/mcp</span> met de bot. Het token opent alleen de API en <span class="mono">/mcp</span>, nooit een pagina; gevoelige wijzigingen en live orders blijven om je wachtwoord vragen.</p>
+    <dl class="kv">
+      <dt>Token</dt>
+      <dd>{% if api_token.source == "portal" %}{{ ui.pill("Actief", "pill-green") }} gemaakt in het portaal{% if api_token.since %} op {{ api_token.since|dt(true) }}{% endif %}{% if env_token %} <span class="muted">(gaat voor het token uit de omgeving)</span>{% endif %}
+      {%- elif api_token.source == "env" %}{{ ui.pill("Actief", "pill-green") }} uit de omgeving (<span class="mono">API_TOKEN</span>)
+      {%- else %}{{ ui.pill("Geen", "pill-orange") }} <span class="muted">genereer er hieronder een, of zet <span class="mono">API_TOKEN</span> in de omgeving</span>{% endif %}</dd>
+    </dl>
+    {% if new_token %}
+    <div class="token-reveal" id="api-token-reveal">
+      {{ ui.notice("ok", "Dit is je nieuwe token. Het wordt één keer getoond; bewaar het in de configuratie van Claude. Een eerder token werkt niet meer.", live=true) }}
+      <div class="token-box" data-copy-box>
+        <code id="api-token" data-copy-src>{{ new_token }}</code>
+        <button class="btn btn-sm btn-tint" type="button" data-copy-code hidden>Kopiëren</button>
+        <span class="visually-hidden" role="status" data-copy-status></span>
+      </div>
+      <p class="token-reveal-hint">Bij <a href="#api-token-uitleg">Zo gebruik je het</a> staat dit token al ingevuld in de commando's.</p>
+    </div>
+    {% endif %}
+
+    {%- set shown = new_token or "<token>" %}
+    <details class="account-action" id="api-token-uitleg"{% if new_token %} open{% endif %}>
+      <summary><h3 class="account-action-title">Zo gebruik je het</h3><span class="account-action-note">Claude Code, Claude Desktop, en wat je kunt vragen</span></summary>
+      <ol class="guide-steps" role="list">
+        <li>
+          <span class="guide-step-title">Genereer een token</span>
+          <p>Doe dat hieronder en bewaar het meteen: het wordt één keer getoond. Kwijt of gelekt? Genereer een nieuw token; het oude werkt dan niet meer.</p>
+        </li>
+        <li>
+          <span class="guide-step-title">Claude Code <span class="guide-step-tag">op je eigen computer</span></span>
+          <p>Voer dit uit in een terminal:</p>
+          {% call codeblock("Terminal", wrap=true) %}claude mcp add --transport http crypie {{ mcp_url }} --header "Authorization: Bearer {{ shown }}"{% endcall %}
+          <p>Controleer met <code>claude mcp list</code>; daarna zie je in een gesprek de tools van <em>crypie</em>.</p>
+        </li>
+        <li>
+          <span class="guide-step-title">claude.ai en Claude Desktop <span class="guide-step-tag">custom connector, zonder token</span></span>
+          <p>Ga naar <em>Settings → Connectors → Add custom connector</em>, vul als naam <em>Crypie</em> in en als URL:</p>
+          {% call codeblock("MCP server URL", wrap=true) %}{{ mcp_url }}{% endcall %}
+          <p>Claude stuurt je dan naar deze site: log in, controleer de app en bevestig met je wachtwoord. De koppeling (OAuth) staat daarna hieronder bij <em>Gekoppeld via OAuth</em> en werkt ook in de browser en op je telefoon.</p>
+        </li>
+        <li>
+          <span class="guide-step-title">Claude Desktop met het token <span class="guide-step-tag">via mcp-remote, vraagt Node.js</span></span>
+          <p>Liever het token dan OAuth? Gebruik dan de brug <code>mcp-remote</code>. Open <code>claude_desktop_config.json</code> en voeg dit toe:</p>
+          <dl class="guide-paths">
+            <dt>macOS</dt><dd><code>~/Library/Application Support/Claude/</code></dd>
+            <dt>Windows</dt><dd><code>%APPDATA%\Claude\</code></dd>
+          </dl>
+          {% call codeblock("claude_desktop_config.json") %}{
+  "mcpServers": {
+    "crypie": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "{{ mcp_url }}", "--header", "Authorization:${CRYPIE_AUTH}"],
+      "env": { "CRYPIE_AUTH": "Bearer {{ shown }}" }
+    }
+  }
+}{% endcall %}
+          <p>Herstart Claude Desktop; onder het gereedschap-icoon staat dan <em>crypie</em>.</p>
+        </li>
+        <li>
+          <span class="guide-step-title">Vraag Claude wat je wilt weten</span>
+          <ul class="guide-questions" role="list">
+            <li>Hoe staat de bot ervoor?</li>
+            <li>Waarom kocht hij gisteren niet?</li>
+            <li>Hoe doen de open posities het?</li>
+            <li>Wat zegt het nieuws over ETH?</li>
+            <li>Vergelijk het evaluatievoorstel met de huidige strategie</li>
+          </ul>
+          <p>Claude leest dezelfde gegevens als dit portaal: status, posities, beslissingen, orders, journaal, nieuws, evaluaties, strategie, plan, instellingen en Claude-kosten.</p>
+        </li>
+        <li>
+          <span class="guide-step-title">Ingrijpen kan ook <span class="guide-step-tag">alleen als jij erom vraagt</span></span>
+          <p>Noodstop, Claude een markt laten beoordelen, een cyclus of evaluatie draaien, een order, de strategie, het plan, notities en instellingen.</p>
+          <p class="guide-caution">Gevoelige instellingen en live orders vragen je wachtwoord; Claude vraagt daar nooit zelf om. Geef het in het gesprek alleen als je die wijziging echt wilt.</p>
+        </li>
+      </ol>
+    </details>
+
+    <details class="account-action" id="api-token-nieuw"{% if form == "api_token" %} open{% endif %}>
+      <summary><h3 class="account-action-title">Nieuw token genereren</h3><span class="account-action-note">een eerder token werkt daarna niet meer, ook niet dat uit de omgeving</span></summary>
+      {{ result("api_token") }}
+      <form method="post" action="/account#api-token-nieuw" class="auth-form"{% if api_token.source %} data-confirm="Nieuw token genereren? Het huidige token werkt daarna niet meer; pas de configuratie van Claude aan."{% endif %}>
+        <input type="hidden" name="action" value="api_token">
+        {{ field("api_token", "password", "Huidig wachtwoord") }}
+        <div class="actions"><button class="btn btn-primary" type="submit" data-busy="Bezig…">Nieuw token genereren</button></div>
+      </form>
+    </details>
+
+    {% if api_token.source == "portal" %}
+    <details class="account-action account-action--danger" id="api-token-intrekken"{% if form == "api_token_revoke" %} open{% endif %}>
+      <summary><h3 class="account-action-title">Token intrekken</h3><span class="account-action-note">Claude kan daarna niet meer verbinden{% if env_token %}; het token uit de omgeving geldt dan weer{% endif %}</span></summary>
+      {{ result("api_token_revoke") }}
+      <form method="post" action="/account#api-token-intrekken" class="auth-form" data-confirm="Token intrekken? Claude kan daarna niet meer verbinden tot je een nieuw token genereert.">
+        <input type="hidden" name="action" value="api_token_revoke">
+        {{ field("api_token_revoke", "password", "Huidig wachtwoord") }}
+        <div class="actions"><button class="btn btn-danger" type="submit" data-busy="Bezig…">Token intrekken</button></div>
+      </form>
+    </details>
+    {% endif %}
+  </section>
+
+  <section class="card" aria-labelledby="account-oauth">
+    {{ ui.card_header("Gekoppeld via OAuth", 2, id="account-oauth") }}
+    <p class="card-desc">Apps die je via <em>Add custom connector</em> (claude.ai, Claude Desktop) hebt gekoppeld. Elke koppeling is volledige API-toegang, net als het token hierboven, en vervalt na 30 dagen zonder gebruik. Ontkoppelen vraagt je wachtwoord.</p>
+    {% if oauth_apps %}
+    {% for app in oauth_apps %}
+    <details class="account-action account-action--danger" id="oauth-{{ loop.index }}"{% if form == "oauth_revoke" %} open{% endif %}>
+      <summary><h3 class="account-action-title">{{ app.name }}</h3><span class="account-action-note">gekoppeld {{ app.since|dt(true) }}{% if app.last_used %} · laatst gebruikt {{ app.last_used|dt(true) }}{% endif %}{% if app.valid_until %} · geldig tot {{ app.valid_until|dt }}{% endif %}</span></summary>
+      {{ result("oauth_revoke") }}
+      <form method="post" action="/account#account-oauth" class="auth-form" data-confirm="{{ app.name }} ontkoppelen? De app kan daarna niet meer verbinden tot je hem opnieuw koppelt.">
+        <input type="hidden" name="action" value="oauth_revoke">
+        <input type="hidden" name="client_id" value="{{ app.client_id }}">
+        {{ field("oauth_revoke", "password", "Huidig wachtwoord") }}
+        <div class="actions"><button class="btn btn-danger" type="submit" data-busy="Bezig…">{{ app.name }} ontkoppelen</button></div>
+      </form>
+    </details>
+    {% endfor %}
+    {% else %}
+    <p class="small muted">Nog geen app gekoppeld. Voeg in claude.ai of Claude Desktop een custom connector toe met <code>{{ mcp_url }}</code>; je keurt de koppeling daarna hier in het portaal goed.</p>
+    {% endif %}
+  </section>
+
+  <section class="card account-danger" aria-labelledby="account-logout">
+    {{ ui.card_header("Overal uitloggen", 2, id="account-logout") }}
+    <p class="card-desc">Logt elke browser uit, ook deze. Gebruik dit als je denkt dat iemand anders bij je sessie kan.</p>
+    <form method="post" action="/account" data-confirm="Overal uitloggen? Elke browser, ook deze, moet daarna opnieuw inloggen.">
+      <input type="hidden" name="action" value="logout_all">
+      <div class="actions"><button class="btn btn-danger" type="submit" data-busy="Bezig…">Overal uitloggen</button></div>
+    </form>
+  </section>
+
+  <section class="card" aria-labelledby="account-lost">
+    {{ ui.card_header("Wachtwoord of authenticator kwijt?", 2, id="account-lost") }}
+    <p class="card-desc">Dit los je op de server op (in de container van de app):</p>
+    <ul class="auth-commands small muted">
+      <li><span class="mono">python -m app.auth reset-password</span> kiest een nieuw wachtwoord; elke browser wordt uitgelogd.</li>
+      <li><span class="mono">python -m app.auth reset-mfa</span> wist de authenticator en de herstelcodes en geeft een eenmalige code om een nieuwe te koppelen.</li>
+      <li><span class="mono">python -m app.auth clear-throttle</span> heft een blokkade na te veel foute pogingen op.</li>
+    </ul>
+  </section>
+</div>
+{% endblock %}

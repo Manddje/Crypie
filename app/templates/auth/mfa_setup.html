@@ -1,0 +1,40 @@
+{% extends "auth/_base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Authenticator instellen{% endblock %}
+{% block content %}
+<h1>{{ "Nieuwe authenticator" if reenrol else "Authenticator instellen" }}</h1>
+<p class="auth-sub">{{ "Vervangt de huidige koppeling en je herstelcodes" if reenrol else "Stap 2 van 3 · authenticator koppelen" }}</p>
+{% if error %}{{ ui.notice("error", error, live=true, id="setup-error") }}{% endif %}
+{% if deadline %}
+<p class="auth-deadline">{{ ui.icon("clock") }}<span>Rond dit af binnen {{ minutes_left }} {{ "minuut" if minutes_left == 1 else "minuten" }}, vóór {{ deadline|dt_text }}.{% if not reenrol %} Lukt dat niet, of kies je 'Later koppelen', dan begin je opnieuw met dezelfde setup-link in deze browser (tot een uur na het aanmaken van je account) of met een code van de server: <span class="mono">python -m app.auth reset-mfa</span>.{% endif %}</span></p>
+{% elif reenrol %}
+<p class="auth-deadline">{{ ui.icon("clock") }}<span>Rond dit binnen 5 minuten af; daarna vraagt Account opnieuw om je wachtwoord en een code.</span></p>
+{% endif %}
+<ol class="auth-steps">
+  <li>Open een authenticator-app op je telefoon, bijvoorbeeld Google Authenticator, Microsoft Authenticator, 1Password of Apple Wachtwoorden.</li>
+  <li>Scan de QR-code hieronder. Lukt scannen niet, voer dan de sleutel onder 'Scannen lukt niet?' in.</li>
+  <li>Vul de 6-cijferige code in die de app nu toont, en kies Bevestigen.</li>
+</ol>
+<div class="qr" role="img" aria-label="QR-code voor je authenticator-app. Lukt scannen niet, gebruik dan de sleutel onder 'Scannen lukt niet?'.">{{ qr_svg|safe }}</div>
+<details class="auth-details">
+  <summary>Scannen lukt niet? Voer de sleutel handmatig in</summary>
+  <p class="mono auth-secret">{{ secret_pretty }}</p>
+  <p class="small muted">Type: op tijd gebaseerd (TOTP), 6 cijfers, 30 seconden.</p>
+</details>
+<form method="post" action="{{ action }}" class="auth-form" data-auth-form>
+  {% if not reenrol %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+  <label>Code uit de app
+    <input class="code-input" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" title="6 cijfers, bijvoorbeeld 123 456" placeholder="123 456" required autofocus{% if error %} aria-invalid="true" aria-describedby="setup-error"{% endif %}>
+  </label>
+  <button class="btn btn-primary btn-block" type="submit" data-busy="Bezig…">Bevestigen</button>
+</form>
+{% endblock %}
+{% block below %}
+{% if reenrol %}
+<p class="auth-below"><a class="btn btn-sm" href="/account">Annuleren</a></p>
+{% else %}
+<form method="post" action="/logout" class="auth-below" data-confirm="Later koppelen? Je wordt uitgelogd. Daarna kun je de authenticator alleen nog koppelen met dezelfde setup-link in deze browser (tot een uur na het aanmaken van je account) of met een code van de server: python -m app.auth reset-mfa.">
+  <button class="btn btn-sm" type="submit">Later koppelen</button>
+</form>
+{% endif %}
+{% endblock %}

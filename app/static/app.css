@@ -1,0 +1,2066 @@
+/* Crypie design system: Apple-like, light & dark, system fonts.
+ *
+ * Layout of this file (add rules to the section they belong to):
+ *   1. Tokens            colours (WCAG AA in both themes), type scale, spacing, radii
+ *   2. Basis             reset, typography, links, focus
+ *   3. Opmaak            page width, header of a page, stacks and grids
+ *   4. Kop               skip link, sticky navigation, mode pill, live banner, theme button
+ *   5. Onderdelen        cards, hero, stats, tables, pills, buttons, forms, notices, status, …
+ *   6. Hulpklassen       small single-purpose classes (spacing, text, layout) instead of style=
+ *   7. Voettekst
+ *   8. Pagina's          one section per page, for rules that only that page uses
+ *   9. Toegankelijkheid  high contrast (forced colours), reduced motion, touch screens
+ *
+ * Colour pairs were checked for WCAG 2.2 AA: text 4.5:1 and controls 3:1 on --card, --card-2,
+ * --bg and --fill, in light and dark. Change a token only after checking it again.
+ */
+
+/* ==== 1. Tokens ==== */
+
+:root {
+  color-scheme: light dark;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue",
+    Inter, system-ui, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Type scale (UX-83): caption (pills, chips, tags), detail (meta: times, sources, counts;
+     in --text-3), help (explanations that are read; in --text-2), body, lead (every h3-level
+     sub-heading), card title, h2, and three sizes for numbers: metric, metric-lg, hero. */
+  --fs-caption: 12px;
+  --fs-detail: 13px;
+  --fs-help: 14px;
+  --fs-body: 15px;
+  --fs-lead: 17px;
+  --fs-card-title: 19px;
+  --fs-h2: 22px;
+  --fs-metric: 24px;
+  --fs-metric-lg: 32px;
+  --fs-h1: 34px;
+  --fs-hero: 44px;
+
+  /* Spacing steps. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+
+  /* Radii: chips and inner controls, inputs and tiles, cards, hero, pills and buttons. */
+  --radius-xs: 4px;
+  --radius-control: 8px;
+  --radius-sm: 12px;
+  --radius: 18px;
+  --radius-lg: 24px;
+  --radius-pill: 999px;
+
+  --tap: 44px;
+  --gutter: 20px;
+
+  /* Motion: interactive state changes are transitions (they retarget mid-way), never
+     `transition: all`. Press is the tactile shrink of a button; wide buttons shrink less. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --dur-fast: 150ms;
+  --dur: 200ms;
+  --press-scale: 0.96;
+  /* Height of the sticky header; app.js measures it, these are the fallbacks. */
+  --header-h: 57px;
+
+  /* Brand gradient: the logo (.brand-stop-1/2 in base.html and auth/_base.html); the indigo
+     also marks the Oefenmodus. The tab icons in
+     static/icons/*.svg cannot read these, so they repeat the two colours; a test keeps them
+     in line (tests/test_ux_round2.py). */
+  --brand-1: #0a84ff;
+  --brand-2: #5e5ce6;
+
+  --bg: #f5f5f7;
+  --card: #ffffff;
+  --card-2: #fafafa;
+  --surface: var(--card);
+  --fill: rgba(120, 120, 128, 0.12);
+  --fill-2: rgba(120, 120, 128, 0.2);
+  --hairline: rgba(60, 60, 67, 0.12);
+  --hairline-strong: rgba(60, 60, 67, 0.24);
+  --control-border: #86868b;
+  --text: #1d1d1f;
+  /* Two greys that differ: --text-2 for help that is read, --text-3 (lighter) for meta such
+     as times and sources. Both keep 4.5:1 on every surface. */
+  --text-2: #48484d;
+  --text-3: #66666b;
+  --accent: #005bb8;
+  --accent-fill: #005bb8;
+  --accent-fill-hover: #004c9a;
+  --on-accent: #ffffff;
+  --accent-tint: rgba(0, 113, 227, 0.12);
+  --accent-tint-2: rgba(0, 113, 227, 0.18);
+  --green: #12703a;
+  --green-tint: rgba(52, 199, 89, 0.16);
+  /* Red and orange differ in hue and in lightness (contrast 1.39:1 between them), so a warning
+     never reads as an error by colour alone; both keep 4.5:1 on every surface (UX-85). */
+  --red: #a51c16;
+  --red-fill: #b8221b;
+  --red-fill-hover: #9c1c16;
+  --on-red: #ffffff;
+  --red-tint: rgba(255, 59, 48, 0.14);
+  --red-tint-2: rgba(255, 59, 48, 0.2);
+  --orange: #965d00;
+  --orange-tint: rgba(255, 149, 0, 0.12);
+  --paper: #4a40d4;
+  --paper-tint: rgba(94, 92, 230, 0.14);
+  --seg-active: #ffffff;
+  --nav-bg: rgba(255, 255, 255, 0.72);
+  --scroll-shadow: rgba(0, 0, 0, 0.16);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
+  /* The raised segment of a segmented control: a hairline, a contact shadow and a soft one. */
+  --shadow-sm: 0 0 0 0.5px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.1), 0 3px 8px rgba(0, 0, 0, 0.08);
+
+  /* The charts may keep the brighter colours: chart.js can read these instead of --green. */
+  --chart-green: #1f9d4f;
+  --chart-red: #d7261a;
+  --chart-accent: #0071e3;
+  --chart-orange: #d97706;
+}
+
+/* Dark: keep the two blocks below identical (system dark, and the explicit choice). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #000000;
+    --card: #1c1c1e;
+    --card-2: #2c2c2e;
+    --fill: rgba(120, 120, 128, 0.24);
+    --fill-2: rgba(120, 120, 128, 0.36);
+    --hairline: rgba(84, 84, 88, 0.6);
+    --hairline-strong: rgba(84, 84, 88, 0.9);
+    --control-border: #86868b;
+    --text: #f5f5f7;
+    --text-2: #d1d1d6;
+    --text-3: #aeaeb2;
+    --accent: #6ab4ff;
+    --accent-fill: #0a6fd6;
+    --accent-fill-hover: #1a7fe6;
+    --accent-tint: rgba(10, 132, 255, 0.2);
+    --accent-tint-2: rgba(10, 132, 255, 0.28);
+    --green: #32d35c;
+    --green-tint: rgba(48, 209, 88, 0.18);
+    --red: #ff8f88;
+    --red-fill: #c4221a;
+    --red-fill-hover: #d93a31;
+    --red-tint: rgba(255, 69, 58, 0.18);
+    --red-tint-2: rgba(255, 69, 58, 0.26);
+    --orange: #ffc44d;
+    --orange-tint: rgba(255, 159, 10, 0.2);
+    --paper: #b4b2ff;
+    --paper-tint: rgba(94, 92, 230, 0.28);
+    --seg-active: #636366;
+    --nav-bg: rgba(22, 22, 23, 0.72);
+    --scroll-shadow: rgba(0, 0, 0, 0.7);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
+    --shadow-sm: 0 0 0 0.5px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.4), 0 3px 8px rgba(0, 0, 0, 0.3);
+    --chart-green: #30d158;
+    --chart-red: #ff453a;
+    --chart-accent: #0a84ff;
+    --chart-orange: #ffb020;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --card: #1c1c1e;
+  --card-2: #2c2c2e;
+  --fill: rgba(120, 120, 128, 0.24);
+  --fill-2: rgba(120, 120, 128, 0.36);
+  --hairline: rgba(84, 84, 88, 0.6);
+  --hairline-strong: rgba(84, 84, 88, 0.9);
+  --control-border: #86868b;
+  --text: #f5f5f7;
+  --text-2: #d1d1d6;
+  --text-3: #aeaeb2;
+  --accent: #6ab4ff;
+  --accent-fill: #0a6fd6;
+  --accent-fill-hover: #1a7fe6;
+  --accent-tint: rgba(10, 132, 255, 0.2);
+  --accent-tint-2: rgba(10, 132, 255, 0.28);
+  --green: #32d35c;
+  --green-tint: rgba(48, 209, 88, 0.18);
+  --red: #ff8f88;
+  --red-fill: #c4221a;
+  --red-fill-hover: #d93a31;
+  --red-tint: rgba(255, 69, 58, 0.18);
+  --red-tint-2: rgba(255, 69, 58, 0.26);
+  --orange: #ffc44d;
+  --orange-tint: rgba(255, 159, 10, 0.2);
+  --paper: #b4b2ff;
+  --paper-tint: rgba(94, 92, 230, 0.28);
+  --seg-active: #636366;
+  --nav-bg: rgba(22, 22, 23, 0.72);
+  --scroll-shadow: rgba(0, 0, 0, 0.7);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-sm: 0 0 0 0.5px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.4), 0 3px 8px rgba(0, 0, 0, 0.3);
+  --chart-green: #30d158;
+  --chart-red: #ff453a;
+  --chart-accent: #0a84ff;
+  --chart-orange: #ffb020;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+/* Header height per layout (see section 4); the live banner adds one line. */
+@media (max-width: 1180px) { :root { --header-h: 100px; } }
+@media (max-width: 640px) { :root { --header-h: 92px; --gutter: 16px; } }
+:root[data-mode="live"] { --banner-h: 26px; }
+
+/* ==== 2. Basis ==== */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+/* hidden="until-found" (a folded settings block) stays findable with find-in-page. */
+[hidden]:not([hidden="until-found"]) { display: none !important; }
+/* Controls that only work with scripts (theme.js sets html.js before the page paints). */
+html:not(.js) .js-only { display: none !important; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  /* Thin, crisp text on macOS (Safari, Chrome and Firefox alike). */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Anchors, focus and error fields stop below the sticky header (and a sticky list of
+     parts, --sticky-extra), not under it. */
+  scroll-padding-top: calc(var(--header-h) + var(--banner-h, 0px) + var(--sticky-extra, 0px) + 12px);
+}
+@media (max-height: 500px) {
+  html { scroll-padding-top: 12px; }
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  text-rendering: optimizeLegibility;
+  overflow-wrap: break-word;
+}
+
+img, svg, video, canvas { max-width: 100%; }
+
+a { color: var(--accent); text-decoration: none; text-underline-offset: 0.15em; }
+a:hover { text-decoration: underline; }
+
+/* Links inside running text are underlined, so they do not depend on colour alone. Stand-alone
+ * links ('Aanpassen ›' in a card header, buttons, pills) stay as they are. */
+:where(p, li, dd, .subtitle, .form-help, .card-desc, .setting-help, .notice .body, .md, footer.site)
+  a:not(.btn):not(.pill):not(.tag):not(.card-link):not(.more) {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+}
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#main:focus { outline: none; }
+
+h1, h2, h3, h4, h5, h6 { margin: 0; letter-spacing: -0.015em; font-weight: 600; line-height: 1.25; }
+h1 { font-size: var(--fs-h1); letter-spacing: -0.025em; font-weight: 700; line-height: 1.15; }
+h2 { font-size: var(--fs-h2); }
+h3 { font-size: var(--fs-lead); }
+h4 { font-size: var(--fs-body); }
+h5, h6 { font-size: var(--fs-help); }
+p { margin: 0; }
+p + p { margin-top: 0.6em; }
+code { font-family: var(--mono); font-size: 0.9em; overflow-wrap: anywhere; }
+abbr[title] { text-decoration: underline dotted; text-underline-offset: 0.15em; cursor: help; }
+
+/* Wrapping: titles in lines of even length, short text without one word alone on its last
+ * line. Long prose (notes, reports, Claude's markdown) and code wrap as usual. The longhand
+ * leaves white-space (nowrap, pre-wrap) alone. */
+h1, h2, h3, h4, h5, h6, legend, .card-title, .notice-title, .empty .title { text-wrap-style: balance; }
+:where(p, li, dd, figcaption, .subtitle, .card-desc, .form-help, .setting-help, .status-detail, .notice .body, .empty) { text-wrap-style: pretty; }
+:is(.md, .prose, .report, pre, code), :is(.md, .prose, .report) :is(p, li, dd) { text-wrap-style: auto; }
+
+/* Numbers that update or sit in columns keep their width: times (relative times refresh),
+ * tables, tiles, counts in pills and pages, meta lines. Amounts (.money, .num) set it too. */
+time, table, .pill, .pager, .stat, .status-meta, .trade-meta { font-variant-numeric: tabular-nums; }
+
+/* ==== 3. Opmaak ==== */
+
+.page {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 36px max(var(--gutter), env(safe-area-inset-right)) 64px max(var(--gutter), env(safe-area-inset-left));
+}
+.page-header { margin-bottom: 28px; }
+.page-header .subtitle { color: var(--text-2); font-size: var(--fs-lead); margin-top: 6px; max-width: 70ch; }
+.page-header .actions { margin-top: 16px; }
+.page > .notice { margin-bottom: 16px; }
+
+.stack > * + * { margin-top: var(--space-6); }
+/* Cards in a row keep their own height: no stretched, half-empty cards. */
+.grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); align-items: start; }
+.grid-2 { display: grid; gap: 20px; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+.grid-3 { display: grid; gap: 20px; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+.grid > *, .grid-2 > *, .grid-3 > *, .stack > * { min-width: 0; }
+.span-all { grid-column: 1 / -1; }
+@media (max-width: 900px) {
+  .grid-2, .grid-3 { grid-template-columns: minmax(0, 1fr); }
+  h1 { font-size: 28px; }
+  .page { padding-top: 24px; }
+}
+
+/* ==== 4. Kop ==== */
+
+.skip-link {
+  position: absolute;
+  z-index: 100;
+  top: 8px;
+  left: max(12px, env(safe-area-inset-left));
+  transform: translateY(-200%);
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+.skip-link:focus { transform: none; text-decoration: none; }
+
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  padding-top: env(safe-area-inset-top);
+  background: var(--nav-bg);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid var(--hairline);
+}
+/* On a short screen (a phone held sideways, 400% zoom) the header scrolls away. */
+@media (max-height: 500px) {
+  .nav { position: static; }
+}
+.nav-inner {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 max(var(--gutter), env(safe-area-inset-right)) 0 max(var(--gutter), env(safe-area-inset-left));
+  min-height: 56px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  min-height: var(--tap);
+}
+.brand:hover { text-decoration: none; }
+.brand svg { width: 26px; height: 26px; flex: none; }
+.nav-links { display: flex; flex-wrap: wrap; gap: 4px; margin-left: 8px; }
+.nav-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  color: var(--text-2);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.nav-links a:hover { background: var(--fill); color: var(--text); text-decoration: none; }
+.nav-links a.active, .nav-links a[aria-current="page"] { background: var(--text); color: var(--bg); }
+.nav-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+/* Below 1180 px the seven links get their own row and wrap: no page is hidden. app.js does the
+ * same (.is-stacked) on a wide screen when the row does not fit (logged in, kill switch on). */
+@media (max-width: 1180px) {
+  .nav-inner { padding-top: 6px; padding-bottom: 8px; }
+  .nav-links { order: 3; flex-basis: 100%; margin-left: -8px; }
+}
+.nav-inner.is-stacked { padding-top: 6px; padding-bottom: 8px; }
+.nav-inner.is-stacked .nav-links { order: 3; flex-basis: 100%; margin-left: -8px; }
+/* On a phone the row scrolls sideways; the faded edge shows there is more, and app.js
+ * scrolls the current page into view and moves the fade to the side with more links. */
+@media (max-width: 640px) {
+  .nav-inner { gap: 2px 10px; padding-bottom: 4px; }
+  .brand { font-size: 17px; }
+  .nav-links {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    margin: 0 calc(-1 * var(--gutter));
+    padding: 0 var(--gutter) 4px;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent);
+  }
+  .nav-links::-webkit-scrollbar { display: none; }
+  .nav-links[data-scroll="none"] { -webkit-mask-image: none; mask-image: none; }
+  .nav-links[data-scroll="end"] {
+    -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 48px), transparent);
+    mask-image: linear-gradient(to left, #000 calc(100% - 48px), transparent);
+  }
+  .nav-links[data-scroll="both"] {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 48px, #000 calc(100% - 48px), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 48px, #000 calc(100% - 48px), transparent);
+  }
+}
+/* On a narrow phone the logo alone stands for Crypie, so the mode and the buttons fit. */
+@media (max-width: 360px) {
+  .brand-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+@media (max-width: 480px) {
+  body[data-paused] .brand-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+/* The mode in the navigation: a link to where the mode is set (or to the kill switch). */
+.mode-pill { position: relative; text-decoration: none; min-height: 28px; transition: filter var(--dur-fast) var(--ease-out); }
+.mode-pill::after { content: ""; position: absolute; inset: -8px 0; }
+.mode-pill:hover { text-decoration: none; filter: brightness(0.97); }
+.mode-pill .mode-extra { font-weight: 700; }
+
+/* Full-width bar under the navigation while trading with real money. */
+.live-banner {
+  background: var(--red-fill);
+  color: var(--on-red);
+  text-align: center;
+  font-size: var(--fs-detail);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  padding: 3px max(var(--gutter), env(safe-area-inset-right)) 4px max(var(--gutter), env(safe-area-inset-left));
+}
+
+.icon-btn {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: 50%;
+  border: 0;
+  padding: 0;
+  background: var(--fill);
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+/* The visible circle is 34 px; the target is 44 px. The 10 px gap between the buttons in the
+   header keeps neighbouring targets from overlapping. */
+.icon-btn::after { content: ""; position: absolute; inset: -5px; border-radius: 50%; }
+.icon-btn:hover { background: var(--fill-2); }
+.icon-btn:active { transform: scale(var(--press-scale)); }
+/* The account icon on /account, marked like the current page in the navigation. */
+.icon-btn.active, .icon-btn[aria-current="page"] { background: var(--text); color: var(--bg); }
+.icon-btn svg { width: 16px; height: 16px; }
+/* The theme button shows the current choice: automatic, light or dark. The three icons sit on
+   top of each other and cross-fade (opacity, scale, blur) instead of popping in. */
+.theme-toggle { display: inline-grid; place-items: center; }
+.theme-toggle svg {
+  grid-area: 1 / 1;
+  opacity: 0;
+  transform: scale(0.5);
+  filter: blur(2px);
+  transition: opacity var(--dur) var(--ease-out), transform var(--dur) var(--ease-out), filter var(--dur) var(--ease-out);
+}
+:root:not([data-theme]) .theme-toggle .icon-auto,
+:root[data-theme="light"] .theme-toggle .icon-sun,
+:root[data-theme="dark"] .theme-toggle .icon-moon { opacity: 1; transform: none; filter: none; }
+
+/* ==== 5. Onderdelen ==== */
+
+/* -- Icons -- */
+.icon { width: 1.25em; height: 1.25em; flex: none; vertical-align: -0.25em; }
+
+/* -- Cards -- */
+.card {
+  --surface: var(--card);
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--hairline);
+}
+/* A card inside a card (an evaluation, a proposal): flat and a shade darker. */
+.card .card, .card--inset { --surface: var(--card-2); background: var(--card-2); box-shadow: none; }
+/* Inside a card's 20 px padding the inner card is its own surface: the radius of the other inner
+   surfaces (.stat, .cycle, .trade) instead of the outer card's, which looks swollen in there. */
+.card .card { border-radius: var(--radius-sm); }
+.card .card + .card { margin-top: 14px; }
+.card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+/* One size for card titles, whatever their heading level. */
+.card-header > :is(h2, h3, h4), .card-title { flex: 1 1 auto; min-width: 0; font-size: var(--fs-card-title); line-height: 1.3; }
+/* Right of a card title: information (.card-meta, never a link) or one link (.card-link,
+ * a verb plus where it goes: 'Naar Handelen ›'). .more is the older name for both. */
+.card-meta, .card-header span.more { color: var(--text-3); font-size: var(--fs-detail); }
+.card-link, .card-header a.more {
+  font-size: var(--fs-help);
+  font-weight: 500;
+  white-space: nowrap;
+  padding: 6px 0;
+  margin: -6px 0;
+}
+/* The arrow after a link to elsewhere (and before 'Nieuwer'): the chevron icon, not a '›'. */
+.link-chevron { width: 1em; height: 1em; vertical-align: -0.15em; stroke-width: 2.4; }
+a > .link-chevron:last-child { margin-left: 2px; }
+a > .link-chevron:first-child { margin-right: 2px; }
+.card-desc { color: var(--text-2); font-size: var(--fs-help); margin-bottom: 14px; }
+@media (max-width: 640px) {
+  .card { padding: 18px; }
+  .card-link, .card-header a.more { white-space: normal; }
+}
+
+/* -- Hero -- */
+.hero {
+  --surface: var(--card);
+  background: var(--card);
+  border-radius: var(--radius-lg);
+  padding: 28px 30px;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--hairline);
+}
+.hero-row { display: flex; gap: 20px 32px; flex-wrap: wrap; align-items: flex-end; }
+.hero .big-label { color: var(--text-2); font-size: var(--fs-help); font-weight: 500; }
+.hero .big-value { font-size: var(--fs-hero); font-weight: 700; letter-spacing: -0.03em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.big-value.is-md { font-size: var(--fs-metric-lg); }
+.hero .big-sub { color: var(--text-2); font-size: var(--fs-help); margin-top: 4px; }
+.hero-status { margin-left: auto; display: flex; flex-direction: column; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+@media (max-width: 700px) {
+  .hero { padding: 22px; }
+  .hero .big-value { font-size: var(--fs-metric-lg); }
+  .big-value.is-md { font-size: var(--fs-metric); }
+  .hero-status { margin-left: 0; align-items: flex-start; }
+}
+
+/* -- Status of the bot (ui.status) and the kill switch (ui.kill_switch) -- */
+.status { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; min-width: 0; }
+.status-detail { color: var(--text-2); font-size: var(--fs-help); max-width: 60ch; }
+.status-reasons { margin: 0; padding-left: 1.2em; color: var(--text-2); font-size: var(--fs-help); max-width: 60ch; }
+.status-meta { display: flex; flex-wrap: wrap; gap: 2px 14px; color: var(--text-3); font-size: var(--fs-detail); }
+/* The planner is behind (orange); the stop-loss watch is behind (red: positions are not guarded). */
+.status-meta .is-late { color: var(--orange); font-weight: 600; }
+.status-meta .is-bad { color: var(--red); font-weight: 600; }
+.status-meta time { white-space: nowrap; }
+.kill-switch { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; min-width: 0; }
+.kill-switch form { margin: 0; }
+.kill-switch-state { font-weight: 600; color: var(--orange); }
+.kill-switch-help { color: var(--text-2); font-size: var(--fs-help); max-width: 56ch; }
+
+/* -- Stats -- */
+.stats { display: grid; gap: 12px 16px; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); }
+/* A row of tiles that never leaves one tile alone on a row (UX-87): four tiles go 4 or 2+2,
+   six tiles go 6, 3+3 or 2+2+2. */
+.stats-4, .stats-6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (min-width: 700px) { .stats-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 1000px) { .stats-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (min-width: 1280px) { .stats-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+.stat { padding: 16px 18px; border-radius: var(--radius-sm); background: var(--fill); min-width: 0; }
+.stat .label { color: var(--text-2); font-size: var(--fs-detail); font-weight: 500; }
+.stat .value { font-size: var(--fs-metric); font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.2; margin-top: 2px; }
+.stat .sub { color: var(--text-3); font-size: var(--fs-caption); margin-top: 2px; }
+/* Label, value and sub line up across the tiles of a row, even when a label wraps. */
+@supports (grid-template-rows: subgrid) {
+  .stat { display: grid; grid-row: span 3; grid-template-rows: subgrid; row-gap: 2px; align-content: start; }
+  .stat .value, .stat .sub { margin-top: 0; }
+  .stat .label { align-self: end; }
+}
+
+/* A number with a smaller unit or comparison next to it ('$ 0,00 van $ 100'). */
+.metric { font-size: var(--fs-metric); font-weight: 600; letter-spacing: -0.02em; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.metric-sub { color: var(--text-2); font-size: var(--fs-body); font-weight: 400; letter-spacing: 0; }
+
+/* A progress bar: <progress class="meter" value="12" max="100">12%</progress>. */
+.meter {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 6px;
+  margin: 12px 0 6px;
+  border: 0;
+  border-radius: 3px;
+  background: var(--fill);
+  color: var(--accent);
+  overflow: hidden;
+}
+.meter::-webkit-progress-bar { background: var(--fill); border-radius: 3px; }
+.meter::-webkit-progress-value { background: currentColor; border-radius: 3px; }
+.meter::-moz-progress-bar { background: currentColor; border-radius: 3px; }
+.meter.is-warn { color: var(--orange); }
+.meter.is-bad { color: var(--red); }
+
+/* -- Tables -- */
+/* A wide table scrolls inside .table-wrap. The shadows at the edges show that there is more to
+ * see (pure CSS, also without JavaScript); app.js makes an overflowing wrapper a named,
+ * focusable region so it can be scrolled with the keyboard. */
+.table-wrap {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  margin: 0 -22px;
+  padding: 0 22px;
+  background:
+    linear-gradient(to right, var(--surface) 30%, transparent) left center / 48px 100% no-repeat local,
+    linear-gradient(to left, var(--surface) 30%, transparent) right center / 48px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, var(--scroll-shadow), transparent) left center / 14px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, var(--scroll-shadow), transparent) right center / 14px 100% no-repeat scroll;
+}
+.table-wrap:focus-visible { outline-offset: -2px; }
+/* Two tables side by side: no bleed into the card padding, or they would overlap. */
+:is(.grid, .grid-2, .grid-3) > .table-wrap { margin: 0; padding: 0; }
+table { width: 100%; border-collapse: collapse; font-size: var(--fs-help); }
+th {
+  text-align: left;
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 6px 10px 10px;
+  border-bottom: 1px solid var(--hairline);
+  white-space: nowrap;
+}
+td { padding: 11px 10px; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+th:first-child, td:first-child { padding-left: 0; }
+th:last-child, td:last-child { padding-right: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td .sub { display: block; color: var(--text-3); font-size: var(--fs-detail); margin-top: 2px; white-space: nowrap; }
+/* A long reason wraps onto the next lines instead of being cut off behind a tooltip. */
+td .sub.clip { white-space: normal; min-width: 18ch; max-width: 32ch; }
+td strong { font-weight: 600; }
+/* A row that did not go through (a blocked decision): readable, only quieter. */
+tr.dim td { color: var(--text-2); }
+tr.dim td strong { color: var(--text); }
+@media (max-width: 640px) {
+  .table-wrap { margin: 0 -18px; padding: 0 18px; }
+}
+/* Opt-in for narrow screens: <table class="table-stack"> shows every row as a small card with
+ * the column names in front (app.js copies them from <th> into data-label). */
+@media (max-width: 640px) {
+  table.table-stack, .table-stack tbody, .table-stack tr, .table-stack td { display: block; width: 100%; }
+  .table-stack tr:first-child:has(th), .table-stack thead { display: none; }
+  .table-stack tr { padding: 10px 0; border-bottom: 1px solid var(--hairline); }
+  .table-stack tr:last-child { border-bottom: 0; }
+  .table-stack td { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border: 0; text-align: right; }
+  .table-stack td::before { content: attr(data-label); color: var(--text-2); font-size: var(--fs-detail); text-align: left; flex: none; }
+  .table-stack td:first-child { font-size: var(--fs-body); text-align: left; }
+  .table-stack td:first-child::before { content: none; }
+  .table-stack td .sub { white-space: normal; }
+}
+
+/* -- Pills -- */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  background: var(--fill);
+  color: var(--text);
+  vertical-align: middle;
+}
+/* Green, red and orange mean good, bad and attention; blue is for information only; grey
+ * (no colour class) for neutral counts and states. */
+.pill-green { background: var(--green-tint); color: var(--green); }
+.pill-red { background: var(--red-tint); color: var(--red); }
+.pill-orange { background: var(--orange-tint); color: var(--orange); }
+.pill-paper { background: var(--paper-tint); color: var(--paper); }
+.pill-live { background: var(--red-fill); color: var(--on-red); }
+.pill .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.pill-lg { font-size: var(--fs-help); padding: 6px 14px; }
+
+/* -- Buttons --
+ * .btn-primary  the one main action of a form
+ * .btn          (grey) filtering, clearing, going back
+ * .btn-tint     a safe side action (test, refresh)
+ * .btn-danger   overwrites or cannot be undone (reset, restore defaults, log out everywhere)
+ * .btn-stop     the kill switch: solid red, the same everywhere */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 9px 20px;
+  border-radius: var(--radius-pill);
+  border: 0;
+  font: inherit;
+  font-size: var(--fs-body);
+  font-weight: 500;
+  line-height: 1.3;
+  text-align: center;
+  white-space: normal;
+  cursor: pointer;
+  background: var(--fill);
+  color: var(--text);
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+  text-decoration: none;
+}
+.btn:hover { text-decoration: none; background: var(--fill-2); }
+/* Press: a small, quick shrink. A full-width button shrinks less, or its edges travel too far. */
+.btn:active { transform: scale(var(--press-scale)); }
+.btn-block { --press-scale: 0.985; }
+.btn .icon { width: 1.15em; height: 1.15em; }
+.btn-primary { background: var(--accent-fill); color: var(--on-accent); }
+.btn-primary:hover { background: var(--accent-fill-hover); }
+.btn-tint { background: var(--accent-tint); color: var(--accent); }
+.btn-tint:hover { background: var(--accent-tint-2); }
+.btn-danger { background: var(--red-tint); color: var(--red); }
+.btn-danger:hover { background: var(--red-tint-2); }
+.btn-stop { background: var(--red-fill); color: var(--on-red); font-weight: 600; }
+.btn-stop:hover { background: var(--red-fill-hover); }
+.btn-sm { position: relative; min-height: 34px; padding: 6px 14px; font-size: var(--fs-help); }
+/* A small button keeps a 40 px tall target (::before is the busy spinner). */
+.btn-sm::after { content: ""; position: absolute; inset: -3px 0; }
+.btn-block { width: 100%; justify-content: center; }
+/* Disabled: no colour, a dashed edge; say next to it why it is off. */
+.btn[disabled], .btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  background: transparent;
+  color: var(--text-2);
+  outline: 1px dashed var(--control-border);
+  outline-offset: -1px;
+  transform: none;
+}
+/* Busy (app.js, after submitting): spinner, no second submit. */
+.btn.is-busy { cursor: progress; }
+.btn.is-busy::before {
+  content: "";
+  width: 1em;
+  height: 1em;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: crypie-spin 0.8s linear infinite;
+}
+@keyframes crypie-spin { to { transform: rotate(360deg); } }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+form.inline { display: inline; }
+
+/* -- Forms -- */
+/* A label is only text styling; the stacked 'label above field' layout comes from .field
+ * (and from the form containers below, which use it implicitly). */
+label { font-size: var(--fs-help); font-weight: 500; color: var(--text-2); }
+.field, .form-row > label, .auth-form > label { display: flex; flex-direction: column; gap: 6px; }
+.field-label { font-size: var(--fs-help); font-weight: 500; color: var(--text-2); }
+/* A label with its field on one line: 'Test op [500] candles'. */
+.inline-field { display: inline-flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; }
+input, select, textarea {
+  font: inherit;
+  font-size: var(--fs-body);
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  min-width: 0;
+  max-width: 100%;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+/* One height for every one-line field, at every font size (UX-87): inputs and selects line up
+   in a row (order form, journal filters). */
+input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), select {
+  min-height: var(--tap);
+  height: var(--tap);
+  line-height: 1.25;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+input::placeholder, textarea::placeholder { color: var(--text-3); opacity: 1; }
+/* Text fields show focus with a blue edge; checkboxes and radios keep the focus ring. */
+input:not([type="checkbox"]):not([type="radio"]):focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px var(--accent-tint);
+}
+input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-fill); width: 18px; height: 18px; margin: 0; }
+input:disabled, select:disabled, textarea:disabled { background: var(--fill); color: var(--text-2); cursor: not-allowed; }
+[aria-invalid="true"], .has-error :is(input, select, textarea) { border-color: var(--red); }
+/* Edited but not saved yet (form[data-track-changes], app.js). */
+.is-changed :is(input, select, textarea), :is(input, select, textarea).is-changed { border-color: var(--orange); box-shadow: inset 3px 0 0 var(--orange); }
+.is-changed .switch .track, .is-changed .seg-radio { outline: 2px solid var(--orange); outline-offset: 2px; }
+.field-error { color: var(--red); font-size: var(--fs-help); font-weight: 500; }
+textarea { width: 100%; resize: vertical; line-height: 1.5; }
+textarea.code { font-family: var(--mono); font-size: 13px; min-height: 24rem; }
+.form-row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+.form-row > label, .form-row > .field { flex: 1 1 140px; }
+.form-help { color: var(--text-2); font-size: var(--fs-help); margin-top: 10px; }
+/* iOS zooms into fields with text under 16 px. */
+@media (max-width: 640px) {
+  input, select, textarea, textarea.code { font-size: 16px; }
+}
+
+/* Switch: a real checkbox, drawn as a track. */
+.switch { position: relative; display: inline-flex; align-items: center; gap: 10px; cursor: pointer; flex-direction: row; min-height: var(--tap); font-weight: 500; color: var(--text); }
+.switch input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+.switch .track {
+  position: relative;
+  width: 51px;
+  height: 31px;
+  border-radius: var(--radius-pill);
+  background: var(--fill-2);
+  box-shadow: inset 0 0 0 1px var(--control-border);
+  transition: background-color var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out);
+  flex: none;
+}
+.switch .track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15), 0 1px 1px rgba(0, 0, 0, 0.16), 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+  transition: transform var(--dur) var(--ease-out), width var(--dur) var(--ease-out);
+}
+.switch input:checked + .track { background: var(--green); box-shadow: inset 0 0 0 1px transparent; }
+.switch input:checked + .track::after { transform: translateX(20px); }
+.switch:active input:not(:disabled) + .track::after { width: 31px; }
+.switch:active input:checked:not(:disabled) + .track::after { transform: translateX(16px); }
+.switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch input:disabled + .track { opacity: 0.5; cursor: not-allowed; }
+.switch .state { font-size: var(--fs-help); color: var(--text-2); min-width: 2.2em; }
+
+/* Segmented radio buttons (the mode). */
+/* Concentric corners: the outer radius is the segment's radius plus the 3 px padding. */
+.seg-radio { display: inline-flex; flex-wrap: wrap; padding: 3px; border-radius: calc(var(--radius-control) + 3px); background: var(--fill); gap: 2px; }
+.seg-radio label { position: relative; display: flex; flex-direction: row; cursor: pointer; margin: 0; }
+.seg-radio input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+.seg-radio span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 6px 16px;
+  border-radius: var(--radius-control);
+  color: var(--text-2);
+  font-size: var(--fs-help);
+  font-weight: 500;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+.seg-radio input:checked + span { background: var(--seg-active); color: var(--text); box-shadow: var(--shadow-sm); font-weight: 600; }
+.seg-radio input:checked[value="live"] + span { background: var(--red-fill); color: var(--on-red); }
+.seg-radio input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.seg-radio label.disabled { cursor: not-allowed; }
+.seg-radio label.disabled span { color: var(--text-2); text-decoration: line-through; text-decoration-thickness: 1px; }
+
+.unit-input { display: flex; align-items: center; gap: 8px; }
+.unit-input input { flex: 1; text-align: right; }
+.unit-input .unit { color: var(--text-2); font-size: var(--fs-help); white-space: nowrap; min-width: 1.2em; }
+
+/* -- Notices -- */
+.notice {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 18px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: var(--fill);
+  color: var(--text);
+  font-size: var(--fs-help);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.notice .icon { flex: none; width: 20px; height: 20px; margin-top: 1px; }
+.notice .body { flex: 1; min-width: 0; }
+.notice-title { font-weight: 600; }
+/* A form or a row of buttons in a notice goes on its own line. */
+.notice .body > form, .notice .body > .actions, .notice .body > p { display: block; margin-top: 10px; }
+.notice .body > .actions { display: flex; }
+.notice .body ul { margin: 6px 0 0; padding-left: 20px; }
+.notice-info { background: var(--accent-tint); }
+.notice-info .icon { color: var(--accent); }
+.notice-ok { background: var(--green-tint); }
+.notice-ok .icon { color: var(--green); }
+.notice-warn { background: var(--orange-tint); }
+.notice-warn .icon { color: var(--orange); }
+.notice-error { background: var(--red-tint); }
+.notice-error .icon { color: var(--red); }
+/* A flash (the result of what you just did: ui.notice with live=true, data-flash) eases in
+   once, so the eye finds it; lasting notices stand still. */
+.notice[data-flash] { animation: crypie-enter 260ms var(--ease-out); }
+@keyframes crypie-enter {
+  from { opacity: 0; transform: translateY(6px); filter: blur(2px); }
+}
+
+/* -- Segmented control (filters, periods) -- */
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
+  padding: 3px;
+  border-radius: calc(var(--radius-control) + 3px);
+  background: var(--fill);
+  gap: 2px;
+}
+.segmented a, .segmented button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 5px 14px;
+  border-radius: var(--radius-control);
+  color: var(--text-2);
+  font-size: var(--fs-help);
+  font-weight: 500;
+  font-family: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+.segmented a:hover, .segmented button:hover { text-decoration: none; color: var(--text); }
+.segmented a.active, .segmented button.active, .segmented [aria-current="page"], .segmented [aria-pressed="true"] {
+  background: var(--seg-active);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+  font-weight: 600;
+}
+.segmented a:focus-visible, .segmented button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (max-width: 480px) {
+  .segmented a, .segmented button { padding: 5px 10px; font-size: var(--fs-detail); }
+}
+/* A number inside a segmented button: 'Telt mee 3', 'Alles 63'. --text, because --text-2 on
+ * the grey badge stays under 4.5:1 in dark mode. */
+.segmented .count {
+  display: inline-block;
+  min-width: 1.6em;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--fill-2);
+  color: var(--text);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* -- Pages of a long list: '‹ Nieuwer', '1–25 van 63 · pagina 1 van 3', 'Ouder ›' -- */
+.pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--hairline); }
+.pager > span:only-child, .pager > span:first-child { margin-right: auto; }
+
+/* -- Filters: active filters as labels that each remove their own filter -- */
+.filter-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: -4px 0 14px; }
+.filter-chips ul { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.chip-remove {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--control-border);
+  background: var(--card);
+  color: var(--text);
+  font-size: var(--fs-detail);
+  text-decoration: none;
+  position: relative;
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.chip-remove::after { content: ""; position: absolute; inset: -3px 0; }
+.chip-remove:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
+.chip-remove .chip-x { margin-left: 6px; color: var(--text-2); font-weight: 600; }
+@media (pointer: coarse) { .chip-remove { min-height: 36px; } }
+
+/* -- 'Hoe werkt dit?' under a page title: the long explanation, folded away -- */
+.page-help { margin-top: 10px; max-width: 70ch; color: var(--text-2); font-size: var(--fs-help); }
+.page-help summary { color: var(--accent); font-weight: 500; }
+.page-help > :not(summary) { margin-top: 8px; }
+/* 'Begrippen uitgelegd' (ui.glossary): term, then its explanation. */
+.glossary { display: grid; grid-template-columns: minmax(0, 13rem) minmax(0, 1fr); gap: 6px 16px; margin: 10px 0 0; }
+.glossary dt { color: var(--text); font-weight: 600; }
+.glossary dd { margin: 0; }
+@media (max-width: 640px) {
+  .glossary { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .glossary dd + dt { margin-top: 8px; }
+}
+
+/* -- The mode in running text ('in oefenmodus, met fictief geld'), in the colour of its pill -- */
+.mode-text { font-weight: 600; }
+.mode-text.is-paper { color: var(--paper); }
+.mode-text.is-live { color: var(--red); }
+
+/* -- Disclosure: every <details> gets the same turning chevron -- */
+summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+}
+summary::-webkit-details-marker { display: none; }
+summary::before {
+  content: "";
+  flex: none;
+  width: 0.45em;
+  height: 0.45em;
+  margin: 0 0.15em 0 0.1em;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+details[open] > summary::before { transform: rotate(45deg) translate(-0.1em, -0.1em); }
+details.advanced summary { font-weight: 500; color: var(--accent); }
+details.advanced > *:not(summary) { margin-top: 14px; }
+
+/* -- Lists, key/value pairs, chips, tags -- */
+.kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 18px; font-size: var(--fs-help); }
+.kv dt { color: var(--text-2); margin: 0; }
+.kv dd { margin: 0; font-variant-numeric: tabular-nums; min-width: 0; }
+@media (max-width: 400px) {
+  .kv { grid-template-columns: minmax(0, 1fr); row-gap: 2px; }
+  .kv dd { margin-bottom: 8px; }
+}
+
+.list { list-style: none; padding: 0; margin: 0; }
+.list li { padding: 12px 0; border-bottom: 1px solid var(--hairline); }
+.list li:last-child { border-bottom: 0; padding-bottom: 0; }
+.list li:first-child { padding-top: 0; }
+
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { font-size: var(--fs-caption); padding: 3px 9px; border-radius: var(--radius-control); background: var(--fill); overflow-wrap: anywhere; }
+.chip.mono, .chip code { font-family: var(--mono); }
+
+.tag { font-size: var(--fs-caption); padding: 2px 9px; border-radius: var(--radius-pill); background: var(--card); border: 1px solid var(--control-border); color: var(--text-2); text-decoration: none; transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
+.tag:hover { color: var(--accent); text-decoration: none; }
+
+/* -- Score bar (sentiment) -- */
+.score-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--fill);
+  overflow: hidden;
+  margin: 10px 0 6px;
+}
+.score-bar::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--hairline-strong);
+}
+.score-bar .fill { position: absolute; top: 0; bottom: 0; border-radius: 3px; }
+.score-bar .fill.pos { left: 50%; background: var(--green); }
+.score-bar .fill.neg { right: 50%; background: var(--red); }
+
+/* -- Long text: notes, reports, markdown from Claude (the md filter) -- */
+.prose { white-space: pre-wrap; line-height: 1.6; overflow-wrap: anywhere; }
+.report {
+  white-space: pre-wrap;
+  background: var(--fill);
+  padding: 16px 18px;
+  border-radius: var(--radius-sm);
+  line-height: 1.6;
+  font-size: var(--fs-help);
+  overflow-wrap: anywhere;
+}
+.md { white-space: normal; overflow-wrap: anywhere; }
+.md > * + * { margin-top: 0.7em; }
+.md :is(h2, h3, h4, h5, h6) { font-size: var(--fs-body); line-height: 1.35; }
+.md > :is(h2, h3, h4, h5, h6):not(:first-child) { margin-top: 1.2em; }
+.md ul, .md ol { margin-bottom: 0; padding-left: 1.3em; }
+.md li + li { margin-top: 0.25em; }
+.md hr { border: 0; border-top: 1px solid var(--hairline-strong); }
+
+/* -- Empty state -- */
+.empty { text-align: center; padding: 36px 20px; color: var(--text-2); }
+.empty .title { font-weight: 600; color: var(--text); font-size: 16px; }
+.empty .btn { margin-top: 14px; }
+.empty svg { display: block; width: 36px; height: 36px; color: var(--text-2); margin: 0 auto 10px; }
+
+/* -- Checklist of a decision (ui.checks): ✓ met, ✗ not met, ~ soft filter not met -- */
+.checks { list-style: none; margin: 6px 0 0; padding: 0; font-size: var(--fs-help); }
+.checks li { padding: 2px 0; }
+.checks .mark { display: inline-flex; width: 18px; vertical-align: -0.15em; }
+.checks .mark .icon, .checks-legend .mark .icon { width: 14px; height: 14px; stroke-width: 2.6; }
+.checks li.ok .mark { color: var(--green); }
+.checks li.nok .mark { color: var(--red); }
+.checks li.soft .mark { color: var(--orange); }
+.checks.compact { font-size: var(--fs-caption); margin-top: 2px; }
+.checks-legend { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 6px 0 0; color: var(--text-2); font-size: var(--fs-caption); }
+.checks-legend .mark { display: inline-flex; vertical-align: -0.15em; }
+.checks-legend .ok { color: var(--green); }
+.checks-legend .nok { color: var(--red); }
+.checks-legend .soft { color: var(--orange); }
+
+/* A result colour always wins over the grey of sub text around it ('-0,4%' under a loss). */
+.hero .big-sub.pos, td .sub.pos, .stat .sub.pos, .trade-head .pnl .sub.pos { color: var(--green); }
+.hero .big-sub.neg, td .sub.neg, .stat .sub.neg, .trade-head .pnl .sub.neg { color: var(--red); }
+
+/* ==== 6. Hulpklassen ==== */
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.muted { color: var(--text-2); }
+.faint { color: var(--text-3); }
+.text { color: var(--text); }
+.small { font-size: var(--fs-help); }
+.caption { font-size: var(--fs-caption); }
+.fs-help { font-size: var(--fs-help); }
+.fs-body { font-size: var(--fs-body); }
+/* The one sub-heading inside a card (h3 level, UX-83). */
+.subhead, .context-title, .settings-section-title, .cycle-market, .evaluation-title,
+.strategy-name, .account-action-title, .trade-head .title {
+  font-size: var(--fs-lead);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  color: var(--text);
+}
+.fs-lead { font-size: var(--fs-lead); }
+.fw-normal { font-weight: 400; }
+.fw-medium { font-weight: 500; }
+.fw-bold { font-weight: 600; }
+.mono { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
+.num { font-variant-numeric: tabular-nums; }
+/* An amount: tabular digits, never broken over two lines. */
+.money { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pos { color: var(--green); }
+.neg { color: var(--red); }
+.right { text-align: right; }
+.nowrap { white-space: nowrap; }
+.break { overflow-wrap: anywhere; }
+/* Long text cut after three lines (put the full text behind a link or <details>). */
+.clamp-3 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+/* The one small uppercase sub-heading (UX-83): .eyebrow, and the same look for the plan and
+   trade sub-headings; only their margins differ. */
+.eyebrow, .plan-h, .trade-grid h4 { font-size: var(--fs-detail); font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; }
+.block { display: block; }
+
+.m-0 { margin: 0; }
+.mt-0 { margin-top: 0; }
+.mt-1 { margin-top: var(--space-1); }
+.mt-2 { margin-top: var(--space-2); }
+.mt-3 { margin-top: var(--space-3); }
+.mt-4 { margin-top: var(--space-4); }
+.mt-5 { margin-top: var(--space-5); }
+.mt-6 { margin-top: var(--space-6); }
+.mb-0 { margin-bottom: 0; }
+.mb-1 { margin-bottom: var(--space-1); }
+.mb-2 { margin-bottom: var(--space-2); }
+.mb-3 { margin-bottom: var(--space-3); }
+.mb-4 { margin-bottom: var(--space-4); }
+
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+.row-between { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-3); }
+.stack-sm > * + * { margin-top: var(--space-3); }
+.gap-sm { gap: var(--space-4); }
+.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.input-xs { width: 5.5rem; }
+.input-sm { width: 8rem; }
+.w-full { width: 100%; }
+
+/* ==== 7. Voettekst ==== */
+
+footer.site {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 max(var(--gutter), env(safe-area-inset-right)) max(40px, env(safe-area-inset-bottom)) max(var(--gutter), env(safe-area-inset-left));
+  color: var(--text-2);
+  font-size: var(--fs-detail);
+  display: flex;
+  gap: 8px 18px;
+  flex-wrap: wrap;
+}
+/* A refused Bitvavo key: said in red on every page. */
+footer.site .footer-alert { color: var(--red); font-weight: 500; }
+
+/* ==== 8. Pagina's ==== */
+
+/* ==== Pagina: Overzicht ==== */
+/* Regels die alleen dashboard.html gebruikt: de hero, 'Aan de slag', de grafieken en de
+ * handmatige order. */
+
+/* -- Hero: portfolio on the left, the bot's status and the kill switch on the right -- */
+.dash-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 400px);
+  gap: 24px 40px;
+  align-items: start;
+}
+.dash-hero .hero-row { align-items: flex-start; }
+.dash-hero-positions { margin-top: 16px; color: var(--text-2); font-size: var(--fs-help); }
+/* The status comes first in the page (and so for the keyboard and screen readers: 'does the
+ * bot run?'); on a wide screen it stands to the right of the money. */
+.dash-status { min-width: 0; grid-column: 2; grid-row: 1; }
+.dash-hero-money { grid-column: 1; grid-row: 1; min-width: 0; }
+.dash-status-help { margin-top: 8px; color: var(--text-2); font-size: var(--fs-help); max-width: 60ch; }
+.dash-status .kill-switch { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--hairline); }
+@media (max-width: 760px) {
+  .dash-hero-grid { grid-template-columns: minmax(0, 1fr); }
+  .dash-status, .dash-hero-money { grid-column: 1; grid-row: auto; }
+  .dash-status { padding-bottom: 18px; border-bottom: 1px solid var(--hairline); }
+}
+
+/* -- 'Aan de slag': numbered steps, done ones ticked -- */
+.dash-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 16px 24px;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+}
+.dash-steps li { display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
+.dash-step-mark {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--fill);
+  font-weight: 600;
+  font-size: var(--fs-help);
+  font-variant-numeric: tabular-nums;
+}
+.dash-step-mark .icon { width: 18px; height: 18px; }
+.dash-steps .is-done .dash-step-mark { background: var(--green-tint); color: var(--green); }
+.dash-step-body { min-width: 0; }
+.dash-step-body > * + * { margin-top: 4px; }
+.dash-step-title { font-weight: 600; }
+.dash-step-title .pill { margin-left: 4px; }
+
+/* -- Charts -- */
+.chart-controls { display: flex; gap: 10px 14px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+/* Many markets: the buttons wrap inside the card instead of running out of it. */
+.chart-markets { max-width: 100%; }
+.chart-wrap { position: relative; }
+.chart { width: 100%; transition: opacity var(--dur) var(--ease-out); }
+.chart.tall { height: 380px; }
+.chart.short { height: 220px; }
+/* Loading: the old chart stays visible, dimmed, until the new data is in. */
+.chart-wrap.is-loading .chart { opacity: 0.4; }
+.chart-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  text-align: center;
+  color: var(--text-2);
+  font-size: var(--fs-help);
+  pointer-events: none;
+}
+.chart-legend {
+  display: flex;
+  gap: 8px 18px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: var(--fs-detail);
+  color: var(--text-2);
+  margin-bottom: 12px;
+}
+.chart-legend .key { display: inline-flex; flex-direction: row; align-items: center; gap: 7px; }
+/* The 'Claude-adviezen tonen' checkbox sits next to its text, with a 24 px target. */
+.chart-legend .toggle { margin-left: auto; cursor: pointer; min-height: 24px; gap: 8px; color: var(--text); }
+.chart-legend .toggle input { margin: 0; }
+.chart-legend .swatch { display: inline-block; width: 11px; height: 11px; flex: none; }
+.chart-legend .swatch.up { background: var(--chart-green); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.chart-legend .swatch.down { background: var(--chart-red); clip-path: polygon(0 0, 100% 0, 50% 100%); }
+.chart-legend .swatch.circle { background: var(--chart-accent); border-radius: 50%; }
+.chart-legend .swatch.square { background: var(--chart-orange); border-radius: 2px; }
+.brand-stop-1 { stop-color: var(--brand-1); }
+.brand-stop-2 { stop-color: var(--brand-2); }
+.chart-tooltip {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  background: var(--card);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: var(--fs-detail);
+  min-width: 170px;
+  max-width: 280px;
+  line-height: 1.45;
+}
+.chart-tooltip .t-title { font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.chart-tooltip .t-row { display: flex; justify-content: space-between; gap: 14px; font-variant-numeric: tabular-nums; color: var(--text-2); }
+.chart-tooltip .t-row b { font-weight: 500; color: var(--text); }
+.chart-tooltip .t-action { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--hairline); color: var(--text); }
+.chart-tooltip .t-action .detail { color: var(--text-2); display: block; margin-top: 2px; }
+.chart-status { margin-top: 8px; min-height: 1.5em; }
+.chart-status .chart-error { color: var(--text); }
+.chart-status .btn { margin: 6px 0 0; }
+.chart-status details { margin-top: 6px; }
+.chart-status details > p { margin-top: 4px; }
+.chart-table { margin-top: 10px; }
+.chart-table h3 { font-size: var(--fs-body); }
+.chart-table .list li { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 14px; align-items: baseline; font-size: var(--fs-help); }
+.chart-table .list .when { color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.chart-table .list .what .detail { display: block; color: var(--text-2); font-size: var(--fs-detail); }
+.chart-table .list .how { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* The help text names the gesture of the device: hover with a mouse, hold with a finger. */
+.dash-hint-touch { display: none; }
+@media (hover: none) and (pointer: coarse) {
+  .dash-hint-hover { display: none; }
+  .dash-hint-touch { display: inline; }
+}
+@media (max-width: 640px) {
+  .chart.tall { height: 300px; }
+  .chart.short { height: 180px; }
+  .chart-legend .toggle { margin-left: 0; width: 100%; justify-content: flex-start; }
+  .chart-table .list li { grid-template-columns: 1fr auto; }
+  .chart-table .list .what { grid-column: 1 / -1; }
+}
+
+/* -- Tables shown as cards on a phone (table-stack): the second line of a cell ('€ 59,79',
+ * '-0,6%') goes under the value instead of next to it. -- */
+@media (max-width: 640px) {
+  .dash .table-stack td:not(:first-child) { flex-wrap: wrap; row-gap: 0; }
+  .dash .table-stack td:not(:first-child) > :not(.sub) { margin-left: auto; }
+  .dash .table-stack td:not(:first-child) .sub { flex-basis: 100%; max-width: none; text-align: right; margin-top: 0; }
+}
+
+/* -- Strategy card: name, one line, the features -- */
+.dash-oneline { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+
+/* -- Manual order -- */
+.dash-order fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.dash-order .dash-side { flex: 1 1 200px; }
+.dash-order legend { padding: 0; margin-bottom: 6px; }
+.dash-order .form-row { align-items: flex-start; }
+.dash-order > .notice { margin-bottom: 14px; }
+.dash-order .seg-radio { display: flex; flex-wrap: nowrap; }
+.dash-order .seg-radio label { flex: 1 1 0; }
+.dash-order .seg-radio span { justify-content: center; width: 100%; min-height: 38px; font-size: var(--fs-body); }
+.dash-order .seg-radio input:checked[value="buy"] + span { background: var(--green-tint); color: var(--green); }
+.dash-order .seg-radio input:checked[value="sell"] + span { background: var(--red-tint); color: var(--red); }
+.dash-amount { min-width: 0; }
+.dash-amount .unit-input input { width: 100%; min-width: 0; }
+.dash-amount-check { display: block; min-height: 1.4em; color: var(--text-2); font-size: var(--fs-detail); font-variant-numeric: tabular-nums; }
+.dash-amount-check.is-error { color: var(--red); font-weight: 500; }
+.dash-sell-all { font-size: var(--fs-help); color: var(--text); min-height: 24px; }
+.dash-sell-all input { margin: 0; }
+.dash-order #order-position { margin-top: 8px; }
+.dash-order #order-position.is-warn { color: var(--orange); font-weight: 500; }
+
+/* ==== Pagina: Handelen ==== */
+/* Regels die alleen trading.html gebruikt: de hero met status en bediening, het voorstel van
+ * Claude, de cycli per markt, de limietmeters, het logboek 'Alle cycli' en de evaluaties. */
+
+/* Hero: status (left) and the controls (right; below it on narrow screens). */
+.trading-hero .hero-row { align-items: flex-start; }
+.trading-status { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.trading-controls { flex: 0 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
+.trading-controls form { margin: 0; }
+.status-update { padding: 8px 12px; border-radius: var(--radius-control); background: var(--accent-tint); font-size: var(--fs-help); }
+/* An empty live region stays in the page (so it is announced when filled) but takes no room. */
+.status-update:empty { padding: 0; margin-top: -8px; background: none; }
+@media (max-width: 700px) {
+  .trading-controls { flex-basis: 100%; }
+}
+
+/* A proposal of Claude that waits for the owner (or was just applied), at the top. */
+.proposal-card { border-color: var(--accent); box-shadow: var(--shadow), 0 0 0 1px var(--accent); }
+
+/* Last cycle per market. */
+.cycle { padding: 14px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); }
+.cycle-failed { border-color: var(--red); }
+.cycle-failed p + p { margin-top: 6px; }
+.cycle-head { display: flex; justify-content: space-between; align-items: baseline; gap: 4px 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.decision-line { line-height: 1.8; }
+.decision-summary { color: var(--text-2); font-size: var(--fs-help); }
+.decision-news { margin-top: 8px; }
+.decision-why { margin-top: 6px; max-width: 80ch; }
+.dip-watch { padding: 12px 14px; margin-bottom: 14px; border-radius: var(--radius-sm); background: var(--orange-tint); }
+.dip-watch > * + * { margin-top: 4px; }
+/* An orange pill on the orange box would fall under 4.5:1; give it the card behind it. */
+.dip-watch .pill { background: var(--surface); }
+
+/* Limits as meters. */
+.limit-meters { display: grid; gap: 12px 16px; grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); }
+.limit-meters .stat { display: block; }
+.limit-meters .stat .value .metric-sub { font-size: var(--fs-help); }
+.limit-meters .meter { margin: 10px 0 6px; background: var(--card); }
+.limit-meters .meter::-webkit-progress-bar { background: var(--card); }
+.context-more { margin-top: 18px; }
+.context-more > summary { font-weight: 500; color: var(--accent); }
+.context-grid { display: grid; gap: 28px 36px; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); margin-top: 18px; align-items: start; }
+.context-grid > section { min-width: 0; }
+.context-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; margin-bottom: 10px; }
+.context-grid > section > .context-title { margin-bottom: 10px; }
+
+/* 'Alle cycli': filters, one tbody per decision (a row plus its explanation), pages. */
+.cycles-filters { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 12px; }
+.cycles td.decision { min-width: 16rem; }
+.cycles td.decision .decision-line { margin-bottom: 2px; }
+.cycles tbody tr:first-child td { border-bottom: 0; padding-bottom: 4px; }
+.cycles .cycle-detail td { padding-top: 0; font-size: var(--fs-help); color: var(--text-2); border-bottom: 1px solid var(--hairline); }
+.cycles tbody:last-child .cycle-detail td { border-bottom: 0; }
+.cycles .cycle-detail .decision-why { color: var(--text); font-size: var(--fs-help); margin-top: 0; }
+.cycles .cycle-detail .neg { margin-top: 4px; }
+.cycle-checks { margin-top: 4px; }
+.cycle-checks > summary { font-size: var(--fs-detail); font-weight: 500; color: var(--accent); }
+.cycle-checks > .checks { margin-top: 2px; }
+@media (max-width: 640px) {
+  .cycles, .cycles tbody, .cycles tr, .cycles td { display: block; }
+  .cycles thead { display: none; }
+  .cycles tbody { padding: 12px 0; border-bottom: 1px solid var(--hairline); }
+  .cycles tbody:last-child { border-bottom: 0; }
+  .cycles td, .cycles tbody tr:first-child td, .cycles .cycle-detail td { padding: 0; border: 0; text-align: left; }
+  .cycles tbody tr:first-child { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; }
+  .cycles td.market { order: -1; }
+  .cycles td.market .sub { display: inline; margin-left: 6px; }
+  .cycles td.when { color: var(--text-2); font-size: var(--fs-detail); }
+  .cycles td.decision { flex-basis: 100%; min-width: 0; margin: 4px 0 2px; }
+  .cycles td.decision .sub { white-space: normal; }
+  .cycles td[data-label] { font-size: var(--fs-detail); }
+  .cycles td[data-label]::before { content: attr(data-label) " "; color: var(--text-2); }
+  .cycles .cycle-detail td { margin-top: 6px; }
+}
+
+/* Open and closed positions: amount and its detail stay together in the narrow layout. */
+.table-stack td .cell { display: inline-block; }
+@media (max-width: 640px) {
+  .table-stack td .cell .sub { text-align: right; }
+}
+
+/* Evaluations. */
+.evaluation-proposal { margin-top: 18px; }
+
+/* ==== Pagina: Journaal ==== */
+/* Regels die alleen journal.html gebruikt: de filters, de trades en de notities. */
+
+.journal-modes { margin-top: 14px; }
+
+.journal-filter-box > summary { display: flex; align-items: center; gap: 10px; min-height: 32px; }
+.journal-filter-box > summary .card-title { flex: 0 1 auto; margin: 0; }
+.journal-filter-box[open] > summary { margin-bottom: 14px; }
+.filters { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); align-items: end; }
+.filters input, .filters select { width: 100%; }
+.filters .journal-search { grid-column: span 2; }
+.filters .actions { display: flex; gap: 8px; }
+@media (max-width: 480px) {
+  .filters .journal-search { grid-column: auto; }
+  .journal-stats .stat { padding: 12px 14px; }
+}
+.journal-breakdown .grid-2 { margin-top: 10px; }
+@media (max-width: 700px) { .journal-breakdown .grid-2 { grid-template-columns: minmax(0, 1fr); } }
+
+.trade { padding: 16px 18px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); }
+.trade + .trade { margin-top: 12px; }
+.trade:target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint-2); }
+.trade > .notice { margin-bottom: 12px; }
+.trade-head { display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap; }
+.trade-head .title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.trade-head .trade-title { margin: 0; font-size: inherit; font-weight: inherit; line-height: 1.3; }
+.trade-head .pnl { font-size: var(--fs-metric); font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; text-align: right; }
+.trade-head .pnl .sub { display: block; font-size: var(--fs-caption); font-weight: 500; color: var(--text-2); }
+.trade-head .pnl .pnl-open { color: var(--text-2); font-size: var(--fs-help); font-weight: 500; letter-spacing: 0; }
+.trade-meta { color: var(--text-3); font-size: var(--fs-detail); margin-top: 4px; display: flex; gap: 6px 14px; flex-wrap: wrap; }
+.trade-grid { display: grid; gap: 14px 24px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 14px; }
+.trade-grid h4 { margin: 0 0 6px; }
+.trade-grid .kv { font-size: var(--fs-help); gap: 4px 14px; }
+.trade-grid .why { font-size: var(--fs-help); margin: 8px 0 0; line-height: 1.5; overflow-wrap: anywhere; }
+.trade-note { --surface: var(--card); margin-top: 14px; padding: 12px 14px; border-radius: var(--radius-control); background: var(--fill); font-size: var(--fs-help); }
+.trade-note .prose { margin-top: 6px; }
+.trade-note .meta { font-size: var(--fs-detail); color: var(--text-3); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.trade-note .meta strong { color: var(--text); }
+.trade-note form { margin-top: 10px; display: grid; gap: 8px; }
+.trade-note textarea { min-height: 5rem; }
+@media (max-width: 600px) {
+  .trade { padding: 14px; }
+  .trade-grid { grid-template-columns: minmax(0, 1fr); }
+  .trade-head .pnl { text-align: left; }
+}
+
+/* ==== Pagina: Tradingplan ==== */
+/* Regels die alleen plan.html gebruikt: jouw plan (bewerkbaar) en wat de bot afdwingt
+ * (automatisch, vlakke kaarten die op een telefoon inklappen). */
+
+.plan-tag { margin-left: 6px; vertical-align: middle; font-size: var(--fs-caption); }
+.plan-claude { display: flex; gap: 10px; align-items: flex-start; margin: 0 0 14px; padding: 10px 14px; border-radius: var(--radius-sm); font-size: var(--fs-help); }
+.plan-claude .icon { margin-top: 2px; }
+.plan-claude p { margin: 0; }
+.plan-claude.is-active { background: var(--green-tint); }
+.plan-claude.is-active .icon { color: var(--green); }
+.plan-claude.is-idle { background: var(--orange-tint); }
+.plan-claude.is-idle .icon { color: var(--orange); }
+
+.plan-fields { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); align-items: start; }
+.plan-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+/* Label, field, help and counter line up across the two columns, even when a label wraps. */
+@supports (grid-template-rows: subgrid) {
+  .plan-field { display: grid; grid-row: span 4; grid-template-rows: subgrid; row-gap: 6px; }
+  .plan-field label { align-self: end; }
+}
+.plan-field label { display: block; font-weight: 600; font-size: var(--fs-body); color: var(--text); }
+.plan-field textarea { min-height: 7rem; }
+.plan-field .setting-help { margin: 0; }
+.plan-field .field-error { margin: 0; }
+.char-count { margin: 0; color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.char-count.is-near { color: var(--orange); font-weight: 600; }
+.char-count.is-full { color: var(--red); }
+
+.plan-derived-head h2 { font-size: var(--fs-card-title); line-height: 1.3; }
+.plan-derived-head .card-desc { margin: 4px 0 14px; }
+.plan-derived > .grid-2 + .grid-2 { margin-top: 20px; }
+/* Read-only: flat and a shade darker than the editable card above. */
+.plan-card { --surface: var(--card-2); background: var(--card-2); box-shadow: none; }
+.plan-card > details > summary { display: flex; min-height: 32px; }
+.plan-card > details > summary .card-title { margin: 0; }
+.plan-card-body { margin-top: 12px; }
+.plan-change { margin: 14px 0 0; }
+.plan-h { margin: 16px 0 6px; }
+.plan-h:first-of-type { margin-top: 4px; }
+.rules { list-style: none; margin: 0; padding: 0; font-size: var(--fs-help); }
+.rules li { padding: 4px 0; display: flex; gap: 8px; align-items: baseline; }
+.rules .mark { display: inline-flex; width: 14px; color: var(--accent); flex: none; align-self: center; }
+.rules .mark .icon { width: 14px; height: 14px; stroke-width: 2.6; }
+.rules li.soft .mark { color: var(--orange); }
+.steps { margin: 0; padding-left: 22px; font-size: var(--fs-help); line-height: 1.55; }
+.steps li { margin: 6px 0; }
+.steps li::marker { color: var(--accent); font-weight: 600; }
+@media (max-width: 700px) {
+  .plan-derived .grid-2 { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .plan-derived > .grid-2 + .grid-2 { margin-top: 10px; }
+  .plan-card { padding: 14px 18px; }
+}
+
+/* ==== Pagina: Strategie ==== */
+/* Regels die alleen strategy.html gebruikt: de regels, het resultaat van een test of voorstel
+ * met de backtest, de editor en de fouten ernaast. */
+
+.strategy-name { margin: 0 0 4px; }
+.strategy-scope { color: var(--text-2); font-size: var(--fs-help); margin: 0 0 14px; }
+.strategy-rules { display: grid; gap: 16px 24px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.strategy-rules .eyebrow { margin: 0 0 6px; }
+.strategy-chips { margin: 14px 0 0; align-items: center; }
+.strategy-note { margin-top: 14px; padding: 10px 14px; border-left: 3px solid var(--hairline-strong); color: var(--text-2); font-size: var(--fs-help); }
+.strategy-note p { margin: 4px 0 0; white-space: pre-line; overflow-wrap: anywhere; }
+.strategy-previous { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--hairline); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.strategy-previous p { margin: 0; }
+.strategy-list > * + * { margin-top: 14px; }
+.strategy-item { padding: 14px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-sm, 10px); }
+.strategy-item.is-selected { border-color: var(--accent); }
+.strategy-item.is-off { color: var(--text-2); }
+.strategy-item-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 10px; }
+.strategy-item-title { margin: 0; font-size: var(--fs-body); }
+.strategy-item-facts { margin: 0 0 12px; }
+.strategy-item-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.strategy-add { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--hairline); }
+.strategy-add .subhead { margin: 0 0 4px; }
+.input-md { width: 14rem; max-width: 100%; }
+.strategy-conflict { border-color: var(--orange); }
+.strategy-conflict > .notice { margin-bottom: 4px; }
+
+.strategy-backtest { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--hairline); }
+.strategy-backtest > * + * { margin-top: 14px; }
+.strategy-verdict { font-size: var(--fs-help); line-height: 1.6; }
+.strategy-verdict .pill { margin-right: 6px; }
+.strategy-curve { margin: 14px 0 0; }
+.strategy-curve svg { display: block; width: 100%; height: 120px; overflow: visible; }
+.strategy-curve polyline { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.strategy-curve .curve-strategy { stroke: var(--accent); }
+.strategy-curve .curve-hold { stroke: var(--text-3); stroke-dasharray: 4 3; }
+.strategy-curve figcaption { margin-top: 6px; color: var(--text-2); font-size: var(--fs-help); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.strategy-curve .legend-strategy, .strategy-curve .legend-hold { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--accent); }
+.strategy-curve .legend-hold { border-top: 2px dashed var(--text-3); }
+.strategy-curve .legend-item { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; }
+.strategy-save { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--hairline); }
+.strategy-save > * + * { margin-top: 10px; }
+
+.strategy-editor > #json-form { margin-top: 14px; display: grid; gap: 8px; }
+.strategy-errors { padding: 12px 14px; border-radius: var(--radius-sm); background: var(--red-tint); font-size: var(--fs-help); }
+.strategy-errors ul { margin: 6px 0 0; padding-left: 20px; }
+.strategy-errors li { margin: 3px 0; overflow-wrap: anywhere; }
+.json-context { margin: 10px 0 0; padding: 8px 10px; border-radius: var(--radius-xs); background: var(--card); font-family: var(--mono); font-size: 12px; line-height: 1.5; overflow-x: auto; white-space: pre; }
+.json-context .here { font-weight: 600; color: var(--text); }
+.json-context .caret { color: var(--red); font-weight: 700; }
+.strategy-test-controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+.strategy-test-controls select { min-width: 9rem; }
+.strategy-reset { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--hairline); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+@media (max-width: 640px) {
+  .strategy-rules { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ==== Pagina: Nieuws ==== */
+/* Regels die alleen news.html gebruikt: sentiment per coin, de berichten en hun bronnen. */
+
+/* 'Hoe telt nieuws mee?' sits on the row of 'Nu verversen' while folded; opened, it gets the
+   full width under it (UX-107). */
+.news-actions .page-help { margin-top: 0; }
+.news-actions .page-help[open] { flex-basis: 100%; }
+.news-section-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin-bottom: 12px; }
+.news-section-head h2 { font-size: var(--fs-card-title); line-height: 1.3; }
+.news-coin .card-header, .news-etf .card-header { margin-bottom: 6px; }
+.news-more-coins { margin-top: var(--space-4); }
+.news-more-coins > summary { font-weight: 600; }
+.news-more-coins .table-wrap { margin-top: var(--space-3); }
+.news-top-box { margin-top: 10px; font-size: var(--fs-help); }
+.news-top-box > summary { color: var(--text-2); font-weight: 500; }
+.news-top { margin-top: 6px; }
+.news-top li { padding: 8px 0; }
+/* The bar of a score: the filled part as a class (no inline styles), 0-50% in steps of 5. */
+.score-bar .fill.w-0 { width: 0; }
+.score-bar .fill.w-5 { width: 5%; }
+.score-bar .fill.w-10 { width: 10%; }
+.score-bar .fill.w-15 { width: 15%; }
+.score-bar .fill.w-20 { width: 20%; }
+.score-bar .fill.w-25 { width: 25%; }
+.score-bar .fill.w-30 { width: 30%; }
+.score-bar .fill.w-35 { width: 35%; }
+.score-bar .fill.w-40 { width: 40%; }
+.score-bar .fill.w-45 { width: 45%; }
+.score-bar .fill.w-50 { width: 50%; }
+
+.news-filters { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 6px; }
+.news-range { margin: 8px 0 0; }
+
+.news-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 20px; padding: 14px 0; border-bottom: 1px solid var(--hairline); }
+.news-item:last-of-type { border-bottom: 0; }
+.news-item:target { box-shadow: -10px 0 0 var(--card), -13px 0 0 var(--accent); }
+.news-item .meta { color: var(--text-3); font-size: var(--fs-detail); display: flex; gap: 6px 8px; flex-wrap: wrap; align-items: center; }
+.news-item .title { margin: 4px 0 0; font-weight: 600; font-size: var(--fs-body); line-height: 1.4; color: var(--text); overflow-wrap: anywhere; }
+.news-item .title a { color: inherit; text-decoration: none; }
+.news-item .title a:hover { color: var(--accent); text-decoration: underline; }
+.ext-icon { width: 0.85em; height: 0.85em; margin-left: 0.3em; vertical-align: -0.05em; color: var(--text-2); }
+.news-item .summary { color: var(--text-2); font-size: var(--fs-help); margin: 4px 0 0; overflow-wrap: anywhere; }
+.news-item .count-line { margin: 6px 0 0; font-size: var(--fs-help); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.news-item .count-reason { color: var(--text-2); }
+/* A message that does not count: quieter title, everything still readable (no opacity). */
+.news-item.dim .title { color: var(--text-2); font-weight: 500; }
+.news-others { margin-top: 6px; font-size: var(--fs-help); }
+.news-others summary { color: var(--text-2); }
+.news-others summary:hover { color: var(--accent); }
+.news-others ul { margin: 6px 0 0; padding-left: 18px; color: var(--text-2); }
+.news-others li { margin: 3px 0; overflow-wrap: anywhere; }
+.news-others a { color: var(--text); }
+.news-item .side { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; text-align: right; white-space: nowrap; }
+@media (max-width: 600px) {
+  .news-item { grid-template-columns: minmax(0, 1fr); }
+  .news-item .side { flex-direction: row; align-items: center; flex-wrap: wrap; white-space: normal; text-align: left; }
+  /* Compact coin cards on a phone: the messages start sooner (UX-107). */
+  .news-coin, .news-etf { padding: 12px 14px; }
+  .news-coin .card-header, .news-etf .card-header { margin-bottom: 2px; }
+  .news-coin .score-bar, .news-etf .score-bar { margin: 6px 0; }
+  .news-coin .news-top-box { margin-top: 4px; }
+  .news-sentiment .grid { gap: 10px; }
+  .news-top li { padding: 6px 0; }
+}
+
+/* ==== Pagina: Instellingen ==== */
+/* Regels die alleen settings.html gebruikt: de blokken met instellingen, de inhoudsopgave, de
+ * live-checklist en de balk met Opslaan. .setting-help gebruikt ook plan.html. */
+
+/* Layout: a list of links beside the blocks on wide screens, above them on small ones. */
+.settings-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-5); }
+.settings-main > * + * { margin-top: var(--space-6); }
+.settings-toc { font-size: var(--fs-help); }
+.toc-all { display: block; margin-top: var(--space-2); }
+.settings-toc-title { font-weight: 600; color: var(--text-2); font-size: var(--fs-detail); margin-bottom: var(--space-2); }
+.settings-toc ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.settings-toc a { display: inline-flex; align-items: center; min-height: 32px; color: var(--accent); text-decoration: underline; text-underline-offset: 0.2em; }
+.settings-toc a[aria-current="true"] { color: var(--text); font-weight: 600; text-decoration: none; }
+.toc-dirty { color: var(--orange); font-weight: 500; white-space: nowrap; margin-left: 0.35em; }
+.toc-dirty::before { content: "· "; }
+@media (min-width: 1100px) {
+  .settings-layout { grid-template-columns: 190px minmax(0, 1fr); gap: 32px; align-items: start; }
+  .settings-toc { position: sticky; top: calc(var(--header-h) + var(--banner-h, 0px) + 16px); }
+  .settings-toc ul { flex-direction: column; gap: 2px; }
+  .settings-toc a { padding: 4px 0 4px 12px; margin-left: -14px; border-left: 2px solid transparent; }
+  .settings-toc a[aria-current="true"] { border-left-color: var(--accent); }
+  .settings-toc a { flex-wrap: wrap; }
+  .toc-dirty { flex-basis: 100%; margin-left: 0; font-size: var(--fs-detail); }
+  .toc-dirty::before { content: none; }
+}
+
+/* A block: header, explanation, feedback where you land, then its parts and fields. */
+/* No scroll-margin of its own: html's scroll-padding already keeps a block below the header
+   and the list of parts (both together would leave a gap of twice that). */
+/* Folded blocks (UX-56): with scripts on, a block shows its title and one summary line until
+   it is opened. Without scripts every block is open. */
+.block-summary { display: none; }
+.js .settings-block.is-collapsed .block-summary { display: block; margin: 0; color: var(--text-2); font-size: var(--fs-help); overflow-wrap: anywhere; }
+/* What needs attention inside a folded block (an unknown market or model): the field itself
+   shows it once the block is open, so only folded blocks repeat it. */
+.block-attention { display: none; }
+.js .settings-block.is-collapsed .block-attention { display: flex; gap: 6px; align-items: flex-start; margin: 6px 0 0; font-size: var(--fs-help); color: var(--text); overflow-wrap: anywhere; }
+.block-attention .icon { flex: none; margin-top: 2px; color: var(--orange); }
+/* Until settings.js takes over (.is-ready, then hidden="until-found" on the body). */
+.js .settings-block.is-collapsed:not(.is-ready) .settings-block-body { display: none; }
+.js .settings-block.is-collapsed .card-header { margin-bottom: 6px; }
+.block-toggle { flex: none; align-self: center; }
+@media (max-width: 1099px) {
+  /* The list of parts stays in view as one row of links under the header (UX-56). */
+  html.js:has(.settings-toc) { --sticky-extra: 52px; }
+  .js .settings-toc {
+    position: sticky;
+    top: calc(var(--header-h) + var(--banner-h, 0px));
+    z-index: 5;
+    margin: 0 calc(-1 * var(--gutter));
+    padding: 6px var(--gutter);
+    background: var(--bg);
+    border-bottom: 1px solid var(--hairline);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .js .settings-toc::-webkit-scrollbar { display: none; }
+  .js .settings-toc-title { display: none; }
+  .js .settings-toc ul { flex-wrap: nowrap; gap: 6px; }
+  .js .settings-toc li { flex: none; }
+  .js .settings-toc a:not(.btn):not(.pill):not(.tag):not(.card-link):not(.more) {
+    min-height: 36px;
+    padding: 0 12px;
+    border-radius: var(--radius-pill);
+    background: var(--fill);
+    color: var(--text);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .js .settings-toc a[aria-current="true"] { background: var(--text); color: var(--bg); }
+  .js .toc-all { flex: none; margin: 0; white-space: nowrap; }
+}
+.settings-changed { color: var(--text-2); font-size: var(--fs-help); margin: -6px 0 var(--space-3); }
+.settings-lock-note { display: flex; gap: 6px; align-items: flex-start; color: var(--text-2); font-size: var(--fs-help); margin-bottom: var(--space-4); }
+.settings-lock-note .icon, .lock-tag .icon, .setting--password .setting-label .icon { width: 14px; height: 14px; flex: none; margin-top: 2px; }
+.settings-feedback:empty { display: none; }
+.settings-feedback { display: flex; flex-direction: column; gap: var(--space-3); margin-bottom: var(--space-4); }
+.settings-feedback .notice a { font-weight: 600; }
+.settings-unsaved-note { color: var(--orange); font-size: var(--fs-help); font-weight: 500; }
+.loosen-confirm { margin-bottom: var(--space-4); }
+.check-row { display: inline-flex; align-items: center; gap: 10px; font-size: var(--fs-body); color: var(--text); min-height: var(--tap); cursor: pointer; }
+
+.settings-section { border: 0; margin: 0; padding: 0; min-width: 0; }
+.settings-section + .settings-section, .settings-list + .settings-section { margin-top: var(--space-6); }
+.settings-section > legend { padding: 0; margin-bottom: var(--space-1); }
+.settings-section-help { color: var(--text-2); font-size: var(--fs-help); margin-bottom: var(--space-2); max-width: 60ch; }
+
+.settings-list { border-top: 1px solid var(--hairline); }
+.setting {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+  gap: 8px 28px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.setting-label { font-size: var(--fs-body); font-weight: 500; color: var(--text); display: inline-flex; gap: 6px; align-items: flex-start; }
+.setting-text { min-width: 0; }
+.setting-help { color: var(--text-2); font-size: var(--fs-help); margin-top: 3px; max-width: 60ch; }
+.setting-default { color: var(--text-3); font-size: var(--fs-detail); margin-top: 5px; overflow-wrap: anywhere; }
+.setting-default .mono, .setting-text .mono, .env-name { font-size: var(--fs-caption); color: var(--text-2); }
+.setting-error { color: var(--red); font-size: var(--fs-help); font-weight: 500; margin-top: 5px; }
+.setting-warn, .setting-check { color: var(--orange); font-size: var(--fs-help); font-weight: 500; margin-top: 5px; }
+.setting-dep { color: var(--text-2); font-size: var(--fs-help); margin-top: 5px; font-style: italic; }
+.setting-need { color: var(--orange); font-size: var(--fs-help); font-weight: 500; margin-top: 5px; }
+.lock-tag { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 1px 8px; border-radius: var(--radius-pill); background: var(--fill); color: var(--text-2); font-size: var(--fs-caption); font-weight: 500; }
+.link-btn { position: relative; background: none; border: 0; padding: 4px 0; margin-top: 2px; font: inherit; font-size: var(--fs-help); color: var(--accent); text-decoration: underline; text-underline-offset: 0.2em; cursor: pointer; min-height: 32px; }
+.link-btn::after { content: ""; position: absolute; inset: -4px 0; }
+.setting-control { display: flex; flex-direction: column; align-items: flex-end; min-width: 0; }
+.setting-control > input, .setting-control > select, .setting-control > textarea, .setting-control .unit-input { width: 100%; }
+.setting.has-error :is(input, select, textarea) { border-color: var(--red); }
+.input-upper { text-transform: uppercase; }
+.input-upper::placeholder { text-transform: none; }
+
+/* Numbers: the unit in a fixed column on both sides, so every field ends on the same line. */
+.setting .unit-input { display: grid; grid-template-columns: 1.4em minmax(0, 1fr) 5.6em; gap: 8px; align-items: center; }
+.setting .unit-input input { text-align: right; width: 100%; font-variant-numeric: tabular-nums; }
+.setting .unit-input .unit { color: var(--text-2); font-size: var(--fs-help); white-space: nowrap; min-width: 0; }
+.setting .unit-prefix { text-align: right; }
+
+/* Long lists (agenda, feeds): the full width of the block, monospace. */
+.setting--wide { grid-template-columns: minmax(0, 1fr); }
+.setting--wide .setting-control { align-items: stretch; }
+.setting-textarea { font-family: var(--mono); font-size: 13px; line-height: 1.55; min-height: 9rem; }
+
+/* A switch: one label (the setting's name); the whole track is the click target. */
+.setting .switch input { width: 100%; height: 100%; inset: 0; z-index: 1; cursor: pointer; }
+.setting .switch { min-width: 92px; justify-content: flex-start; }
+
+/* Modus: a fieldset whose legend is the setting's name. */
+.setting--group { margin: 0; min-width: 0; border: 0; border-bottom: 1px solid var(--hairline); padding: 16px 0; grid-template-rows: auto auto; }
+.setting--group > legend { float: left; grid-column: 1; grid-row: 1; padding: 0; }
+.setting--group > .setting-text { grid-column: 1; grid-row: 2; }
+.setting--group > .setting-control { grid-column: 2; grid-row: 1 / span 2; }
+.setting--group > .live-check { grid-column: 1 / -1; }
+
+/* A field that only works while its switch is on: grey text, a dashed edge, value kept. */
+.setting.is-off .setting-label, .setting.is-off .setting-help { color: var(--text-2); }
+.setting.is-off .setting-dep { color: var(--text); font-style: normal; font-weight: 500; }
+/* 'Geldt alleen als … aan staat' only says something while that switch is off (UX-58, UX-107). */
+.setting:not(.is-off) .setting-dep { display: none; }
+.setting.is-off :is(input, textarea)[readonly] { border-style: dashed; background: var(--fill); color: var(--text-2); }
+.setting.is-off .unit-input input { border-style: dashed; }
+
+/* Live: what is needed, what is advised, and the typed confirmation. */
+.live-check { margin-top: var(--space-3); padding: var(--space-4); border-radius: var(--radius-sm); background: var(--card-2); }
+.live-check-title { font-weight: 600; font-size: var(--fs-help); }
+.live-check-sub { font-weight: 600; font-size: var(--fs-help); color: var(--text-2); margin-top: var(--space-3); }
+.live-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-help); }
+.live-list li { display: flex; gap: 8px; align-items: flex-start; }
+.live-list .icon { width: 16px; height: 16px; flex: none; margin-top: 2px; }
+.live-list .is-ok .icon { color: var(--green); }
+.live-list .is-missing .icon { color: var(--red); }
+.live-list .is-advice .icon { color: var(--orange); }
+.live-list .mono { font-size: var(--fs-caption); color: var(--text-2); }
+.live-fix { color: var(--text-2); }
+.live-confirm { margin-top: var(--space-4); padding: var(--space-4); border-radius: var(--radius-sm); border: 2px solid var(--red-fill); background: var(--card); }
+.live-confirm-title { font-weight: 600; font-size: var(--fs-help); margin-bottom: var(--space-3); }
+.live-summary { margin-bottom: var(--space-3); }
+.live-confirm-field { margin-top: var(--space-3); }
+.live-confirm .check-row { display: flex; align-items: flex-start; margin-top: 12px; font-size: var(--fs-help); }
+.live-confirm .check-row input { margin-top: 3px; flex: none; }
+.live-confirm-field label { color: var(--text); font-size: var(--fs-help); }
+.live-confirm.has-error input { border-color: var(--red); }
+
+/* Opslaan per block; sticks to the bottom of the screen while the block has unsaved edits. */
+.settings-actions { margin-top: var(--space-5); display: flex; flex-direction: column; gap: var(--space-2); }
+.settings-actions-status:empty { display: none; }
+.settings-actions-status { color: var(--orange); font-weight: 600; font-size: var(--fs-help); }
+.settings-actions-note { color: var(--text-3); font-size: var(--fs-detail); }
+form.is-dirty .settings-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  margin: var(--space-5) -12px 0;
+  padding: 12px 12px max(12px, env(safe-area-inset-bottom));
+  background: var(--card);
+  border-top: 2px solid var(--orange);
+  box-shadow: 0 -8px 16px -12px rgba(0, 0, 0, 0.35);
+}
+.settings-top { margin-top: var(--space-4); font-size: var(--fs-detail); text-align: right; }
+
+/* Uit de omgeving: pill, sentence, variable name and an action per row. */
+.env-list dd { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.env-text { color: var(--text-2); font-size: var(--fs-help); flex: 1 1 240px; min-width: 0; }
+.env-name { flex-basis: 100%; }
+.env-action { margin: 0; flex-basis: 100%; }
+
+@media (max-width: 640px) {
+  .setting, .setting--group { grid-template-columns: minmax(0, 1fr); }
+  .setting--group > .setting-control { grid-column: 1; grid-row: auto; }
+  .setting-control { align-items: stretch; }
+  .setting .switch { align-self: flex-start; }
+  .settings-top { text-align: left; }
+  form.is-dirty .settings-actions { margin-left: -18px; margin-right: -18px; padding-left: 18px; padding-right: 18px; gap: 6px; }
+  /* A compact bar on a phone: one short status line and Opslaan plus Terugdraaien on one row,
+     so it covers little of the fields you are editing. Standaard herstellen waits until the
+     edits are saved or undone; the list of parts stops sticking meanwhile. */
+  form.is-dirty .settings-actions { gap: 6px; padding-top: 8px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+  form.is-dirty .settings-actions-note,
+  form.is-dirty .settings-actions .status-detail,
+  form.is-dirty .settings-actions button[value="reset"] { display: none; }
+  form.is-dirty .settings-actions .actions { flex-wrap: nowrap; gap: 8px; }
+  form.is-dirty .settings-actions .btn { flex: 1 1 auto; justify-content: center; padding: 8px 12px; font-size: var(--fs-help); }
+  form.is-dirty .settings-actions .label-long { display: none; }
+  form.is-dirty .settings-actions .label-short { display: inline; }
+  html.js:has(form.is-dirty) .settings-toc { position: static; }
+  html.js:has(form.is-dirty) { --sticky-extra: 0px; }
+}
+.label-short { display: none; }
+/* Tab to a field under the sticky Opslaan bar: the browser scrolls it above the bar. */
+html:has(form.is-dirty) { scroll-padding-bottom: 170px; }
+@media (max-width: 640px) {
+  html:has(form.is-dirty) { scroll-padding-bottom: 110px; }
+}
+
+/* ==== Pagina: Inloggen en account ==== */
+/* Regels voor de inlogflow (auth/*.html) en de accountpagina. */
+
+.auth-body { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
+.auth-wrap { width: 100%; max-width: 420px; padding: 24px 16px; display: flex; flex-direction: column; gap: 18px; align-items: stretch; }
+.auth-brand { display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 700; font-size: 20px; letter-spacing: -0.02em; }
+.auth-brand svg { width: 32px; height: 32px; }
+.auth-card h1 { font-size: 24px; margin-bottom: 2px; }
+.auth-sub { color: var(--text-2); font-size: var(--fs-help); margin-bottom: 18px; }
+/* An error or flash keeps its distance from the text below it. */
+.auth-card > .notice { margin-bottom: 12px; }
+.auth-form { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
+.auth-form input { width: 100%; }
+.auth-form .actions { margin-top: 2px; }
+.code-input { font-family: var(--mono); font-size: 22px; letter-spacing: 0.25em; text-align: center; }
+input.code-input { height: 52px; }
+/* Recovery and server codes: letters too, and longer, so less spacing. */
+.code-input--text { font-size: 18px; letter-spacing: 0.08em; }
+@media (max-width: 640px) {
+  input.code-input { font-size: 22px; }
+  input.code-input--text { font-size: 18px; }
+}
+.auth-note { margin: 0 0 12px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--text); font-size: var(--fs-help); }
+.auth-meta { color: var(--text-2); font-size: var(--fs-detail); margin-top: 12px; }
+.auth-deadline { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 14px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--orange-tint); color: var(--text); font-size: var(--fs-help); }
+.auth-deadline .icon { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--orange); }
+.auth-commands { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.auth-steps { margin: 0 0 14px 20px; color: var(--text-2); font-size: var(--fs-help); line-height: 1.5; }
+.auth-steps li + li { margin-top: 6px; }
+.qr { display: flex; justify-content: center; padding: 14px; border-radius: var(--radius-sm); background: #fff; color: #000; }
+.qr svg { width: 200px; height: 200px; display: block; }
+.auth-details { margin-top: 14px; font-size: var(--fs-help); }
+.auth-details summary { color: var(--accent); }
+.auth-details p { margin-top: 8px; }
+.auth-details .auth-form { margin-top: 10px; }
+.auth-secret { font-size: var(--fs-body); letter-spacing: 0.08em; word-break: break-all; user-select: all; }
+.recovery-codes { list-style: none; padding: 0; margin: 14px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.recovery-codes li { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--fill); font-size: var(--fs-body); text-align: center; user-select: all; }
+.recovery-status { min-height: 1.4em; margin-top: 8px; font-size: var(--fs-detail); color: var(--text-2); }
+.recovery-done { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--hairline); }
+.auth-below { display: flex; justify-content: center; }
+
+/* Account: status, security changes in sections you open, the destructive ones marked red. */
+.account-action { border-top: 1px solid var(--hairline); padding: 4px 0; }
+.account-action:last-child { border-bottom: 1px solid var(--hairline); }
+.account-action > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 12px 0; cursor: pointer; }
+.account-action-note { color: var(--text-2); font-size: var(--fs-help); }
+.account-action--danger .account-action-note { color: var(--red); }
+.account-action[open] { padding-bottom: 16px; }
+.account-action .notice { margin-bottom: 12px; }
+.account-action .auth-form { max-width: 420px; }
+.account-danger { box-shadow: inset 4px 0 0 var(--red-fill), var(--shadow-sm); }
+/* API-token: the new token once, in a box with a copy button. */
+.token-reveal { margin: 16px 0 12px; }
+.token-reveal .notice { margin-bottom: 10px; }
+/* Concentric with the pill button inside: its radius (34 px / 2) plus the 8 px padding. */
+.token-box { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 16px; border-radius: 25px; background: var(--fill); }
+.token-box code { flex: 1; min-width: 0; font-size: var(--fs-body); letter-spacing: 0.02em; user-select: all; overflow-wrap: anywhere; }
+.token-box .btn { flex: none; }
+.token-reveal-hint { margin-top: 8px; color: var(--text-2); font-size: var(--fs-detail); }
+
+/* API-token: 'Zo gebruik je het', numbered steps with code blocks you can copy. */
+.guide-steps { list-style: none; counter-reset: step; margin: 4px 0 8px; padding: 0; display: grid; gap: 20px; font-size: var(--fs-help); }
+.guide-steps > li { counter-increment: step; position: relative; padding-left: 40px; min-width: 0; }
+.guide-steps > li::before {
+  content: counter(step);
+  position: absolute; left: 0; top: -1px;
+  width: 26px; height: 26px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--accent-tint); color: var(--accent);
+  font-size: var(--fs-detail); font-weight: 600;
+}
+.guide-steps > li > * + * { margin-top: 8px; }
+.guide-step-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: var(--fs-body); font-weight: 600; }
+.guide-step-tag { color: var(--text-2); font-size: var(--fs-detail); font-weight: 400; }
+.guide-steps p code, .guide-paths code { padding: 1px 5px; border-radius: var(--radius-xs); background: var(--fill); font-size: 0.88em; }
+.guide-paths { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: var(--fs-detail); }
+.guide-paths dt { color: var(--text-2); }
+.guide-paths dd { margin: 0; min-width: 0; }
+.guide-questions { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.guide-questions li { padding: 5px 12px; border-radius: var(--radius-pill); background: var(--accent-tint); color: var(--accent); font-size: var(--fs-detail); }
+.guide-questions li::before { content: "“"; }
+.guide-questions li::after { content: "”"; }
+.guide-caution { padding: 10px 12px; border-radius: var(--radius-control); background: var(--fill); color: var(--text-2); font-size: var(--fs-detail); }
+
+.codeblock { min-width: 0; border-radius: var(--radius-control); background: var(--fill); overflow: hidden; }
+.codeblock-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 38px; padding: 3px 4px 3px 12px; border-bottom: 1px solid var(--hairline); }
+.codeblock-label { color: var(--text-2); font-family: var(--mono); font-size: var(--fs-caption); }
+/* The button sits 3-4 px inside the block's 8 px corner: a pill there would be rounder than the
+   corner around it, so it gets the corner's radius minus that gap. */
+.codeblock-copy { min-height: 30px; padding: 4px 12px; border-radius: calc(var(--radius-control) - 3px); background: transparent; font-size: var(--fs-detail); }
+.codeblock-copy:hover { background: var(--fill-2); }
+.codeblock pre { margin: 0; padding: 12px 14px; font-family: var(--mono); font-size: 13px; line-height: 1.55; white-space: pre; overflow-x: auto; tab-size: 2; }
+.codeblock--wrap pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.btn.is-copied { background: var(--green-tint); color: var(--green); }
+
+/* Printing the recovery codes: only the codes and their title. */
+@media print {
+  .auth-body { display: block; min-height: 0; background: #fff; color: #000; }
+  .auth-brand svg, .auth-card > .notice, .recovery-actions, .recovery-status, .recovery-done, .auth-below { display: none !important; }
+  .auth-card { box-shadow: none; border: 0; }
+  .recovery-codes li { background: none; border: 1px solid #000; color: #000; }
+}
+
+/* ==== 9. Toegankelijkheid ==== */
+
+/* Touch screens: bigger targets (44 pt is what Apple advises). */
+@media (pointer: coarse) {
+  .segmented a, .segmented button { min-height: 40px; }
+  .nav-links a { min-height: 40px; }
+  .icon-btn { width: 40px; height: 40px; }
+  .card-link, .card-header a.more { padding: 10px 0; margin: -10px 0; }
+  summary { min-height: 40px; }
+  .chart-legend .toggle { min-height: 40px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition: none !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+  .btn.is-busy::before { border-right-color: currentColor; opacity: 0.6; }
+  .btn:active, .icon-btn:active { transform: none; }
+}
+
+/* High-contrast mode (Windows contrast themes): the browser paints everything in system colours,
+ * so the states drawn with colour alone get a real edge or the native control back. */
+@media (forced-colors: active) {
+  .switch input, .seg-radio input { position: static; opacity: 1; width: 18px; height: 18px; margin: 0 8px 0 0; }
+  .switch .track { display: none; }
+  .seg-radio label { align-items: center; padding-left: 8px; }
+  .seg-radio input:checked + span, .segmented a.active, .segmented button.active,
+  .segmented [aria-pressed="true"], .nav-links a.active, .nav-links a[aria-current="page"],
+  .icon-btn[aria-current="page"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+  .notice, .pill, .btn, .stat, .chip, .tag, .report, .live-banner, .skip-link, .icon-btn, .cycle, .trade {
+    border: 1px solid CanvasText;
+  }
+  .btn[disabled] { border-style: dashed; color: GrayText; }
+  /* The legend swatches keep the chart's colours: the canvas keeps them too (no system
+     colours), so the legend still maps to the markers. */
+  .pill .dot, .score-bar .fill, .meter, .chart-legend .swatch { forced-color-adjust: none; }
+  .pill .dot { background: CanvasText; }
+  .table-wrap { background: none; }
+  .theme-toggle svg { forced-color-adjust: auto; }
+}

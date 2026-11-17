@@ -1,0 +1,317 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Strategie{% endblock %}
+
+{# The rules of a strategy first, then its free description as a small note (UX-12). #}
+{% macro strategy_summary(s, scope, level=3) -%}
+{#- Readable indicator names, as on Handelen and the plan (UX-104); the chips below map them
+    to the ids the JSON uses. -#}
+{%- set names = s|indicator_labels -%}
+<p class="strategy-scope">Geldt voor <strong>{{ scope|market_list if scope else "geen markt (nog niet toegewezen)" }}</strong> · candles van {{ s.interval|nl }}{% if s.position_size_pct < 100 %} · {{ s.position_size_pct|pct_limit }} van het beschikbare bedrag per positie{% endif %}</p>
+<div class="strategy-rules">
+  <div>
+    <h{{ level + 1 }} class="eyebrow">Kopen als</h{{ level + 1 }}>
+    <ul class="list small">
+      {% for c in s.buy %}<li>{{ c|condition_nl|readable_condition(names) }}{% if not loop.last %} <span class="muted">én</span>{% endif %}</li>{% endfor %}
+    </ul>
+  </div>
+  <div>
+    <h{{ level + 1 }} class="eyebrow">Verkopen als</h{{ level + 1 }}>
+    <ul class="list small">
+      {% for c in s.sell %}<li>{{ c|condition_nl|readable_condition(names) }}{% if not loop.last %} <span class="muted">én</span>{% endif %}</li>{% endfor %}
+      {% if s.stop_loss_pct %}<li>de koers {{ s.stop_loss_pct|pct_limit }} onder de instapkoers zakt <span class="muted">(stop-loss)</span></li>{% endif %}
+      {% if s.trailing_stop_pct %}<li>de koers {{ s.trailing_stop_pct|pct_limit }} onder het hoogste punt sinds instap zakt{% if s.trailing_start_pct %}, zodra de winst eerst {{ s.trailing_start_pct|pct_limit }} was{% endif %} <span class="muted">(trailing stop)</span></li>{% endif %}
+      {% if s.take_profit_pct %}<li>de koers {{ s.take_profit_pct|pct_limit }} boven de instapkoers staat <span class="muted">(take-profit)</span></li>{% endif %}
+    </ul>
+  </div>
+</div>
+<p class="chips strategy-chips"><span class="small muted">Indicatoren:</span>{% for ind in s.indicators %}<span class="chip"><span class="mono">{{ ind.id }}</span> = {{ ind|indicator_nl }}</span>{% endfor %}</p>
+<p class="small muted mt-2">Backtest-markt: <span class="mono">{{ s.market }}</span>. Het veld <span class="mono">market</span> bepaalt alleen op welke markt de backtest draait.</p>
+{% if s.description %}<div class="strategy-note"><span class="eyebrow">Toelichting (vrije tekst)</span><p>{{ s.description }}</p></div>{% endif %}
+{%- endmacro %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Strategie</h1>
+  <p class="subtitle">Wanneer de bot koopt en verkoopt: één of meer strategieën, elk met eigen markten en een eigen budget. Je handelt nu <strong class="mode-text {{ 'is-live' if mode == 'live' else 'is-paper' }}">{{ "live, met echt geld op Bitvavo" if mode == "live" else "in oefenmodus, met fictief geld" }}</strong>.</p>
+  {{ ui.glossary() }}
+</div>
+
+<div class="stack">
+  {% if message %}{{ ui.notice("ok", message, live=true) }}{% endif %}
+  {% if error_title and not errors and kind is none %}{{ ui.notice("error", error_title, live=true) }}{% endif %}
+  {% if load_warning %}{{ ui.notice("warn", load_warning, live=false) }}{% endif %}
+  {% if result_missing %}{{ ui.notice("info", "Dit resultaat is niet meer beschikbaar: resultaten blijven twee uur bewaard en verdwijnen bij een herstart. Test de strategie of vraag het voorstel opnieuw.", live=false) }}{% endif %}
+  {% if waiting %}
+  {% call ui.notice("info", "Claude heeft een strategievoorstel gedaan: '" ~ waiting.name ~ "'. Het wacht op je beoordeling op Handelen.", live=false) %}
+  <a href="/trading#voorstel">Voorstel bekijken op Handelen</a>
+  {% endcall %}
+  {% endif %}
+
+  <section class="card" id="strategieen" aria-labelledby="strategieen-title">
+    {% call ui.card_header("Strategieën", 2, id="strategieen-title") %}<span class="card-meta">{{ slots|length }} van {{ max_strategies }}</span>{% endcall %}
+    {{ ui.flashes_here(request, "strategieen") }}
+    {% if slot_missing %}{{ ui.notice("warn", "Die strategie bestaat niet (meer); hieronder staat de eerste.", live=false) }}{% endif %}
+    <p class="card-desc">Elke strategie handelt op haar eigen markten met een eigen budget: zoveel euro mag er tegelijk in haar open posities zitten. Een markt hoort bij één strategie tegelijk; een strategie zonder eigen markten handelt op alle markten die overblijven. De harde limieten gelden daar altijd bovenop.</p>
+    {% if unassigned_markets %}{{ ui.notice("warn", "Geen strategie handelt op " ~ unassigned_markets|join(", ") ~ ": daar koopt de bot niets (open posities blijven bewaakt). Wijs de markt toe aan een strategie, of zet een strategie zonder eigen markten aan.", live=false) }}{% endif %}
+    {% if budget_over %}{{ ui.notice("info", "De budgetten samen (" ~ budget_total|eur(0) ~ ") zijn meer dan " ~ ("het kapitaal voor de bot" if mode == "live" else "het startbedrag van de oefenportefeuille") ~ " (" ~ capital_eur|eur(0) ~ "). Dat mag, maar de strategieën kunnen dan niet allemaal tegelijk vol belegd zijn.", live=false) }}{% endif %}
+    <div class="strategy-list">
+      {% for r in slots %}
+      <article class="strategy-item{{ ' is-selected' if r.id == strategy_id }}{{ ' is-off' if not r.enabled }}" id="strategie-{{ r.id }}" aria-labelledby="strategie-{{ r.id }}-title">
+        <div class="strategy-item-head">
+          <h3 class="strategy-item-title" id="strategie-{{ r.id }}-title">{{ r.name }}</h3>
+          {% if r.warning %}<span class="pill pill-red">Ongeldig</span>{% elif r.enabled %}<span class="pill pill-green"><span class="dot" aria-hidden="true"></span>Aan</span>{% else %}<span class="pill">Uit</span>{% endif %}
+          {% if r.id == strategy_id %}<span class="small muted">hieronder in bewerking</span>{% else %}<a class="card-link" href="/strategy?id={{ r.id }}#actief">Regels bekijken en bewerken{{ ui.icon("chevron", "link-chevron") }}</a>{% endif %}
+        </div>
+        <dl class="kv strategy-item-facts">
+          <dt>Markten</dt><dd>{% if r.scope %}{{ r.scope|join(", ") }}{% else %}<span class="muted">geen (nog niet toegewezen)</span>{% endif %}{% if r.catch_all %} <span class="muted">(alle overige markten)</span>{% endif %}</dd>
+          <dt>Budget</dt><dd>{% if r.budget_eur %}{{ r.budget_eur|eur(0) }}{% if r.enabled %} · {{ r.invested_eur|eur(0) }} belegd, {{ r.room_eur|eur(0) }} vrij{% endif %}{% else %}<span class="muted">geen eigen budget; alleen de algemene limieten</span>{% if r.enabled and r.invested_eur %} · {{ r.invested_eur|eur(0) }} belegd{% endif %}{% endif %}</dd>
+          <dt>Posities</dt><dd>{% if r.open_positions %}{{ r.open_positions }} open, nu {{ r.value_eur|eur(0) }} waard{% else %}<span class="muted">geen open positie</span>{% endif %}</dd>
+        </dl>
+        <form method="post" action="/strategy" class="strategy-item-form">
+          <input type="hidden" name="action" value="slot_settings">
+          <input type="hidden" name="strategy_id" value="{{ r.id }}">
+          <label class="inline-field" for="slot-{{ r.id }}-markets">Markten <input id="slot-{{ r.id }}-markets" class="input-md" type="text" name="markets" value="{{ r.markets|join(', ') }}" placeholder="leeg = alle overige" maxlength="400" autocomplete="off"></label>
+          <label class="inline-field" for="slot-{{ r.id }}-budget">Budget € <input id="slot-{{ r.id }}-budget" class="input-xs" type="text" inputmode="decimal" name="budget_eur" value="{{ r.budget_eur|num(0) if r.budget_eur else '0' }}" maxlength="32" autocomplete="off"></label>
+          <label class="inline-field" for="slot-{{ r.id }}-enabled"><input id="slot-{{ r.id }}-enabled" type="checkbox" name="enabled" value="1"{% if r.enabled %} checked{% endif %}> aan</label>
+          <button class="btn btn-sm" type="submit" data-busy="Opslaan…">Opslaan</button>
+          {% if can_delete %}<button class="btn btn-danger btn-sm" type="submit" name="action" value="delete" data-confirm="Strategie '{{ r.name }}' verwijderen? Open posities in haar markten blijven bewaakt door de stops van een andere strategie." data-busy="Verwijderen…">Verwijderen</button>{% endif %}
+        </form>
+      </article>
+      {% endfor %}
+    </div>
+    {% if not max_reached %}
+    <form method="post" action="/strategy" class="strategy-add">
+      <input type="hidden" name="action" value="add">
+      <h3 class="subhead">Nieuwe strategie</h3>
+      <p class="form-help">Begint met de standaardregels van Crypie; daarna pas je de naam en de regels aan in de editor.</p>
+      <div class="actions">
+        <label class="inline-field" for="new-markets">Markten <input id="new-markets" class="input-md" type="text" name="markets" value="{{ new_form.markets or '' }}" placeholder="bijv. ETH-EUR, SOL-EUR" maxlength="400" autocomplete="off"></label>
+        <label class="inline-field" for="new-budget">Budget € <input id="new-budget" class="input-xs" type="text" inputmode="decimal" name="budget_eur" value="{{ new_form.budget_eur or '' }}" placeholder="0" maxlength="32" autocomplete="off"></label>
+        <button class="btn btn-primary btn-sm" type="submit" data-busy="Toevoegen…">Strategie toevoegen</button>
+      </div>
+      <p class="form-help">Markten: één of meer uit {{ settings.markets|join(", ") }}; leeg = alle markten die geen andere strategie heeft. Budget 0 = geen eigen budget.</p>
+    </form>
+    {% else %}
+    <p class="small muted mt-4">Het maximum van {{ max_strategies }} strategieën is bereikt.</p>
+    {% endif %}
+  </section>
+
+  <section class="card" id="actief" aria-labelledby="actief-title">
+    {% call ui.card_header("Strategie " ~ strategy_id ~ ": " ~ strategy.name, 2, id="actief-title") %}{% if load_warning %}<span class="pill pill-red">Ongeldig</span>{% elif slot.enabled %}<span class="pill pill-green"><span class="dot" aria-hidden="true"></span>Actief</span>{% else %}<span class="pill">Uit</span>{% endif %}{% endcall %}
+    {{ ui.flashes_here(request, "actief") }}
+    <h3 class="strategy-name">{{ strategy.name }}</h3>
+    {{ strategy_summary(strategy, scope) }}
+    {% if not slot.enabled %}<p class="small muted">Deze strategie staat uit: ze koopt niets. Zet haar aan bij <a href="#strategieen">Strategieën</a>.</p>{% endif %}
+    {% if previous %}
+    <form method="post" action="/strategy" class="strategy-previous" data-confirm="{{ previous_confirm }}">
+      <input type="hidden" name="action" value="restore_previous">
+      <input type="hidden" name="strategy_id" value="{{ strategy_id }}">
+      <input type="hidden" name="base_version" value="{{ version }}">
+      <p class="small muted">Vorige strategie: <strong>{{ previous.name }}</strong>{% if previous_at %}, vervangen {{ previous_at|dt }}{% endif %}.</p>
+      <button class="btn btn-sm" type="submit" data-busy="Terugzetten…">Vorige strategie terugzetten</button>
+    </form>
+    {% endif %}
+  </section>
+
+  {% if conflict %}
+  <section class="card strategy-conflict" id="conflict" aria-labelledby="conflict-title">
+    {{ ui.card_header("Niet opgeslagen: de strategie is intussen gewijzigd", 2, id="conflict-title") }}
+    {{ ui.notice("warn", "Sinds je deze pagina opende, is een andere strategie actief geworden (in een ander tabblad, of een voorstel van Claude dat is toegepast). Opslaan zou die wijziging ongemerkt terugdraaien. Hieronder staat wat er verandert als je jouw versie toch opslaat.", live=true) }}
+    {{ ui.strategy_diff(conflict.diff, "Wat jouw versie verandert aan de strategie die nu actief is", 3, new="Jouw versie") }}
+    <div class="actions mt-4">
+      <form method="post" action="/strategy" class="inline" data-confirm="{{ conflict.confirm }}">
+        <input type="hidden" name="action" value="save">
+        <input type="hidden" name="strategy_id" value="{{ strategy_id }}">
+        <input type="hidden" name="base_version" value="{{ version }}">
+        <input type="hidden" name="strategy_json" value="{{ conflict.json }}">
+        <button class="btn btn-danger" type="submit" data-busy="Opslaan…">Toch overschrijven</button>
+      </form>
+      <a class="btn" href="/strategy?id={{ strategy_id }}">Laad de huidige</a>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if proposal %}
+  <section class="card" id="resultaat" aria-labelledby="resultaat-title">
+    {% call ui.card_header(("Voorstel van Claude: " if kind == "propose" else "Geteste strategie: ") ~ proposal.name, 2, id="resultaat-title") %}{% if proposal_diff %}<span class="pill">Nog niet opgeslagen</span>{% else %}<span class="pill">Gelijk aan de actieve strategie</span>{% endif %}{% endcall %}
+    {{ strategy_summary(proposal, scope, 2) }}
+    {% if explanation %}
+    <h3 class="subhead mt-5">Toelichting van Claude</h3>
+    {{ explanation|md(4) }}
+    {% endif %}
+    {{ ui.strategy_diff(proposal_diff, level=3, new="Voorstel" if kind == "propose" else "Getest") }}
+    {% if problems %}{{ ui.notice("error", "Zo kan deze strategie niet actief worden: " ~ problems|join("; ") ~ ". Pas de JSON aan en test opnieuw.", live=false) }}{% endif %}
+
+    <div class="strategy-backtest" id="backtest">
+      {% if backtest %}
+      {% set b = backtest %}
+      <div class="row-between">
+        <h3 class="subhead m-0">Backtest op {{ b.market }}</h3>
+        <span class="card-meta">{{ b.candles }} candles van {{ b.interval|nl }} ({{ bt.period }}) · start {{ b.start_eur|eur(0) }}</span>
+      </div>
+      <p class="strategy-verdict">
+        {% if bt.no_trades %}<span class="pill">Geen trades</span> De strategie kocht in deze periode niets, dus deze test zegt nog niets.
+        {% else %}<span class="pill {{ 'pill-green' if bt.better else 'pill-orange' }}">{{ "Beter" if bt.better else "Slechter" }} dan kopen en vasthouden</span>
+        De strategie had <strong class="{{ b.return_pct|pnl_class(1) }}">{{ b.return_pct|pct }}</strong> opgeleverd ({{ b.final_eur|eur }} netto, na kosten); kopen en vasthouden <strong class="{{ b.buy_hold_return_pct|pnl_class(1) }}">{{ b.buy_hold_return_pct|pct }}</strong>. Verschil: {{ bt.difference|num(1) }} procentpunt.{% endif %}
+      </p>
+      {% if b.curve %}
+      {% set c = b.curve %}
+      <figure class="strategy-curve">
+        <svg viewBox="0 0 {{ c.width }} {{ c.height }}" preserveAspectRatio="none" role="img" aria-labelledby="curve-desc" focusable="false">
+          <polyline class="curve-hold" points="{{ c.hold }}"/>
+          <polyline class="curve-strategy" points="{{ c.strategy }}"/>
+        </svg>
+        <figcaption id="curve-desc"><span class="legend-item"><span class="legend-strategy" aria-hidden="true"></span>Strategie {{ b.start_eur|eur(0) }} → {{ b.final_eur|eur(0) }}</span> <span class="legend-item"><span class="legend-hold" aria-hidden="true"></span>Kopen en vasthouden {{ b.start_eur|eur(0) }} → {{ (b.start_eur * (1 + b.buy_hold_return_pct / 100))|eur(0) }}</span> <span class="legend-item">laagste stand strategie {{ c.strategy_low|eur(0) }}</span></figcaption>
+      </figure>
+      {% endif %}
+      {#- Six tiles (3+3, 2+2+2): the live buy signal shares a tile with the signal now. -#}
+      <div class="stats stats-6">
+        {{ ui.stat("Rendement strategie", b.return_pct|pct, "netto, na kosten", b.return_pct|pnl_class(1) if not bt.no_trades else "") }}
+        {{ ui.stat("Kopen en vasthouden", b.buy_hold_return_pct|pct, "koersverandering, ter vergelijking", b.buy_hold_return_pct|pnl_class(1)) }}
+        {{ ui.stat("Grootste daling", b.max_drawdown_pct|pct(1, false), "van de hoogste naar de laagste stand van het testsaldo") }}
+        {{ ui.stat("Afgeronde trades", b.trades, "aankoop plus verkoop" ~ (" · nog 1 open" if b.open_position else "") ~ ((" · " ~ b.half_size_trades ~ " op halve inzet") if b.half_size_trades else "")) }}
+        {{ ui.stat("Winnende trades", (b.win_rate_pct|pct(0, false)) if b.win_rate_pct is not none else "–", (bt.wins ~ " van " ~ b.trades ~ " met netto winst") if b.trades else "nog geen afgeronde trades") }}
+        {{ ui.stat("Signaal nu", b.latest.signal|nl, "op de laatste candle" ~ ((" · live koopsignaal op " ~ b.live_buy_signal_pct|pct(1, false) ~ " van de candles") if b.live_buy_signal_pct is not none else ""), "pos" if b.latest.signal == "buy" else ("neg" if b.latest.signal == "sell" else ""), "neg" if bt.loose else "") }}
+      </div>
+      {% if bt.no_trades %}{{ ui.notice("info", "Geen trades: niets getest. Test op meer candles (tot 1440), op een andere markt, of maak de koopregels ruimer.", live=false) }}
+      {% elif bt.few_trades %}{{ ui.notice("warn", "Maar " ~ b.trades ~ (" afgeronde trade" if b.trades == 1 else " afgeronde trades") ~ " in deze periode: te weinig om op te bouwen. Eén trade meer of minder verandert de uitkomst sterk. Test op meer candles (tot 1440) of op een andere markt.", live=false) }}{% endif %}
+      {% if bt.loose %}{{ ui.notice("warn", "Live geven de harde koopvoorwaarden op " ~ b.live_buy_signal_pct|pct(1, false) ~ " van de candles een koopsignaal. Dat betekent bijna elke cyclus een Claude-aanroep en een aankoop die vooral op Claude's oordeel leunt.", live=false) }}{% endif %}
+      <details class="advanced">
+        <summary>Hoe de backtest rekent</summary>
+        <p class="form-help">De backtest rekent zoals de live bot: de harde koopvoorwaarden geven het signaal, en geldt een zacht filter niet, dan koopt hij met de halve inzet (live kapt de code zo'n order af op de helft van het maximum). Wat hij niet kan nabootsen is Claude's oordeel over het nieuws. Kosten zijn meegerekend ({{ b.fee_pct|num }}% per order), slippage niet. Een backtest zegt iets over het verleden, niet over de toekomst.</p>
+        {% if b.strict is defined and b.strict %}{% set st = b.strict %}
+        <p class="form-help">Met de zachte filters als harde voorwaarden (alleen kopen als álle filters gelden): <strong class="{{ st.return_pct|pnl_class(1) }}">{{ st.return_pct|pct }}</strong> rendement, {{ st.trades }} {{ "afgeronde trade" if st.trades == 1 else "afgeronde trades" }}{{ " (nog 1 open)" if st.open_position else "" }}, grootste daling {{ st.max_drawdown_pct|pct(1, false) }}.</p>
+        {% endif %}
+      </details>
+      <details class="advanced">
+        <summary>Indicatorwaarden van de laatste candle</summary>
+        <div class="chips">{% for k, v in b.latest['values'].items() %}<span class="chip"><span class="mono">{{ k }}</span> = {{ v|compact }}</span>{% endfor %}</div>
+      </details>
+      {% if b.trade_log %}
+      <details class="advanced">
+        <summary>Laatste {{ b.trade_log|length }} trades in de test</summary>
+        {% call ui.table_wrap("Laatste trades in de test") %}
+        <table class="table-stack">
+          <tr><th scope="col">Instap</th><th scope="col" class="num">Instapkoers</th><th scope="col" class="num">Inzet</th><th scope="col">Uitstap</th><th scope="col" class="num">Uitstapkoers</th><th scope="col" class="num">Resultaat (netto)</th><th scope="col">Reden</th></tr>
+          {% for t in b.trade_log %}
+          <tr>
+            <td class="nowrap">{{ (t.entry_time // 1000)|int|ts }}</td>
+            <td class="num">{{ t.entry_price|price_eur }}</td>
+            <td class="num">{% if t.size_pct is defined %}{{ t.size_pct|pct(0, false) }}{% if t.soft_failed %} <span class="muted" title="zacht filter niet gehaald: {{ t.soft_failed|join(', ') }}">(halve inzet)</span>{% endif %}{% else %}–{% endif %}</td>
+            <td class="nowrap">{{ (t.exit_time // 1000)|int|ts if t.exit_time else "nog open" }}</td>
+            <td class="num">{{ t.exit_price|price_eur if t.exit_price else "–" }}</td>
+            {%- set net = t.net_pnl_pct if t.net_pnl_pct is defined else t.pnl_pct %}
+            <td class="num {{ net|pnl_class(1) }}">{{ net|pct if net is not none else "–" }}</td>
+            <td>{{ t.reason|nl }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% endcall %}
+      </details>
+      {% endif %}
+      {% elif backtest_error %}
+      {{ ui.notice("warn", backtest_error ~ " Test opnieuw met 'Testen'.", live=false) }}
+      {% endif %}
+    </div>
+
+    {% if proposal_diff and not problems %}
+    <form method="post" action="/strategy" class="strategy-save" data-tested-for="strategy-json"{% if save_confirm %} data-confirm="{{ save_confirm }}"{% endif %}>
+      <input type="hidden" name="action" value="save">
+      <input type="hidden" name="strategy_id" value="{{ strategy_id }}">
+      <input type="hidden" name="base_version" value="{{ version }}">
+      <input type="hidden" name="strategy_json" value="{{ proposal_json }}">
+      <p class="small muted m-0" data-tested-note hidden>De JSON in de editor is na deze test gewijzigd. Deze knop slaat de geteste versie op, niet je wijziging; test opnieuw om die op te slaan.</p>
+      <div class="actions">
+        <button class="btn btn-primary" type="submit" data-busy="Opslaan…">{{ "Voorstel opslaan en activeren" if kind == "propose" else "Geteste strategie opslaan en activeren" }}</button>
+        <a class="btn" href="/strategy?id={{ strategy_id }}">Verwerpen</a>
+      </div>
+      <p class="form-help">Opslaan vervangt de regels van strategie {{ strategy_id }} ('{{ strategy.name }}'), meteen actief op {{ scope_nl }}{% if mode == "live" %}, met echt geld{% endif %}. De huidige regels blijven bewaard als vorige strategie.</p>
+    </form>
+    {% elif not proposal_diff %}
+    <p class="small muted mt-4">Gelijk aan de actieve strategie: opslaan is niet nodig. <a href="/strategy?id={{ strategy_id }}">Terug naar de actieve strategie</a></p>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if assistant_available %}
+  <section class="card" id="claude" aria-labelledby="claude-title">
+    {{ ui.card_header("Vraag Claude om een strategie", 2, id="claude-title") }}
+    <p class="card-desc">Beschrijf wat je wilt. Claude maakt er een complete strategie van, legt uit waarom en test hem meteen op het verleden. Je kiest daarna zelf of je hem opslaat.</p>
+    {% if claude_error %}{{ ui.notice("error", claude_error, live=true) }}{% endif %}
+    <form method="post" action="/strategy">
+      <input type="hidden" name="strategy_id" value="{{ strategy_id }}">
+      <label class="field-label" for="claude-description">Wat wil je?</label>
+      <textarea id="claude-description" name="description" rows="5" required minlength="5" maxlength="4000" placeholder="Bijvoorbeeld: koop ETH als de MACD boven de signaallijn kruist en de koers boven de 200 EMA zit. Verkoop bij 8% winst of 4% verlies.">{{ description or "" }}</textarea>
+      <div class="actions mt-3">
+        <button class="btn btn-primary" type="submit" name="action" value="propose" data-busy="Claude denkt na… (kan ~30 s duren)">Voorstel maken</button>
+        <label class="inline-field" for="claude-limit">Test op <input id="claude-limit" class="input-xs" type="number" name="limit" value="{{ limit }}" min="50" max="1440"> candles</label>
+      </div>
+    </form>
+    <p class="form-help">Gebruikt {{ assistant_model }} en telt mee voor het maandbudget.</p>
+  </section>
+  {% endif %}
+
+  <section class="card" id="editor" aria-labelledby="editor-title">
+    {{ ui.card_header("Zelf bewerken en testen", 2, id="editor-title") }}
+    {% if not assistant_available %}<p class="card-desc">Voorstellen via Claude staan uit: er is geen Claude-sleutel (<span class="mono">ANTHROPIC_API_KEY</span>). Je kunt de strategie hier zelf bewerken, testen en opslaan.</p>{% endif %}
+    {% if claude_error and not assistant_available %}{{ ui.notice("error", claude_error, live=true) }}{% endif %}
+    <details class="advanced strategy-editor" {% if not assistant_available or errors or error_title or proposal or kind == "invalid" %}open{% endif %}>
+      <summary>Strategie als JSON</summary>
+      <form method="post" action="/strategy" id="json-form">
+        <input type="hidden" name="strategy_id" value="{{ strategy_id }}">
+        <input type="hidden" name="base_version" value="{{ version }}">
+        <label class="field-label" for="strategy-json">Strategie (JSON)</label>
+        <textarea id="strategy-json" class="code" name="strategy_json" spellcheck="false" maxlength="100000" aria-describedby="{% if errors or error_title %}json-errors {% endif %}json-help"{% if errors %} aria-invalid="true"{% endif %}>{{ strategy_json }}</textarea>
+        {% if errors or (error_title and kind is not none) %}
+        <div class="strategy-errors" id="json-errors">
+          <p class="field-error m-0">{{ error_title or "Ongeldige strategie:" }}</p>
+          {% if errors %}
+          <ul>
+            {% for e in errors %}<li><strong>{{ e.where }}</strong>{% if e.path %} <span class="mono">{{ e.path }}</span>{% endif %}: {{ e.message }}</li>{% endfor %}
+          </ul>
+          {% endif %}
+          {% if json_context %}
+          <pre class="json-context" aria-label="De JSON rond de fout">{% for l in json_context %}<span class="{{ 'here' if l.here else '' }}">{{ "%4d"|format(l.n) }}  {{ l.text }}</span>
+{% if l.here %}<span class="caret">{{ " " * (l.column + 5) }}^ hier</span>
+{% endif %}{% endfor %}</pre>
+          {% endif %}
+        </div>
+        {% endif %}
+        <p class="form-help" id="json-help">Testen kan altijd en verandert niets. Opslaan vervangt de regels van strategie {{ strategy_id }} ('{{ strategy.name }}'), meteen actief op {{ scope_nl }}. Het veld <span class="mono">market</span> bepaalt alleen op welke markt de backtest draait; op welke markten de strategie handelt, stel je in bij <a href="#strategieen">Strategieën</a>.</p>
+        <div class="strategy-test-controls">
+          <label class="inline-field" for="test-limit">Test op <input id="test-limit" class="input-xs" type="number" name="limit" value="{{ limit }}" min="50" max="1440"> candles</label>
+          <label class="inline-field" for="test-market">op markt
+            <select id="test-market" name="market">
+              <option value="">uit de JSON</option>
+              {% for m in settings.markets %}<option value="{{ m }}"{% if test_market == m %} selected{% endif %}>{{ m }}</option>{% endfor %}
+            </select>
+          </label>
+        </div>
+        <div class="actions mt-3">
+          <button class="btn btn-primary" type="submit" name="action" value="backtest" data-busy="Testen…">Testen</button>
+          <button class="btn" type="submit" name="action" value="save" data-confirm="{{ editor_confirm }}" data-busy="Opslaan…">Opslaan zonder test</button>
+        </div>
+      </form>
+      <form method="post" action="/strategy" class="strategy-reset" data-confirm="{{ reset_confirm }}">
+        <input type="hidden" name="strategy_id" value="{{ strategy_id }}">
+        <input type="hidden" name="strategy_json" value="">
+        <button class="btn btn-danger btn-sm" type="submit" name="action" value="reset" data-busy="Herstellen…">Standaardstrategie herstellen</button>
+        <span class="small muted">Zet de meegeleverde strategie terug, inclusief nieuwe standaardregels na een update.</span>
+      </form>
+      <details class="advanced">
+        <summary>Uitleg van de velden</summary>
+        <dl class="kv small">
+          <dt>Indicatoren</dt><dd><code>sma</code>, <code>ema</code>, <code>rsi</code>, <code>macd</code> (series <code>id</code>, <code>id_signal</code>, <code>id_hist</code>), <code>bollinger</code> (<code>id_upper</code>, <code>id_middle</code>, <code>id_lower</code>), <code>drawdown</code> (% onder de hoogste koers van <code>period</code> candles; 168 = 7 dagen op uurkaarsen), <code>fibonacci</code> (retracement van de laatste swing in <code>period</code> candles: <code>id</code> = % van de swing teruggelopen, 38,2/50/61,8 zijn de klassieke niveaus; <code>id_up</code> 1 = opwaartse swing, koers valt terug naar steun; <code>id_382</code>, <code>id_500</code>, <code>id_618</code> de niveaukoersen; <code>id_near</code> % afstand tot het dichtstbijzijnde niveau; <code>id_high</code>, <code>id_low</code> de swing), <code>ema_support</code> (EMA als dynamische steun: <code>id</code> = % dat de koers boven de EMA staat, <code>id_ema</code> de EMA, <code>id_bounce</code> 1 als de koers deze candle de EMA raakte binnen <code>tolerance_pct</code> en erboven sloot)</dd>
+          <dt>Vergelijkingen</dt><dd><code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> <code>crosses_above</code> <code>crosses_below</code> <code>rising</code> <code>falling</code> <span class="muted">(bij rising/falling is <code>right</code> het aantal candles terug)</span>; <code>"soft": true</code> maakt een voorwaarde een zacht filter</dd>
+          <dt>Koersreeksen</dt><dd><code>open</code>, <code>high</code>, <code>low</code>, <code>close</code>, <code>volume</code></dd>
+          <dt>Regels</dt><dd>Alle koopcondities moeten tegelijk waar zijn; hetzelfde geldt voor de verkoopcondities. <code>stop_loss_pct</code>, <code>take_profit_pct</code> en <code>trailing_stop_pct</code> zijn percentages en optioneel; <code>trailing_start_pct</code> laat de trailing stop pas meelopen zodra de winst zo groot is geweest.</dd>
+          <dt>Markt</dt><dd><code>market</code> is alleen de markt voor de backtest. Op welke markten deze strategie handelt, stel je in bij <a href="#strategieen">Strategieën</a> (nu: {{ scope_nl }}).</dd>
+          <dt>Omschrijving</dt><dd><code>description</code> is vrije tekst voor jezelf en Claude; de bot handelt alleen op de regels.</dd>
+        </dl>
+      </details>
+    </details>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}<script src="/static/strategy.js?v={{ asset_version }}"></script>{% endblock %}

@@ -1,0 +1,517 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% macro positions_table(positions, region) -%}
+    {% call ui.table_wrap(region) %}
+    <table class="table-stack positions">
+      <thead><tr><th scope="col">Markt</th><th scope="col">Geopend</th><th scope="col" class="num">Hoeveelheid</th><th scope="col" class="num">Instap</th><th scope="col" class="num">Nu</th><th scope="col" class="num">Resultaat (netto)</th><th scope="col" class="num">Stop-loss</th><th scope="col" class="num">Take-profit</th></tr></thead>
+      <tbody>
+      {% for v in positions %}{% set p = v.p %}
+      <tr>
+        <td class="nowrap"><strong>{{ p.market }}</strong></td>
+        <td class="nowrap">{{ p.opened_at|dt }}</td>
+        <td class="num">{{ p.amount|amount }}</td>
+        <td class="num"><span class="cell">{{ p.entry_price|price_eur }}<span class="sub">{{ p.entry_quote|eur }} ingelegd</span></span></td>
+        <td class="num"><span class="cell">{% if v.price %}{{ v.price|price_eur }}{% if v.value_eur is not none %}<span class="sub">{{ v.value_eur|eur }} waard</span>{% endif %}{% else %}<span class="muted">nog niet bekend</span>{% endif %}</span></td>
+        <td class="num {{ v.pnl_eur|pnl_class if v.pnl_eur is not none else '' }}"><span class="cell">{% if v.pnl_eur is not none %}{{ v.pnl_eur|eur(2, true) }}<span class="sub {{ v.pnl_pct|pnl_class(1) }}">{{ v.pnl_pct|pct }}</span>{% else %}–{% endif %}</span></td>
+        <td class="num"><span class="cell">{% if p.stop_price %}{{ p.stop_price|price_eur }}{% if v.stop_gap_pct is not none %}<span class="sub">{% if v.stop_gap_pct > 0 %}{{ v.stop_gap_pct|pct(1, false) }} onder de koers{% else %}koers op of onder de stop{% endif %}</span>{% endif %}{% else %}<span class="neg">geen</span>{% endif %}</span></td>
+        <td class="num"><span class="cell">{% if p.take_profit_price %}{{ p.take_profit_price|price_eur }}{% if v.tp_gap_pct is not none and v.tp_gap_pct > 0 %}<span class="sub">{{ v.tp_gap_pct|pct(1, false) }} boven de koers</span>{% endif %}{% else %}<span class="muted">geen</span>{% endif %}</span></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endcall %}
+{%- endmacro %}
+{% block title %}Crypie · Handelen{% endblock %}
+{% block content %}
+{%- set h = health -%}
+{%- set live = status.mode == "live" -%}
+{%- set mode = modes_nl.get(status.mode, modes_nl.paper) -%}
+{%- set live_prefix = "LIVE · echt geld: " if live else "" -%}
+
+{#- The action of a decision, whether it went through, and the one-line summary. -#}
+{% macro decision_line(v) -%}
+<span class="pill {{ v.d.action|action_pill }}">{{ v.d.action|nl }}</span>
+{%- if v.d.executed %} <span class="pill">uitgevoerd</span>{% endif %}
+{%- if v.d.blocked_by %} <span class="pill pill-orange">Geblokkeerd</span>{% endif %}
+{%- if v.summary %} <span class="decision-summary"><span aria-hidden="true">· </span>{{ v.summary }}</span>{% endif %}
+{%- endmacro %}
+
+{#- News and who decided, in one line. -#}
+{% macro news_line(v) -%}
+{%- set d = v.d -%}
+<p class="small decision-news">
+  <span class="muted">Nieuws:</span>
+  {% if d.news_label %}<span class="pill {{ d.news_label|sentiment_pill }}">{{ d.news_label }}</span>{% if v.news_score %} <span class="muted">score {{ v.news_score }}</span>{% endif %}{% if v.news_detail %} <span class="muted">· {{ v.news_detail }}</span>{% endif %}{% else %}<span class="muted">–</span>{% endif %}
+  <span class="muted"> · Besloten door:</span> {{ d.source|nl }}{% if d.confidence is not none %} ({{ (d.confidence * 100)|num(0) }}% zeker){% endif %}
+</p>
+{%- endmacro %}
+
+{#- A proposal of an evaluation: its backtest, what it changes (or changed) and the buttons to
+    apply it or to put the previous strategy back. level is the heading level of the diff. -#}
+{% macro proposal_body(e, level) -%}
+{%- set pb = e.proposal_backtest if e.proposal_backtest is mapping else {} -%}
+{%- set proposed = pb.get("proposed") if pb.get("proposed") is mapping else none -%}
+{% if proposed %}
+<div class="stats mt-3">
+  {{ ui.stat("Backtest voorstel", proposed.return_pct|pct, proposed.trades ~ " trades · terugval " ~ proposed.max_drawdown_pct|pct(1, false), proposed.return_pct|pnl_class(1)) }}
+  {% if pb.get("current") is mapping %}{{ ui.stat("Vorige strategie" if e.applied else "Huidige strategie", pb.current.return_pct|pct, pb.current.trades ~ " trades · terugval " ~ pb.current.max_drawdown_pct|pct(1, false), pb.current.return_pct|pnl_class(1)) }}{% endif %}
+</div>
+{% set live_pct = proposed.get("live_buy_signal_pct") %}
+<p class="form-help">Backtest met oefengeld op de recente candles: kosten meegerekend, slippage niet.{% if live_pct is not none %} Live gaf het voorstel op {{ live_pct|pct(1, false) }} van de candles een koopsignaal{% if live_pct > 20 %} <span class="neg">(erg vaak: bijna elke cyclus een Claude-aanroep)</span>{% endif %}.{% endif %}</p>
+{% elif pb.get("error") %}
+<p class="small muted mt-3">De backtest van dit voorstel lukte niet.</p>
+{% endif %}
+{% if not e.applied %}
+  {{ ui.strategy_diff(e.diff, "Wat er verandert als je dit voorstel toepast", level, outdated="De regels veranderen, maar de omschrijving niet: na het toepassen beschrijft de omschrijving nog de oude regels. Pas hem daarna aan op Strategie, of laat Claude een nieuw voorstel maken.") }}
+  {% if e.problems %}
+  <div class="mt-4">{{ ui.notice("warn", "Dit voorstel kan niet worden toegepast: " ~ e.problems|join("; ") ~ ".", live=false) }}</div>
+  {% elif e.proposal_name %}
+  <form method="post" action="/trading/action" class="mt-4" data-confirm="{{ live_prefix }}Strategie '{{ e.proposal_name }}' activeren in plaats van '{{ e.target_name }}'? Open posities houden hun huidige stop-loss en take-profit.">
+    <button class="btn btn-primary" type="submit" name="action" value="apply:{{ e.id }}" data-busy="Toepassen…" aria-describedby="apply-help-{{ e.id }}">Voorstel toepassen als actieve strategie</button>
+  </form>
+  <p class="form-help" id="apply-help-{{ e.id }}">{% if e.several %}Het voorstel vervangt de regels van strategie {{ e.target_id }} ('{{ e.target_name }}'). {% endif %}Na het toepassen kun je de vorige strategie hier terugzetten. Open posities houden hun huidige stop-loss en take-profit; alleen een trailing stop volgt daarna de nieuwe strategie.</p>
+  {% endif %}
+{% else %}
+  {% if e.diff is not none %}
+  {#- Like ui.strategy_diff, with 'Vóór' and 'Na' instead of 'Nu' and 'Voorstel'. -#}
+  <h{{ level }} class="subhead mt-4">Wat er veranderde{% if e.applied_at %} op {{ e.applied_at|dt }}{% endif %}</h{{ level }}>
+  {% if e.diff %}
+  <div class="table-wrap strategy-diff mt-2" data-region="Wat er veranderde">
+  <table class="small">
+    <tr><th scope="col">Onderdeel</th><th scope="col">Vóór</th><th scope="col">Na</th></tr>
+    {% for d in e.diff %}<tr><td class="nowrap"><strong>{{ d.label }}</strong></td><td class="muted">{{ d.old }}</td><td>{{ d.new }}</td></tr>{% endfor %}
+  </table>
+  </div>
+  {% else %}
+  <p class="small muted mt-2">Geen verschil: het voorstel was gelijk aan de strategie die toen actief was.</p>
+  {% endif %}
+  {% if e.reverted_at %}<p class="small muted mt-3">Op {{ e.reverted_at|dt }} teruggezet naar '{{ e.previous_name }}'.</p>{% endif %}
+  {% else %}
+  <p class="small muted mt-3">Wat dit voorstel veranderde, is niet bewaard: het is toegepast voordat Crypie de vorige strategie bijhield.</p>
+  {% endif %}
+  {% if e.can_revert %}
+  <form method="post" action="/trading/action" class="mt-4" data-confirm="{{ live_prefix }}De vorige strategie '{{ e.previous_name }}' terugzetten in plaats van '{{ e.proposal_name }}'? Open posities houden hun huidige stop-loss en take-profit.">
+    <button class="btn" type="submit" name="action" value="revert:{{ e.id }}" data-busy="Terugzetten…">Vorige strategie terugzetten</button>
+  </form>
+  <p class="form-help">Zet '{{ e.previous_name }}' terug als actieve strategie.</p>
+  {% elif e.revert_blocked %}
+  <p class="small muted mt-3">De strategie is na het toepassen nog gewijzigd, dus terugzetten kan hier niet meer. Op de <a href="/strategy">strategiepagina</a> sla je elke strategie op.</p>
+  {% endif %}
+{% endif %}
+{%- endmacro %}
+
+<div class="page-header">
+  <h1>Handelen</h1>
+  <p class="subtitle">Wat de bot doet en waarom, en waar je hem bedient. De bot handelt nu <strong class="mode-text {{ 'is-live' if live else 'is-paper' }}">{% if live %}live, met echt geld op Bitvavo{% else %}in oefenmodus, met fictief geld{% endif %}</strong>.</p>
+  {{ ui.glossary() }}
+</div>
+
+<div class="stack">
+  {{ ui.unprotected_notice(status.unprotected_positions) }}
+
+  {#- Status and controls. trading.js checks /api/status while the tab is open and says when
+      the status changed (data-* below is what this page shows). -#}
+  <section class="hero trading-hero" aria-labelledby="status-title" data-status-url="/api/status" data-level="{{ h.level }}" data-label="{{ h.label }}" data-last-cycle="{{ h.last_cycle.isoformat() if h.last_cycle else '' }}" data-exits-ok="{{ 'true' if h.exits_ok else 'false' }}">
+    <div class="hero-row">
+      <div class="trading-status">
+        <h2 class="big-label" id="status-title">Status van de bot</h2>
+        {{ ui.status(h) }}
+        {% if not h.claude_available %}<p class="small"><a href="/settings#trading">Kies wat de bot zonder Claude doet</a></p>{% endif %}
+        <p class="status-update" data-status-note role="status"></p>
+      </div>
+      <div class="trading-controls">
+        {{ ui.kill_switch(status.paused, next="/trading", beside_status=(h and h.level == "paused")) }}
+        {% if not h.enabled %}<p class="kill-switch-help">Automatisch handelen staat uit, dus er draaien geen geplande cycli. De noodstop blokkeert daarnaast elke aankoop: ook in een cyclus die je zelf start en bij een handmatige order.</p>{% endif %}
+        <form method="post" action="/trading/action" data-confirm-if-live="LIVE · echt geld: nu een cyclus draaien? De bot kan daarbij direct kopen of verkopen met echt geld op Bitvavo.">
+          <button class="btn" type="submit" name="action" value="cycle" data-busy="Cyclus loopt…">Nu een cyclus draaien</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  {#- A proposal that waits for the owner, or the one just applied (with the way back). -#}
+  {% if featured %}
+  <section class="card proposal-card" id="voorstel" aria-labelledby="voorstel-title">
+    {{ ui.card_header(("Voorstel van Claude: " if not featured.applied else "Net toegepast: ") ~ featured.proposal_name, 2, meta=("uit de evaluatie van " ~ featured.created_at|dt), id="voorstel-title") }}
+    {% if not featured.applied %}<p class="card-desc">Claude stelt een andere strategie voor. Bekijk wat er verandert en beslis zelf; er verandert niets tot je het voorstel toepast. <a href="#evaluatie-{{ featured.id }}">Lees de evaluatie</a></p>{% endif %}
+    {{ proposal_body(featured, 3) }}
+  </section>
+  {% endif %}
+
+  <section class="card" id="laatste-cyclus" aria-labelledby="laatste-cyclus-title">
+    {{ ui.card_header("Laatste cyclus per markt", 2, meta=(("laatste cyclus " ~ h.last_cycle|ago) if h.last_cycle else none), id="laatste-cyclus-title") }}
+    {% for w in status.watch %}
+    <div class="dip-watch">
+      <p><span class="pill pill-orange"><span class="dot" aria-hidden="true"></span>Dipbewaking {{ w.market }}</span> <span class="small muted">sinds {{ w.since|dt }} · laatste controle {{ w.last_check|ago }}</span></p>
+      <p class="small">{{ w.dip }}</p>
+      <p class="small muted">Wacht op: {{ w.waiting_for }}. Zodra dat gebeurt, draait de bot meteen een cyclus{% if h.claude_available %} en beslist Claude of hij koopt{% elif settings.claude_unavailable_mode == "indicators" %} en koopt hij op het signaal van de strategie (zonder Claude){% else %}; zonder Claude koopt hij dan niet{% endif %}.</p>
+    </div>
+    {% endfor %}
+    {% for r in status.revisit %}
+    <div class="dip-watch">
+      <p><span class="pill pill-orange"><span class="dot" aria-hidden="true"></span>Vervolg {{ r.market }}</span> <span class="small muted">Claude wachtte om {{ r.since|dt }} op de draai (koers {{ r.price|price_eur }})</span></p>
+      <p class="small muted">Tot {{ r.until|dt }} legt de bot deze markt bij elke cyclus opnieuw aan Claude voor zodra de draai doorzet, ook als de dipvoorwaarde dan niet meer geldt, zolang de koers niet boven {{ r.max_price|price_eur }} staat.</p>
+    </div>
+    {% endfor %}
+    {% if unassigned_markets %}{{ ui.notice("warn", "Geen strategie handelt op " ~ unassigned_markets|join(", ") ~ ": daar koopt de bot niets. Wijs de markt toe op de strategiepagina.", live=false) }}{% endif %}
+    {% if last_cycle or failed_markets %}
+    <div class="grid-2">
+      {#- UX-53: a market whose last cycle failed (a typo, a delisted coin, Bitvavo refusing it)
+          gets its own card with the reason, instead of disappearing from the list. -#}
+      {% for f in failed_markets %}
+      <article class="cycle cycle-failed" aria-labelledby="cycle-failed-{{ loop.index }}">
+        <div class="cycle-head">
+          <h3 class="cycle-market" id="cycle-failed-{{ loop.index }}">{{ f.market }}</h3>
+          {% if f.at %}<span class="small muted">{{ f.at|dt }}</span>{% endif %}
+        </div>
+        <p class="decision-line"><span class="pill pill-red">Mislukt</span> <span class="decision-summary"><span aria-hidden="true">· </span>de laatste cyclus kon deze markt niet verwerken</span></p>
+        <p class="small">Reden: {{ f.reason }}.</p>
+        <p class="small muted">Klopt de markt niet, pas hem dan aan bij <a href="/settings#row-markets">Instellingen › Handelen</a>; de andere markten draaien gewoon door.</p>
+      </article>
+      {% endfor %}
+      {% for v in last_cycle %}{% set d = v.d %}
+      <article class="cycle" aria-labelledby="cycle-{{ d.id }}">
+        <div class="cycle-head">
+          <h3 class="cycle-market" id="cycle-{{ d.id }}">{{ d.market }}</h3>
+          <span class="small muted">{{ d.price|price_eur }} · {{ d.created_at|dt }}{% if strategies|length > 1 or d.market not in strategy_by_market %} · {% if d.market in strategy_by_market %}strategie '{{ strategy_by_market[d.market] }}'{% else %}<span class="neg">geen strategie</span>{% endif %}{% endif %}</span>
+        </div>
+        <p class="decision-line">{{ decision_line(v) }}</p>
+        {% if v.has_checks %}{{ ui.checks(v.checklist, legend=loop.first) }}{% endif %}
+        {% for lv in levels.get(d.id, []) %}
+        <p class="small muted mt-2"><span class="pill {{ 'pill-green' if (lv.in_golden_pocket or lv.bounce) else '' }}">{{ "Fibonacci" if lv.type == "fibonacci" else "EMA-steun" }}</span> {{ lv.text_nl }}</p>
+        {% endfor %}
+        {{ news_line(v) }}
+        {% if v.explanation %}<p class="small decision-why">{{ v.explanation }}</p>{% endif %}
+        {% if d.blocked_by %}<p class="small neg">Niet uitgevoerd: {{ d.blocked_by|refusal }}</p>{% endif %}
+        {% if d.market in markets %}
+        <form method="post" action="/trading/action" class="inline mt-2" data-confirm-if-live="LIVE · echt geld: Claude nu over {{ d.market }} laten beoordelen? Bij een koopsignaal kan de bot daarbij direct kopen of verkopen met echt geld op Bitvavo.">
+          <button class="btn btn-tint btn-sm" type="submit" name="action" value="consult:{{ d.market }}" data-busy="Claude beoordeelt…"{% if not h.claude_available %} disabled title="{{ 'Claude kan niet beoordelen: de Claude-sleutel ontbreekt.' }}"{% endif %}>Claude laten beoordelen</button>
+        </form>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    {{ ui.empty("Nog geen cyclus gedraaid", ("De eerste cyclus start kort na het opstarten. " if h.enabled else "Automatisch handelen staat uit. ") ~ "Je kunt er ook nu een starten met 'Nu een cyclus draaien' bovenaan.", symbol="clock") }}
+    {% endif %}
+  </section>
+
+  <section class="card" id="open-posities" aria-labelledby="open-posities-title">
+    {{ ui.card_header("Open posities", 2, meta=(("koersen van " ~ prices_at|dt) if prices_at and positions else none), id="open-posities-title") }}
+    {% if positions %}
+{{ positions_table(positions, "Open posities") }}
+    <p class="form-help">Netto: na de kosten van de aankoop en van een verkoop nu ({{ status.fee_pct|num(2) }}% per order). Onder de stop-loss verkoopt de bot; een trailing stop schuift mee omhoog met de hoogste koers sinds de aankoop.</p>
+    {% else %}
+    {{ ui.empty("Geen open posities" ~ (" in live" if live else ""), "Zodra de bot koopt, zie je hier de positie met haar resultaat, stop-loss en take-profit.", symbol="wallet") }}
+    {% endif %}
+    {#- UX-01: positions of the other mode are still guarded by the exits; show them apart. -#}
+    {% if other_positions %}
+    {% set n = other_positions|length %}
+    <div class="other-mode mt-5" id="andere-modus">
+      <h3 class="subhead">Ook open in {{ "Oefenmodus" if live else "Live" }} <span class="pill {{ 'pill-paper' if live else 'pill-red' }}">{{ "fictief geld" if live else "echt geld" }}</span></h3>
+      <p class="form-help">{% if live %}{{ "Deze oefenpositie wordt" if n == 1 else "Deze oefenposities worden" }} nog bewaakt door stop-loss, trailing stop en take-profit, met fictief geld: {{ "ze staat" if n == 1 else "ze staan" }} niet op Bitvavo en {{ "telt" if n == 1 else "tellen" }} niet mee in je live portefeuille of limieten. Sluiten kan met een reset in <a href="/settings#oefenportefeuille">Instellingen › Oefenportefeuille</a>.{% else %}{{ "Deze live positie wordt" if n == 1 else "Deze live posities worden" }} met echt geld op Bitvavo bewaakt door stop-loss, trailing stop en take-profit, ook nu je in Oefenmodus zit. Zelf verkopen kan in Live of op Bitvavo.{% endif %}</p>
+{{ positions_table(other_positions, "Open posities in " ~ ("Oefenmodus" if live else "Live")) }}
+    </div>
+    {% endif %}
+  </section>
+
+  {#- Limits as they stand now; agenda, trend and the full list of limits folded away. -#}
+  {%- set rn = risk_now -%}
+  {%- set agenda = status.events -%}
+  <section class="card" id="context" aria-labelledby="context-title">
+    {{ ui.card_header("Context en limieten", 2, href="/settings#limits", link="Limieten aanpassen", id="context-title") }}
+    <div class="limit-meters">
+      <div class="stat limit">
+        <div class="label" id="meter-exposure">In crypto</div>
+        {% if rn.exposure_pct is not none %}
+        {%- set used = rn.exposure_pct / rn.max_exposure_pct * 100 if rn.max_exposure_pct else 100 -%}
+        <div class="value">{{ rn.exposure_pct|pct(0, false) }} <span class="metric-sub">van max. {{ rn.max_exposure_pct|pct_limit }}</span></div>
+        <progress class="meter{{ ' is-bad' if rn.exposure_limit_reached else (' is-warn' if used >= 80 else '') }}" max="{{ rn.max_exposure_pct }}" value="{{ [rn.exposure_pct, rn.max_exposure_pct]|min }}" aria-labelledby="meter-exposure">{{ rn.exposure_pct|pct(0, false) }}</progress>
+        <div class="sub">{{ rn.exposure_eur|eur(0) }} van {{ rn.portfolio_eur|eur(0) }}{% if rn.exposure_limit_reached %} · <span class="neg">limiet bereikt</span>{% endif %}</div>
+        {% else %}
+        <div class="value">–</div>
+        <div class="sub">Nog niet bekend: de portefeuille is nog niet gewaardeerd.</div>
+        {% endif %}
+      </div>
+      <div class="stat limit">
+        <div class="label" id="meter-loss">Resultaat vandaag</div>
+        {% if rn.day_result_pct is not none %}
+        {%- set loss = [0 - rn.day_result_pct, 0]|max -%}
+        <div class="value {{ rn.day_result_pct|pnl_class }}">{{ rn.day_result_pct|pct(2) }} <span class="metric-sub">grens -{{ rn.daily_loss_limit_pct|pct_limit }}</span></div>
+        <progress class="meter{{ ' is-bad' if rn.loss_limit_reached else (' is-warn' if loss >= rn.daily_loss_limit_pct / 2 else '') }}" max="{{ rn.daily_loss_limit_pct }}" value="{{ [loss, rn.daily_loss_limit_pct]|min }}" aria-labelledby="meter-loss">{{ loss|pct(2, false) }} verlies</progress>
+        {% else %}
+        <div class="value {{ rn.day_result_eur|pnl_class }}">{{ rn.day_result_eur|eur(2, true) }}</div>
+        {% endif %}
+        <div class="sub">{{ rn.realized_today_eur|eur(2, true) }} gerealiseerd{% if rn.unrealized_eur < 0 %}, {{ rn.unrealized_eur|eur }} open verlies{% endif %}{% if rn.loss_limit_reached %} · <span class="neg">limiet bereikt</span>{% endif %}</div>
+      </div>
+      <div class="stat limit">
+        <div class="label" id="meter-orders">Orders vandaag</div>
+        <div class="value">{{ rn.orders_today }} <span class="metric-sub">maximum {{ rn.max_orders_per_day }}</span></div>
+        <progress class="meter{{ ' is-bad' if rn.orders_limit_reached else (' is-warn' if rn.max_orders_per_day and rn.orders_today / rn.max_orders_per_day >= 0.8 else '') }}" max="{{ [rn.max_orders_per_day, 1]|max }}" value="{{ [rn.orders_today, rn.max_orders_per_day]|min if rn.max_orders_per_day else 1 }}" aria-labelledby="meter-orders">{{ rn.orders_today }} orders, maximum {{ rn.max_orders_per_day }}</progress>
+        <div class="sub">{% if rn.max_orders_per_day <= 0 %}Maximum aantal orders per dag staat op 0 · <span class="neg">kopen kan niet</span>{% else %}Maximum aantal orders per dag{% if rn.orders_limit_reached %} · <span class="neg">bereikt; verkopen kan wel en telt mee</span>{% endif %}{% endif %}</div>
+      </div>
+    </div>
+    <p class="form-help">{% if rn.as_of %}Stand van {{ rn.as_of|dt }}. {% endif %}De dagtellers beginnen opnieuw om {{ rn.resets_at|dt }}. Deze grenzen worden in code afgedwongen; Claude kan ze niet omzeilen.</p>
+
+    <details class="context-more"{% if agenda.active_event or agenda.shocks or agenda.etf_outflows %} open{% endif %}>
+      <summary>Agenda, trend en alle limieten</summary>
+      <div class="context-grid">
+        <section aria-labelledby="limits-title">
+          <h3 class="context-title" id="limits-title">Harde limieten</h3>
+          <dl class="kv">{{ ui.hard_limits(status.limits) }}</dl>
+        </section>
+
+        <section aria-labelledby="agenda-title">
+          <div class="context-head"><h3 class="context-title" id="agenda-title">Agenda en risk-off</h3><a class="card-link" href="/settings#row-event_calendar">Agenda aanpassen{{ ui.icon("chevron", "link-chevron") }}</a></div>
+          {% if not agenda.enabled %}
+          <p class="small muted">Risk-off staat uit: de bot koopt ook rond agendamomenten, na nieuwsschokken en bij ETF-uitstroom.</p>
+          {% elif agenda.active_event %}
+          <p class="small"><span class="pill pill-orange"><span class="dot" aria-hidden="true"></span>Risk-off actief</span> {{ agenda.active_event.label }} om {{ agenda.active_event.at|isodt }}; geen nieuwe aankopen tot {{ agenda.active_event.until|isodt }}.</p>
+          {% else %}
+          <p class="small muted">Geen agendamoment actief. Rond elk moment hieronder koopt de bot niet van {{ agenda.before_min }} min ervoor tot {{ agenda.after_min }} min erna.{% if agenda.shock_mode == "claude" %} Na een nieuwsschok (impact groot, sterk negatief) beoordeelt Claude of het een nieuwe schok is of een herhaling; bij een nieuwe schok koopt de bot minstens {{ agenda.shock_min_hours|num(2)|replace(",00", "") }} en hooguit {{ agenda.shock_max_hours|num(2)|replace(",00", "") }} uur niet in de geraakte coins.{% elif agenda.shock_pause_hours %} Na een nieuwsschok (impact groot, sterk negatief) koopt de bot {{ agenda.shock_pause_hours }} uur niet in de geraakte coins.{% endif %}{% if agenda.etf_outflow_mode == "strong" %} Bij sterke uitstroom uit de Amerikaanse spot-ETF's van een coin (laatste 5 handelsdagen) koopt de bot die coin niet tot de stroom keert.{% elif agenda.etf_outflow_mode == "any" %} Bij uitstroom uit de Amerikaanse spot-ETF's van een coin (laatste 5 handelsdagen) koopt de bot die coin niet tot de stroom keert.{% endif %}</p>
+          {% endif %}
+          {% for market, ro in agenda.etf_outflows.items() %}
+          <p class="small"><span class="pill pill-orange"><span class="dot" aria-hidden="true"></span>ETF-uitstroom {{ market }}</span> {{ ro.reason_nl }}.</p>
+          {% endfor %}
+          {% for market, ro in agenda.shocks.items() %}
+          <p class="small"><span class="pill pill-red"><span class="dot" aria-hidden="true"></span>Schok-pauze {{ market }}</span> {{ ro.label }}; {% if ro.mode == "claude" %}geen nieuwe aankopen, volgende beoordeling {{ ro.next_recheck_at|isodt }}, uiterlijk {{ ro.max_until|isodt }}.{% else %}geen nieuwe aankopen tot {{ ro.until|isodt }}.{% endif %}</p>
+          {% endfor %}
+          {% if agenda.upcoming %}
+          <dl class="kv mt-3">
+            {% for e in agenda.upcoming %}<dt class="nowrap">{{ e.at|isodt }}</dt><dd>{{ e.label }}</dd>{% endfor %}
+          </dl>
+          {% else %}
+          <p class="small muted">Geen komende momenten in de agenda.</p>
+          {% endif %}
+          <h4 class="context-title mt-3" id="shock-history-title">Nieuwsschokken, laatste 30 dagen</h4>
+          {% if agenda.shock_history %}
+          {% call ui.table_wrap("Nieuwsschokken") %}
+          <table class="small" aria-labelledby="shock-history-title">
+            <thead><tr><th scope="col">Vanaf</th><th scope="col">Gebeurtenis</th><th scope="col" class="num">Duur</th><th scope="col">Einde</th></tr></thead>
+            <tbody>
+            {% for s in agenda.shock_history %}
+            <tr>
+              <td class="nowrap">{{ s.started_at|isodt }}</td>
+              <td><strong>{{ s.event_key }}</strong><span class="sub">{{ s.coins_nl }}{% if s.assessments %} · {{ s.assessments }} {{ "beoordeling" if s.assessments == 1 else "beoordelingen" }}{% endif %}</span></td>
+              <td class="num nowrap">{{ s.duration_nl }}</td>
+              <td>{% if s.active %}<span class="pill pill-red"><span class="dot" aria-hidden="true"></span>loopt nog</span>{% else %}{{ s.ended_nl }}{% endif %}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          {% endcall %}
+          {% else %}
+          <p class="small muted">Geen schok-pauzes in de laatste 30 dagen. Beoordelingen zonder pauze (herhaling van oud nieuws) staan in het journaal.</p>
+          {% endif %}
+        </section>
+
+        <section class="span-all" id="blocked-review" aria-labelledby="blocked-review-title">
+          {% set br = blocked_review %}
+          <div class="context-head"><h3 class="context-title" id="blocked-review-title">Geblokkeerde aankopen achteraf</h3><span class="card-meta">laatste {{ blocked_review_days }} dagen</span></div>
+          {% if br.blockades %}
+          {% set s6 = br.summary["6u"] %}{% set s24 = br.summary["24u"] %}
+          <p class="small">Per blokkade de koers bij het eerste tegengehouden koopsignaal en hoeveel de koers daarna bewoog. Een min betekent dat de regel een verlies voorkwam, een plus een gemiste winst.{% if s24.known %} Na 24 uur stond de koers in {{ s24.avoided }} van de {{ s24.known }} {{ "geval" if s24.known == 1 else "gevallen" }} lager, gemiddeld {{ s24.average|pct }}.{% elif s6.known %} Na 6 uur stond de koers in {{ s6.avoided }} van de {{ s6.known }} {{ "geval" if s6.known == 1 else "gevallen" }} lager, gemiddeld {{ s6.average|pct }}.{% endif %}</p>
+          {% call ui.table_wrap("Geblokkeerde aankopen achteraf") %}
+          <table class="small">
+            <thead><tr><th scope="col">Vanaf</th><th scope="col">Markt</th><th scope="col">Regel</th><th scope="col" class="num">Koers toen</th><th scope="col" class="num">Na 6u</th><th scope="col" class="num">Na 24u</th><th scope="col" class="num">Nu</th></tr></thead>
+            <tbody>
+            {% for b in br.blockades %}
+            <tr>
+              <td class="nowrap">{{ b.since|dt }}<span class="sub">{% if b.count == 1 %}1 signaal{% else %}{{ b.count }}× in {{ b.hours|num(1) }} uur{% endif %}</span></td>
+              <td class="nowrap"><strong>{{ b.market }}</strong></td>
+              <td>{{ b.reason_nl|refusal }}</td>
+              <td class="num">{{ b.price|price_eur }}</td>
+              {% for key in ("6u", "24u", "now") %}{% set m = b.moves[key] %}
+              <td class="num {{ m|pnl_class(1) if m is not none else '' }}">{{ m|pct if m is not none else ("nog niet" if (b.pending and key != "now") else "–") }}</td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          {% endcall %}
+          <p class="small muted">De koersen daarna komen uit het logboek zelf; een streepje betekent dat de bot op dat moment niet draaide.</p>
+          {% else %}
+          <p class="small muted">Geen tegengehouden aankopen. Zodra een regel een koopsignaal tegenhoudt, zie je hier wat die aankoop had gedaan.</p>
+          {% endif %}
+        </section>
+
+        {% if status.trends %}
+        <section class="span-all" aria-labelledby="trend-title">
+          <div class="context-head"><h3 class="context-title" id="trend-title">Lange-termijntrend</h3><span class="card-meta">PlanB-stijl · dagelijks ververst</span></div>
+          {% call ui.table_wrap("Lange-termijntrend") %}
+          <table>
+            <thead><tr><th scope="col">Markt</th><th scope="col" class="num">200-weeks gemiddelde</th><th scope="col" class="num">Koers t.o.v.</th><th scope="col" class="num">Maand-RSI</th><th scope="col">Lange trend</th></tr></thead>
+            <tbody>
+            {% for t in status.trends %}
+            <tr>
+              <td class="nowrap"><strong>{{ t.market }}</strong></td>
+              <td class="num">{% if t.wma200 is not none %}{{ t.wma200|price_eur }}{% else %}<span class="muted">te weinig historie ({{ t.weeks }} weken)</span>{% endif %}</td>
+              <td class="num {{ ('pos' if t.above_wma200 else 'neg') if t.vs_wma200_pct is not none and t.above_wma200 is not none else '' }}">{% if t.vs_wma200_pct is not none %}{{ t.vs_wma200_pct|pct(1) }}{% else %}–{% endif %}</td>
+              <td class="num {{ ('pos' if t.monthly_rsi_above_50 else 'neg') if t.monthly_rsi is not none and t.monthly_rsi_above_50 is not none else '' }}">{% if t.monthly_rsi is not none %}{{ t.monthly_rsi|num(0) }}{% else %}<span class="muted">te weinig maanden ({{ t.months }})</span>{% endif %}</td>
+              <td><span class="pill {{ 'pill-green' if t.regime == 'up' else ('pill-red' if t.regime == 'down' else '') }}">{{ t.regime_nl }}</span></td>
+            </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          {% endcall %}
+          <p class="form-help">Geen koop- of verkoopsignaal, maar het weerbericht voor de bot: boven het 200-weeks gemiddelde met een maand-RSI boven 50 worden dips historisch vaker opgekocht; eronder is Claude terughoudender met het bedrag.</p>
+        </section>
+        {% endif %}
+
+        <section aria-labelledby="cycle-title">
+          <h3 class="context-title" id="cycle-title">Cycli en dipbewaking</h3>
+          <dl class="kv">
+            <dt>Cyclus</dt><dd>{% if h.enabled %}elke {{ status.interval_min }} minuten{% else %}alleen als je er zelf een start{% endif %}</dd>
+            <dt>Dipbewaking</dt><dd>{% if status.watch_interval_min > 0 %}elke {{ status.watch_interval_min }} min zodra een dip is gezien, max. {{ status.watch_max_min }} min{% else %}uit{% endif %}</dd>
+          </dl>
+          <p class="form-help">Per cyclus kijkt de bot per markt naar de strategie en het nieuws. Claude wordt alleen gevraagd als er iets te beslissen is: een koop- of verkoopsignaal, zwaar nieuws, of de draai na een bewaakte dip.</p>
+        </section>
+      </div>
+    </details>
+  </section>
+
+  {%- set perf = status.performance_30d -%}
+  <section class="card" id="gesloten-posities" aria-labelledby="gesloten-title">
+    {{ ui.card_header("Gesloten posities", 2, meta="laatste 30 dagen", href="/journal", link="Naar het journaal", id="gesloten-title") }}
+    {% if closed_positions %}
+    <div class="stats stats-4 mb-4">
+      {{ ui.stat("Netto resultaat", perf.total_pnl_eur|eur, perf.closed_positions ~ (" trade" if perf.closed_positions == 1 else " trades"), perf.total_pnl_eur|pnl_class) }}
+      {% set wins = ((perf.win_rate_pct or 0) * perf.closed_positions / 100)|round|int %}
+      {{ ui.stat("Winnende trades", perf.win_rate_pct|pct(0, false) if perf.win_rate_pct is not none else "–", wins ~ " van " ~ perf.closed_positions ~ " met netto winst") }}
+      {{ ui.stat("Per trade", perf.avg_pnl_pct|pct if perf.avg_pnl_pct is not none else "–", "gemiddeld, netto", perf.avg_pnl_pct|pnl_class(1) if perf.avg_pnl_pct is not none else "") }}
+      {{ ui.stat("Kosten", perf.total_fees_eur|eur, status.fee_pct|num(2) ~ "% per order") }}
+    </div>
+    {% call ui.table_wrap("Gesloten posities") %}
+    <table class="table-stack">
+      <thead><tr><th scope="col">Markt</th><th scope="col">Geopend</th><th scope="col">Gesloten</th><th scope="col" class="num">Instap</th><th scope="col" class="num">Uitstap</th><th scope="col" class="num">Kosten</th><th scope="col" class="num">Netto resultaat</th><th scope="col">Reden</th></tr></thead>
+      <tbody>
+      {% for p in closed_positions %}
+      <tr>
+        <td class="nowrap"><strong>{{ p.market }}</strong></td>
+        <td class="nowrap">{{ p.opened_at|dt }}</td>
+        <td class="nowrap">{{ p.closed_at|dt }}</td>
+        <td class="num">{{ p.entry_price|price_eur }}</td>
+        <td class="num">{{ p.exit_price|price_eur }}</td>
+        <td class="num">{{ (p.fees_eur or 0)|eur }}</td>
+        <td class="num {{ p.pnl_eur|pnl_class }}"><span class="cell">{{ p.pnl_eur|eur(2, true) }}<span class="sub {{ p.pnl_pct|pnl_class(1) }}">{{ p.pnl_pct|pct }}</span></span></td>
+        <td>{{ p.close_reason|close_reason }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endcall %}
+    {% else %}
+    {{ ui.empty("Nog geen gesloten posities", "Afgeronde trades met hun netto resultaat verschijnen hier.", symbol="journal") }}
+    {% endif %}
+    {#- UX-01: this page shows the mode the bot trades in now; the other mode stays reachable. -#}
+    {% if other_mode %}
+    <p class="form-help mt-3">Alleen {{ "live" if live else "oefenmodus" }}. Er {{ "is" if other_mode.count == 1 else "zijn" }} ook {{ other_mode.count }} gesloten {{ "trade" if other_mode.count == 1 else "trades" }} uit {{ "oefenmodus" if live else "live" }}: <a href="/journal?mode={{ other_mode.mode }}&amp;status=closed">bekijken in het journaal</a>.</p>
+    {% endif %}
+  </section>
+
+  {%- set eh = settings.evaluation_interval_hours -%}
+  {%- set every = eh|hours_nl -%}
+  {%- set auto_eval = evaluation_available and settings.trading_enabled and eh > 0 -%}
+  <section class="card" id="evaluaties" aria-labelledby="evaluaties-title">
+    {% call ui.card_header("Evaluaties door Claude", 2, id="evaluaties-title") %}
+    <form method="post" action="/trading/action" class="inline">
+      <button class="btn btn-tint btn-sm" type="submit" name="action" value="evaluate" data-busy="Claude evalueert…"{% if not evaluation_available %} disabled aria-describedby="evaluate-why"{% endif %}>Nu evalueren</button>
+    </form>
+    {% endcall %}
+    {% if not evaluation_available %}
+    <p class="card-desc" id="evaluate-why">Evalueren kan pas met een Claude-sleutel (<span class="mono">ANTHROPIC_API_KEY</span> in de serveromgeving).</p>
+    {% elif auto_eval %}
+    <p class="card-desc">Elke {{ every }} kijkt {{ evaluation_model_nl }} terug op de beslissingen en resultaten{% if next_evaluation %}; de volgende keer is {{ next_evaluation|dt }}{% endif %}. Soms stelt hij een andere strategie voor, met een backtest. Die wordt pas actief als jij hem toepast.</p>
+    {% else %}
+    <p class="card-desc">Automatische evaluaties staan uit ({{ "automatisch handelen staat uit" if not settings.trading_enabled else "het interval is 0" }}). Met 'Nu evalueren' vraag je {{ evaluation_model_nl }} zelf om terug te kijken.</p>
+    {% endif %}
+    {% for e in evaluations %}
+    <article class="card evaluation" id="evaluatie-{{ e.id }}" aria-labelledby="evaluatie-{{ e.id }}-title">
+      <h3 class="evaluation-title" id="evaluatie-{{ e.id }}-title">Evaluatie van {{ e.created_at|dt(true) }}</h3>
+      <p class="small muted mb-3">{{ e.model_nl }} · afgelopen {{ e.period_days }} dagen{% if e.applied %} · <span class="pill">{{ "voorstel teruggezet" if e.reverted_at else "voorstel toegepast" }}</span>{% endif %}</p>
+      <div class="report">{{ e.report_nl|md(4) }}</div>
+      {% if e.proposed_strategy %}
+        {% if featured and featured.id == e.id %}
+        <p class="small mt-3"><a href="#voorstel">Het voorstel '{{ e.proposal_name }}' staat bovenaan deze pagina</a></p>
+        {% else %}
+        <h4 class="subhead evaluation-proposal">Voorstel: {{ e.proposal_name or "geen geldige strategie" }}</h4>
+        {{ proposal_body(e, 5) }}
+        {% endif %}
+      {% endif %}
+    </article>
+    {% else %}
+    {% if not evaluation_available %}
+    {{ ui.empty("Nog geen evaluaties", "Automatische evaluaties staan uit zolang de Claude-sleutel ontbreekt.", symbol="journal") }}
+    {% elif auto_eval %}
+    {{ ui.empty("Nog geen evaluaties", (("De eerste evaluatie volgt " ~ next_evaluation|dt ~ ".") if next_evaluation else ("De eerste evaluatie volgt na " ~ every ~ " handelen.")) ~ " Je kunt ook nu evalueren met 'Nu evalueren'.", symbol="journal") }}
+    {% else %}
+    {{ ui.empty("Nog geen evaluaties", "Met 'Nu evalueren' vraag je Claude om terug te kijken op de beslissingen en resultaten.", symbol="journal") }}
+    {% endif %}
+    {% endfor %}
+  </section>
+
+  {#- The log comes last: it is the longest part of the page, and it is paged. -#}
+  {%- set c = cycles -%}
+  <section class="card" id="cycli" aria-labelledby="cycli-title">
+    {{ ui.card_header("Alle cycli", 2, meta=("laatste " ~ settings.decision_history_days ~ " dagen · " ~ c.total_all ~ (" beslissing" if c.total_all == 1 else " beslissingen")), href="/settings#weergave", link="Bewaartermijn aanpassen", id="cycli-title") }}
+    {% if c.total_all or c.market %}
+    <div class="cycles-filters">
+      <nav class="segmented" aria-label="Welke beslissingen">
+        <a href="{{ c.view_links.important }}"{% if c.view == "important" %} class="active" aria-current="true"{% endif %}>Belangrijk <span class="count">{{ c.total_important }}</span></a>
+        <a href="{{ c.view_links.all }}"{% if c.view == "all" %} class="active" aria-current="true"{% endif %}>Alles <span class="count">{{ c.total_all }}</span></a>
+      </nav>
+      {% if c.market_links|length > 2 %}
+      <nav class="segmented" aria-label="Markt">
+        {% for m in c.market_links %}<a href="{{ m.url }}"{% if m.on %} class="active" aria-current="true"{% endif %}>{{ m.label }}</a>{% endfor %}
+      </nav>
+      {% endif %}
+    </div>
+    {% endif %}
+    <p class="card-desc">{% if c.view == "important" %}Aankopen, verkopen, koopsignalen, blokkades en adviezen van Claude. Kies Alles om ook elke keer 'afwachten' van de regels te zien.{% else %}Elke cyclus per markt: het besluit, waarom, en hoe de koers daarna bewoog. Die uitkomsten krijgt Claude terug bij de volgende beslissing.{% endif %}</p>
+    {% if c.rows %}
+    {% call ui.table_wrap("Alle cycli") %}
+    <table class="cycles">
+      <thead><tr><th scope="col">Tijd</th><th scope="col">Markt</th><th scope="col">Besluit</th><th scope="col" class="num">Bedrag</th><th scope="col" class="num">Na 1u</th><th scope="col" class="num">Na 24u</th><th scope="col" class="num">Na 72u</th></tr></thead>
+      {% for v in c.rows %}{% set d = v.d %}
+      <tbody class="cycle-entry{{ ' is-blocked' if d.blocked_by else '' }}">
+        <tr>
+          <td class="nowrap when">{{ d.created_at|dt }}</td>
+          <td class="nowrap market"><strong>{{ d.market }}</strong><span class="sub">{{ d.price|price_eur }}</span></td>
+          <td class="decision">{{ decision_line(v) }}<span class="sub">{{ d.source|nl }}{% if d.confidence is not none %} · {{ (d.confidence * 100)|num(0) }}% zeker{% endif %}</span></td>
+          <td class="num" data-label="Bedrag">{{ d.amount_quote|eur(0) if d.amount_quote else "–" }}</td>
+          {% for o in v.outcomes %}<td class="num {{ o.pct|pnl_class(1) if o.pct is not none else '' }}" data-label="{{ o.label }}">{{ o.pct|pct if o.pct is not none else "–" }}</td>{% endfor %}
+        </tr>
+        <tr class="cycle-detail">
+          <td colspan="7">
+            {% if v.explanation %}<p class="decision-why">{{ v.explanation }}</p>{% endif %}
+            {% if d.blocked_by %}<p class="neg">Niet uitgevoerd: {{ d.blocked_by|refusal }}</p>{% endif %}
+            <details class="cycle-checks">
+              <summary>{{ "Voorwaarden en nieuws" if v.has_checks else "Nieuws" }}</summary>
+              {% if v.has_checks %}{{ ui.checks(v.checklist) }}{% endif %}
+              {{ news_line(v) }}
+            </details>
+          </td>
+        </tr>
+      </tbody>
+      {% endfor %}
+    </table>
+    {% endcall %}
+    {% if c.pages > 1 %}
+    <nav class="pager" aria-label="Pagina's van Alle cycli">
+      {% if c.newer_url %}<a class="btn btn-sm" href="{{ c.newer_url }}" rel="prev">{{ ui.icon("chevron-left", "link-chevron") }}Nieuwer</a>{% endif %}
+      <span class="small muted">{{ c.first }}–{{ c.last }} van {{ c.total }} · pagina {{ c.page }} van {{ c.pages }}</span>
+      {% if c.older_url %}<a class="btn btn-sm" href="{{ c.older_url }}" rel="next">Ouder{{ ui.icon("chevron", "link-chevron") }}</a>{% endif %}
+    </nav>
+    {% endif %}
+    {% elif c.total_all == 0 and not c.market %}
+    {{ ui.empty("Nog geen beslissingen", "Na de eerste cyclus zie je hier per markt wat de bot besloot en waarom.", symbol="list") }}
+    {% elif c.view == "important" and c.total_important == 0 and c.total_all > 0 %}
+    {{ ui.empty("Geen belangrijke beslissingen", "In deze periode alleen 'afwachten' van de regels: geen koopsignaal, geen order en geen advies van Claude.", c.view_links.all, "Alles tonen", symbol="list") }}
+    {% else %}
+    {{ ui.empty("Geen beslissingen in deze selectie", None, c.clear_url, "Filters wissen", symbol="search") }}
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}<script src="/static/trading.js?v={{ asset_version }}"></script>{% endblock %}

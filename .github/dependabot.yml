@@ -1,0 +1,25 @@
+# Weekly update PRs for the locked Python packages (requirements*.txt, generated from
+# pyproject.toml), the SHA-pinned GitHub Actions and the digest-pinned base image.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    # One PR for all bumps, so requirements.txt and requirements-dev.txt change together (the
+    # lock test fails on a PR that updates only one of them; regenerate both with the uv
+    # commands in their headers).
+    groups:
+      python-packages:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

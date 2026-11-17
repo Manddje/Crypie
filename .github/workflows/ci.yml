@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  # Weekly, so pip-audit also reports a new CVE in locked packages that did not change.
+  schedule:
+    - cron: "17 5 * * 1"
+
+# Read-only token for every job; nothing here needs to write to the repository.
+permissions:
+  contents: read
+
+# Actions are pinned to a full commit SHA (the tag is in the comment); Dependabot updates them.
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.15 is the Python of the Docker image, 3.12 the lowest supported version.
+        python-version: ["3.12", "3.15"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      # Exact, hashed versions; the app itself runs from the checkout (python -m adds it).
+      - run: pip install --require-hashes -r requirements-dev.txt
+      - run: ruff check .
+      - run: python -m pytest -q
+
+  test-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: crypie
+          POSTGRES_PASSWORD: crypie-ci
+          POSTGRES_DB: crypie
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U crypie -d crypie"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://crypie:crypie-ci@localhost:5432/crypie
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - run: pip install --require-hashes -r requirements-dev.txt
+      - run: python -m pytest -q
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Vendored files match their recorded hashes
+        run: sha256sum --strict -c app/static/vendor/SHA256SUMS
+      - name: Known vulnerabilities in the locked dependencies
+        run: |
+          pip install "pip-audit==2.10.1"
+          pip-audit --strict --disable-pip --require-hashes -r requirements.txt
+          pip-audit --strict --disable-pip --require-hashes -r requirements-dev.txt
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build -t crypie:ci .

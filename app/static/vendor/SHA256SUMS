@@ -1,0 +1,7 @@
+# Vendored third-party files. Check from the repository root: sha256sum --strict -c app/static/vendor/SHA256SUMS
+# lightweight-charts.standalone.production.js: npm package lightweight-charts@5.2.1, file
+#   package/dist/lightweight-charts.standalone.production.js, byte-identical to
+#   https://registry.npmjs.org/lightweight-charts/-/lightweight-charts-5.2.1.tgz
+#   (tarball integrity sha512-IVwoK1RLFiLPubaKIjNbtjWLnpPMqiABSrTay6whmNa8L1+19292VtHJ+BWyPUuLCwF0tcQlhEWd1CLB2a1nsQ==).
+# To update: download the new tarball, copy that file here and replace the hash and version.
+e21cc5caa0226ef30bd8549c50b9ef926615f2a4ee6b4e486353477a55f598cf  app/static/vendor/lightweight-charts.standalone.production.js

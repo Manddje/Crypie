@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Crypie · Journaal{% endblock %}
+{# A link to another view of the journal in the mode being shown: jlink("market=BTC-EUR"). #}
+{% macro jlink(query) %}/journal?{{ query }}{% if mode != engine_mode %}&amp;mode={{ mode }}{% endif %}{% endmacro %}
+{% block content %}
+{% set mode_nl = "live" if mode == "live" else "oefenmodus" %}
+<div class="page-header">
+  <h1>Trade-journaal</h1>
+  <p class="subtitle">Elke trade in {{ mode_nl }}, van de bot en handmatig: instap, uitstap, kosten en netto resultaat, met jouw notities.</p>
+  <details class="page-help">
+    <summary>Hoe werkt het journaal?</summary>
+    <p>Een trade is één positie, van aankoop tot verkoop. Bij elke trade staat wie hem opende (Claude, de regels zonder Claude of jij), wat er destijds werd gedacht en wat het netto opleverde, na de kosten van aan- en verkoop.</p>
+    <p>Jouw notities en labels gaan mee naar de evaluatie door Claude. Lessen die Claude bij elke beslissing moet meenemen, zet je in het <a href="/plan">tradingplan</a>.</p>
+  </details>
+  {% if mode_links %}
+  <div class="segmented journal-modes" role="group" aria-label="Trades uit welke modus">
+    {% for m in mode_links %}<a href="{{ m.href }}"{% if m.mode == mode %} class="active" aria-current="true"{% endif %}>{{ modes_nl[m.mode].label }} <span class="count">{{ m.count }}</span></a>{% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="stack">
+  {% if mode != engine_mode %}{{ ui.notice("info", "Je bekijkt de trades uit " ~ ("live" if mode == "live" else "oefenmodus") ~ ". De bot handelt nu " ~ ("live, met echt geld" if engine_mode == "live" else "in oefenmodus, met fictief geld") ~ ".", live=false) }}{% endif %}
+  {% if ignored %}{{ ui.notice("warn", "Niet begrepen en genegeerd: " ~ ignored|join(", ") ~ ". De lijst hieronder is daar niet op gefilterd.", live=false) }}{% endif %}
+
+  <section class="card journal-filters" aria-labelledby="filters-title">
+    <details class="journal-filter-box" open data-collapse-mobile>
+      <summary><h2 class="card-title" id="filters-title">Filters</h2>{% if filter_count %}<span class="pill">{{ filter_count }} actief</span>{% endif %}</summary>
+      <form method="get" action="/journal" class="filters">
+        {% if mode != engine_mode %}<input type="hidden" name="mode" value="{{ mode }}">{% endif %}
+        <div class="field">
+          <label for="f-market">Markt</label>
+          <select id="f-market" name="market">
+            <option value="">alle</option>
+            {% for m in settings.markets %}<option value="{{ m }}" {% if filter.market == m %}selected{% endif %}>{{ m }}</option>{% endfor %}
+            {% if filter.market and filter.market not in settings.markets %}<option value="{{ filter.market }}" selected>{{ filter.market }}</option>{% endif %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-status">Status</label>
+          <select id="f-status" name="status">
+            <option value="">alle</option>
+            <option value="open" {% if filter.status == "open" %}selected{% endif %}>open</option>
+            <option value="closed" {% if filter.status == "closed" %}selected{% endif %}>gesloten</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-result">Resultaat</label>
+          <select id="f-result" name="result">
+            <option value="">alles</option>
+            <option value="win" {% if filter.result == "win" %}selected{% endif %}>winst</option>
+            <option value="loss" {% if filter.result == "loss" %}selected{% endif %}>verlies</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-reason">Hoe gesloten</label>
+          <select id="f-reason" name="reason">
+            <option value="">alles</option>
+            {% for key, label in exit_reasons.items() %}<option value="{{ key }}" {% if filter.reason == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-by">Geopend door</label>
+          <select id="f-by" name="by">
+            <option value="">iedereen</option>
+            <option value="bot" {% if filter.opened_by == "bot" %}selected{% endif %}>de bot</option>
+            <option value="manual" {% if filter.opened_by == "manual" %}selected{% endif %}>jij, handmatig</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-days">Periode</label>
+          <select id="f-days" name="days">
+            <option value="0">alles</option>
+            {% for d in days_options %}<option value="{{ d }}" {% if filter.days == d %}selected{% endif %}>laatste {{ d }} dagen</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-tag">Label</label>
+          <input id="f-tag" name="tag" list="journal-tags" value="{{ filter.tag or '' }}" placeholder="bijv. fout" maxlength="64">
+          <datalist id="journal-tags">{% for t in tags %}<option value="{{ t }}">{% endfor %}</datalist>
+        </div>
+        <div class="field journal-search">
+          <label for="f-q">Zoeken</label>
+          <input id="f-q" name="q" type="search" value="{{ filter.query or '' }}" placeholder="in notities en uitleg, bijv. hack" maxlength="200">
+        </div>
+        <div class="actions journal-filter-actions">
+          <button class="btn" type="submit">Filteren</button>
+          {% if filter.active %}<a class="btn" href="{{ '/journal?mode=' ~ mode if mode != engine_mode else '/journal' }}">Wissen</a>{% endif %}
+        </div>
+      </form>
+    </details>
+  </section>
+
+  <section class="card" aria-labelledby="result-title">
+    {{ ui.card_header("Resultaat van de selectie" if filter.active else "Resultaat", 2, meta=(totals.closed ~ (" afgeronde trade" if totals.closed == 1 else " afgeronde trades") ~ ((" · " ~ totals.open ~ " open") if totals.open else "")), id="result-title") }}
+    {% if chips %}
+    <div class="filter-chips">
+      <span class="muted small">Selectie:</span>
+      <ul>
+        {% for c in chips %}<li><a class="tag chip-remove" href="{{ c.href }}">{{ c.text }}<span class="chip-x" aria-hidden="true">×</span><span class="visually-hidden"> (filter weghalen)</span></a></li>{% endfor %}
+      </ul>
+      {% if chips|length > 1 %}<a class="small" href="{{ '/journal?mode=' ~ mode if mode != engine_mode else '/journal' }}">Alle filters wissen</a>{% endif %}
+    </div>
+    {% endif %}
+    <div class="stats stats-6 journal-stats">
+      {{ ui.stat("Netto resultaat", totals.total_pnl_eur|eur, (totals.return_pct|pct ~ " op de inleg") if totals.return_pct is not none else "na kosten", totals.total_pnl_eur|pnl_class if totals.closed else "") }}
+      {{ ui.stat("Winnende trades", totals.win_rate_pct|pct(0, false) if totals.win_rate_pct is not none else "–", (totals.wins ~ " van " ~ totals.closed ~ " met netto winst") if totals.closed else "nog geen afgeronde trades") }}
+      {{ ui.stat("Per trade", totals.avg_pnl_eur|eur if totals.avg_pnl_eur is not none else "–", (totals.avg_pnl_pct|pct ~ " gemiddeld, netto") if totals.avg_pnl_pct is not none else "gemiddeld", totals.avg_pnl_eur|pnl_class) }}
+      {{ ui.stat("Winst/verlies-factor", totals.profit_factor|num(2) if totals.profit_factor is not none else "–", ("gem. winst " ~ totals.avg_win_eur|eur ~ " · gem. verlies " ~ totals.avg_loss_eur|eur) if totals.avg_win_eur is not none and totals.avg_loss_eur is not none else "totale winst gedeeld door totaal verlies") }}
+      {{ ui.stat("Kosten", totals.total_fees_eur|eur, "kosten van Bitvavo, al verrekend") }}
+      {{ ui.stat("Looptijd", (totals.avg_duration_min // 60 ~ " uur") if totals.avg_duration_min is not none and totals.avg_duration_min >= 60 else (totals.avg_duration_min ~ " min" if totals.avg_duration_min is not none else "–"), "gemiddeld per trade") }}
+    </div>
+    {% if totals.per_market|length > 1 or totals.exits or totals.by_source|length > 1 %}
+    <details class="advanced journal-breakdown">
+      <summary>Uitsplitsing per markt, per sluitreden en naar wie opende</summary>
+      <div class="grid-2">
+        {% if totals.per_market %}
+        {% call ui.table_wrap("Per markt") %}
+        <table>
+          <caption class="visually-hidden">Per markt</caption>
+          <tr><th scope="col">Markt</th><th scope="col" class="num">Trades</th><th scope="col" class="num">Winnend</th><th scope="col" class="num">Netto</th></tr>
+          {% for m in totals.per_market %}
+          <tr>
+            <td><a href="{{ jlink('market=' ~ m.market|urlencode) }}"><strong>{{ m.market }}</strong></a></td>
+            <td class="num">{{ m.trades }}</td>
+            <td class="num">{{ m.win_rate_pct|pct(0, false) if m.win_rate_pct is not none else "–" }}</td>
+            <td class="num {{ m.pnl_eur|pnl_class }}">{{ m.pnl_eur|eur }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% endcall %}
+        {% endif %}
+        {% if totals.exits %}
+        {% call ui.table_wrap("Hoe gesloten") %}
+        <table>
+          <caption class="visually-hidden">Hoe gesloten</caption>
+          <tr><th scope="col">Hoe gesloten</th><th scope="col" class="num">Trades</th></tr>
+          {% for reason, n in totals.exits.items() %}
+          <tr><td>{% if reason in exit_reasons %}<a href="{{ jlink('reason=' ~ reason|urlencode) }}">{{ reason|close_reason|capitalize }}</a>{% else %}{{ reason|close_reason|capitalize }}{% endif %}</td><td class="num">{{ n }}</td></tr>
+          {% endfor %}
+        </table>
+        {% endcall %}
+        {% endif %}
+        {% if totals.by_source|length > 1 %}
+        {% call ui.table_wrap("Geopend door") %}
+        <table>
+          <caption class="visually-hidden">Geopend door</caption>
+          <tr><th scope="col">Geopend door</th><th scope="col" class="num">Trades</th><th scope="col" class="num">Winnend</th><th scope="col" class="num">Netto</th></tr>
+          {% for b in totals.by_source %}
+          <tr>
+            <td><a href="{{ jlink('by=' ~ b.by) }}">{{ "De bot" if b.by == "bot" else "Jij, handmatig" }}</a></td>
+            <td class="num">{{ b.trades }}</td>
+            <td class="num">{{ b.win_rate_pct|pct(0, false) if b.win_rate_pct is not none else "–" }}</td>
+            <td class="num {{ b.pnl_eur|pnl_class }}">{{ b.pnl_eur|eur }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% endcall %}
+        {% endif %}
+      </div>
+    </details>
+    {% endif %}
+  </section>
+
+  <section class="card" id="trades" aria-labelledby="trades-title">
+    {{ ui.card_header("Trades", 2, meta=(entries|length ~ (" in de selectie" if filter.active else " in totaal") ~ " · " ~ totals.with_note ~ " met notitie"), id="trades-title") }}
+    {% if entries %}
+    {% for e in entries %}
+    {% set p = e.position %}
+    <article class="trade" id="trade-{{ p.id }}" aria-labelledby="trade-{{ p.id }}-title">
+      {% if saved == p.id %}{{ ui.notice("ok", "Notitie opgeslagen.", live=true) }}{% endif %}
+      <div class="trade-head">
+        <div>
+          <div class="title">
+            <h3 class="trade-title" id="trade-{{ p.id }}-title">{{ p.market }}<span class="visually-hidden">, geopend {{ p.opened_at|dt_text }}</span></h3>
+            {% if e.is_open %}<span class="pill"><span class="dot" aria-hidden="true"></span>Open</span>
+            {% elif e.result == "win" %}<span class="pill pill-green">Winst</span>
+            {% elif e.result == "loss" %}<span class="pill pill-red">Verlies</span>
+            {% else %}<span class="pill">Break-even</span>{% endif %}
+            {% if e.is_manual %}<span class="pill">Handmatig</span>{% endif %}
+            {% if p.mode != engine_mode %}<span class="pill {{ 'pill-live' if p.mode == 'live' else 'pill-paper' }}">{{ p.mode|nl }}</span>{% endif %}
+            {% for t in p.tag_list() %}<a class="tag" href="{{ jlink('tag=' ~ t|urlencode) }}">{{ t }}</a>{% endfor %}
+          </div>
+          <div class="trade-meta">
+            <span>geopend {{ p.opened_at|dt(true) }}</span>
+            {% if not e.is_open %}<span>gesloten {{ p.closed_at|dt(true) }}</span>{% endif %}
+            <span>{{ "loopt " if e.is_open else "" }}{{ e.duration_nl }}</span>
+            {% if e.exit_nl %}<span>{{ p.close_reason|close_reason }}</span>{% endif %}
+          </div>
+        </div>
+        <div class="pnl {{ p.pnl_eur|pnl_class if not e.is_open else '' }}">
+          {% if e.is_open %}<span class="pnl-open">inleg {{ p.entry_quote|eur }}</span>
+          {% else %}{{ p.pnl_eur|eur }}<span class="sub {{ p.pnl_pct|pnl_class(1) }}">{{ p.pnl_pct|pct }} netto · kosten {{ (p.fees_eur or 0)|eur }}</span>{% endif %}
+        </div>
+      </div>
+
+      <div class="trade-grid">
+        <div>
+          <h4>Instap</h4>
+          <dl class="kv">
+            <dt>Koers</dt><dd>{{ p.entry_price|price_eur }}</dd>
+            <dt>Hoeveelheid</dt><dd>{{ p.amount|amount }} {{ p.market.split("-")[0] }}</dd>
+            <dt>Inleg</dt><dd>{{ p.entry_quote|eur }} incl. kosten</dd>
+            {% if p.stop_price or p.take_profit_price %}<dt>Grenzen</dt><dd>{% if p.stop_price %}stop {{ p.stop_price|price_eur }}{% endif %}{% if p.stop_price and p.take_profit_price %} · {% endif %}{% if p.take_profit_price %}doel {{ p.take_profit_price|price_eur }}{% endif %}</dd>{% endif %}
+            <dt>Geopend door</dt><dd>{{ by_nl.get(e.opened_by, e.opened_by) }}{% if e.entry_decision and e.entry_decision.confidence is not none and e.opened_by == "claude" %} · {{ (e.entry_decision.confidence * 100)|num(0) }}% zeker{% endif %}</dd>
+            {% if e.entry_news %}<dt>Nieuws</dt><dd><span class="pill {{ e.entry_news|sentiment_pill }}">{{ e.entry_news }}</span></dd>{% endif %}
+            {% if e.soft_filters_failed %}<dt>Niet gehaald</dt><dd class="muted">{{ e.soft_filters_failed|join("; ") }}</dd>{% endif %}
+          </dl>
+          {% if e.entry_decision %}{{ ui.checks(e.entry_decision, compact=true) }}{% endif %}
+          {% if e.entry_why %}<p class="why"><span class="muted">{{ e.why_label(e.opened_by) }}</span> {{ e.entry_why }}</p>{% endif %}
+        </div>
+        <div>
+          <h4>Uitstap</h4>
+          {% if e.is_open %}
+          <p class="small muted m-0">Nog open. De bot sluit automatisch op de stop-loss, trailing stop of take-profit, op een verkoopsignaal, of bij zwaar negatief nieuws.</p>
+          {% else %}
+          <dl class="kv">
+            <dt>Koers</dt><dd>{{ p.exit_price|price_eur }} <span class="muted">({{ ((p.exit_price / p.entry_price - 1) * 100)|pct }} bruto)</span></dd>
+            <dt>Opbrengst</dt><dd>{{ p.exit_quote|eur }} na kosten</dd>
+            <dt>Reden</dt><dd>{{ p.close_reason|close_reason|capitalize }}</dd>
+            {% if e.closed_by and e.closed_by not in ("manual", "reset") %}<dt>Gesloten door</dt><dd>{{ by_nl.get(e.closed_by, e.closed_by) }}</dd>{% endif %}
+            {% if e.exit_decision and e.exit_decision.news_label %}<dt>Nieuws</dt><dd><span class="pill {{ e.exit_decision.news_label|sentiment_pill }}">{{ e.exit_decision.news_label }}</span></dd>{% endif %}
+          </dl>
+          {% if e.exit_why %}<p class="why"><span class="muted">{{ e.why_label(e.closed_by) }}</span> {{ e.exit_why }}</p>{% endif %}
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="trade-note">
+        {% if p.note %}
+        <div class="meta"><strong>Jouw notitie</strong>{% if p.note_updated_at %}<span>{{ p.note_updated_at|dt(true) }}</span>{% endif %}</div>
+        <div class="prose">{{ p.note|linkify }}</div>
+        {% endif %}
+        <details class="advanced" {% if saved == p.id and not p.note %}open{% endif %}>
+          <summary>{{ "Notitie bewerken" if p.note or p.tags else "Notitie toevoegen" }}<span class="visually-hidden"> bij {{ p.market }}, geopend {{ p.opened_at|dt_text }}</span></summary>
+          <form method="post" action="/journal/{{ p.id }}/note">
+            <input type="hidden" name="back" value="{{ back_url }}">
+            <label class="small muted" for="note-{{ p.id }}">Wat zag je, wat ging goed of fout, wat zou je anders doen?</label>
+            <textarea id="note-{{ p.id }}" name="note" rows="3" maxlength="4000" placeholder="Bijvoorbeeld: instap klopte, maar de take-profit stond te krap; het nieuws over de ETF was al ingeprijsd.">{{ p.note or "" }}</textarea>
+            <label class="small muted" for="tags-{{ p.id }}">Labels, gescheiden door komma's</label>
+            <input id="tags-{{ p.id }}" name="tags" list="journal-tags" value="{{ p.tag_list()|join(', ') }}" placeholder="bijv. goed, fout, nieuws, fomo, les" maxlength="256">
+            <div class="actions"><button class="btn btn-primary btn-sm" type="submit" data-busy="Opslaan…">Notitie opslaan</button></div>
+          </form>
+        </details>
+      </div>
+    </article>
+    {% endfor %}
+    {% elif filter.active %}
+    {{ ui.empty("Geen trades in deze selectie", "Pas de filters aan of wis ze.", "/journal?mode=" ~ mode if mode != engine_mode else "/journal", "Filters wissen", symbol="search") }}
+    {% else %}
+    {{ ui.empty("Nog geen trades", "Zodra de bot of jij een positie opent, verschijnt die hier, met de uitleg van dat moment en ruimte voor jouw notitie.", "/trading", "Naar Handelen", symbol="journal") }}
+    {% endif %}
+  </section>
+
+  {% if other_orders %}
+  <section class="card" aria-labelledby="other-title">
+    {{ ui.card_header("Orders zonder trade", 2, meta="tellen niet mee in het resultaat", id="other-title") }}
+    <p class="card-desc">Orders die bij geen trade horen: een order die niet werd uitgevoerd, of een order van vóór het journaal elke order aan een positie koppelde.</p>
+    {% call ui.table_wrap("Orders zonder trade") %}
+    <table class="table-stack">
+      <tr><th scope="col">Tijd</th><th scope="col">Markt</th><th scope="col">Kant</th><th scope="col" class="num">Bedrag</th><th scope="col" class="num">Koers</th><th scope="col" class="num">Kosten</th><th scope="col">Status</th><th scope="col">Reden</th></tr>
+      {% for o in other_orders %}
+      {% set why = o.reason|order_reason %}
+      <tr>
+        <td class="nowrap">{{ o.created_at|dt }}</td>
+        <td class="nowrap"><strong>{{ o.market }}</strong></td>
+        <td>{{ ui.side(o.side) }}</td>
+        <td class="num">{{ o.amount_quote|eur }}</td>
+        <td class="num">{{ o.price|price_eur if o.price else "–" }}</td>
+        <td class="num">{{ o.fee_quote|eur if o.fee_quote is not none else "–" }}</td>
+        <td>{{ o.status|nl }}</td>
+        <td class="small muted">{% if why.source_nl %}{{ why.source_nl }}{% if why.text %}: {% endif %}{% endif %}{{ why.text }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endcall %}
+  </section>
+  {% endif %}
+</div>
+{% endblock %}
+{% block footer %}<span><a href="/api/journal">Journaal als JSON</a></span>{% endblock %}

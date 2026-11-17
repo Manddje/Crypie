@@ -1,0 +1,9 @@
+{#- The status column of the overview hero: the bot's health, the kill switch and, without a
+    Claude key, where to set it. Rendered inside dashboard.html and on its own by
+    /api/dashboard/status, so the page can refresh it without a reload. -#}
+{%- import "_macros.html" as ui -%}
+{{ ui.status(health) }}
+{% if health and not health.claude_available %}
+<p class="dash-status-help">Zonder Claude-sleutel wordt nieuws niet beoordeeld. Wat de bot dan bij een koopsignaal doet, kies je bij <a href="/settings#trading">Instellingen › Handelen</a>. De sleutel zet je in de serveromgeving: <span class="mono">ANTHROPIC_API_KEY</span>.</p>
+{% endif %}
+{{ ui.kill_switch(paused, next="/", id="noodstop", beside_status=(health and health.level == "paused")) }}

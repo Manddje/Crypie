@@ -1,0 +1,30 @@
+# Picked up automatically by `docker compose up` for LOCAL development only.
+# Coolify reads docker-compose.yaml alone: there the database is a separate Coolify
+# Postgres resource and the app is never published on a host port.
+services:
+  app:
+    ports:
+      # Localhost only: plain http, so never reachable from other machines.
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: crypie
+      # No default: set it in .env (see .env.example) and use the same value in DATABASE_URL.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (see .env.example)}
+      POSTGRES_DB: crypie
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crypie -d crypie"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

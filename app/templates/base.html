@@ -1,0 +1,95 @@
+{%- import "_macros.html" as ui -%}
+{#- Mode and kill switch for the navigation, the live banner and the tab title. Names start with
+    base_ so they never shadow a page's own context. Pages that know the pause state pass it
+    (paused, status.paused); other pages read it the way the engine does. -#}
+{%- set base_cfg = settings if settings is defined and settings else app_settings(request) -%}
+{%- set base_mode = "live" if base_cfg and base_cfg.trading_mode == "live" else "paper" -%}
+{%- if paused is defined and paused is not none -%}{%- set base_paused = paused -%}
+{%- elif status is defined and status and status.paused is defined -%}{%- set base_paused = status.paused -%}
+{%- else -%}{%- set base_paused = bot_paused(request) -%}{%- endif -%}
+{%- if false %}{% block title %}Crypie{% endblock %}{% endif -%}
+{%- set base_title = self.title()|trim -%}
+{%- if base_title.startswith("Crypie · ") %}{% set base_title = base_title[9:] ~ " · Crypie" %}{% endif -%}
+<!doctype html>
+<html lang="nl" data-mode="{{ base_mode }}">
+<head>
+  <meta charset="utf-8">
+  <title>{% if base_mode == "live" %}LIVE · {% endif %}{% if base_paused %}Noodstop · {% endif %}{{ base_title }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-title" content="Crypie">
+  <link rel="icon" type="image/svg+xml" href="/static/icons/favicon{{ '-live' if base_mode == 'live' else ('-paused' if base_paused else '') }}.svg?v={{ asset_version }}">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png?v={{ asset_version }}">
+  <link rel="manifest" href="/static/manifest.webmanifest?v={{ asset_version }}">
+  <script src="/static/theme.js?v={{ asset_version }}"></script>
+  <link rel="stylesheet" href="/static/app.css?v={{ asset_version }}">
+</head>
+<body data-mode="{{ base_mode }}"{% if base_paused %} data-paused="true"{% endif %}>
+  {% set path = request.url.path %}
+  <a class="skip-link" href="#main">Naar de inhoud</a>
+  <header class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="/">
+        <svg viewBox="0 0 32 32" aria-hidden="true" focusable="false"><defs><linearGradient id="brand-g" x1="0" y1="0" x2="1" y2="1"><stop class="brand-stop-1" offset="0" stop-color="#0a84ff"/><stop class="brand-stop-2" offset="1" stop-color="#5e5ce6"/></linearGradient></defs><rect width="32" height="32" rx="8" fill="url(#brand-g)"/><path d="M8 20l5-6 4 4 7-9" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="brand-name">Crypie</span>
+      </a>
+      <nav class="nav-links" aria-label="Hoofdnavigatie">
+        <a href="/" {% if path == "/" %}class="active" aria-current="page"{% endif %}>Overzicht</a>
+        <a href="/trading" {% if path.startswith("/trading") %}class="active" aria-current="page"{% endif %}>Handelen</a>
+        <a href="/journal" {% if path.startswith("/journal") %}class="active" aria-current="page"{% endif %}>Journaal</a>
+        <a href="/plan" {% if path.startswith("/plan") %}class="active" aria-current="page"{% endif %}>Tradingplan</a>
+        <a href="/strategy" {% if path.startswith("/strategy") %}class="active" aria-current="page"{% endif %}>Strategie</a>
+        <a href="/news" {% if path.startswith("/news") %}class="active" aria-current="page"{% endif %}>Nieuws</a>
+        <a href="/settings" {% if path.startswith("/settings") %}class="active" aria-current="page"{% endif %}>Instellingen</a>
+      </nav>
+      <div class="nav-right">
+        {{ ui.mode_pill(base_mode, base_paused) }}
+        {% if request.state.user %}
+        <a class="icon-btn{{ ' active' if path.startswith('/account') }}" href="/account" aria-label="Account ({{ request.state.user }})" title="Account ({{ request.state.user }})"{% if path.startswith("/account") %} aria-current="page"{% endif %}>{{ ui.icon("user") }}</a>
+        <form method="post" action="/logout" class="inline">
+          <button class="icon-btn" type="submit" aria-label="Uitloggen" title="Uitloggen">{{ ui.icon("logout") }}</button>
+        </form>
+        {% endif %}
+        {#- Only works with scripts on, so app.js shows it and keeps its name in line with the choice. -#}
+        <button class="icon-btn theme-toggle" type="button" id="theme-toggle" hidden aria-label="Thema: automatisch, volgt je systeem. Kies licht." title="Thema: automatisch">
+          {{ ui.icon("auto", "icon-auto") }}{{ ui.icon("sun", "icon-sun") }}{{ ui.icon("moon", "icon-moon") }}
+        </button>
+      </div>
+    </div>
+    {% if base_mode == "live" %}<p class="live-banner">{{ live_banner }}</p>{% endif %}
+  </header>
+
+  <main class="page" id="main" tabindex="-1">
+    {#- The page first: a section with a place for its messages (ui.flashes_here) takes them,
+        so they show where the browser lands. -#}
+    {%- set page_body %}{% block content %}{% endblock %}{% endset -%}
+    {#- One-off messages after an action (app/flash.py), announced to screen readers. -#}
+    {% for f in request.state.flashes|default([]) %}{{ ui.notice(f.kind, f.text, live=true) }}{% endfor %}
+    {% if login_disabled(request) %}
+    {#- The first sentence is pinned by a security test (F17); the way to switch the login on
+        names its variable as secondary help. -#}
+    {% call ui.notice("warn", "", live=false) %}De login staat uit (AUTH_ENABLED=false): iedereen met dit adres kan instellingen wijzigen en in oefenmodus handelen; live kan niet. Aanzetten in de serveromgeving, daarna herstarten: <span class="mono">AUTH_ENABLED=true</span>.{% endcall %}
+    {% endif %}
+    {{ page_body }}
+  </main>
+
+  <footer class="site">
+    {% if base_cfg %}
+    {#- A long list of markets would fill the footer (20 are allowed): a few, and the count. -#}
+    <span>Markten: {{ base_cfg.markets|market_list }} · <a href="/settings#trading">aanpassen</a></span>
+    {%- set base_key = bitvavo_key_state(request) if bitvavo_key_state is defined else none %}
+    {% if base_key and base_key.state in ("rejected", "no_trading") %}
+    <span class="footer-alert">Bitvavo-sleutel {{ base_key.label }}: {{ base_key.reason }} · <a href="/settings#omgeving">bekijken</a></span>
+    {% else %}
+    <span>Bitvavo-sleutel {{ base_key.label if base_key else ("ingesteld" if base_cfg.has_bitvavo_credentials else "niet ingesteld") }}</span>
+    {% endif %}
+    <span>Claude {{ "ingesteld" if base_cfg.anthropic_api_key else "niet ingesteld" }}</span>
+    {% endif %}
+    {% block footer %}{% endblock %}
+  </footer>
+
+  <script src="/static/app.js?v={{ asset_version }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
